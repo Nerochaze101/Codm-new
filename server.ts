@@ -614,26 +614,136 @@ app.post('/api/users/:id/deposit', async (req, res) => {
   res.json({ success: true, balance: user.balance, transaction: tx });
 });
 
-// Wallet withdrawal
+// Fetch Nigerian Banks list from Paystack
+app.get('/api/paystack/banks', async (req, res) => {
+  const secretKey = process.env.PAYSTACK_SECRET_KEY || '';
+  try {
+    const paystackRes = await fetch('https://api.paystack.co/bank?country=nigeria', {
+      headers: {
+        Authorization: `Bearer ${secretKey}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    const data = await paystackRes.json();
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ status: false, error: err.message });
+  }
+});
+
+// Helper mapping for popular Nigerian bank codes
+const NIGERIAN_BANK_CODES: Record<string, string> = {
+  'opay': '999992',
+  'palmpay': '999991',
+  'gtb': '058',
+  'gtbank': '058',
+  'guaranty trust bank': '058',
+  'zenith': '057',
+  'zenith bank': '057',
+  'kuda': '50211',
+  'kuda bank': '50211',
+  'moniepoint': '50515',
+  'moniepoint microfinance bank': '50515',
+  'access': '044',
+  'access bank': '044',
+  'first bank': '011',
+  'first bank of nigeria': '011',
+  'uba': '033',
+  'united bank for africa': '033',
+  'wema': '035',
+  'wema bank': '035',
+  'stanbic': '221',
+  'stanbic ibtc': '221',
+  'fidelity': '070',
+  'fidelity bank': '070',
+};
+
+// Wallet withdrawal with Paystack Transfers API
 app.post('/api/users/:id/withdraw', async (req, res) => {
   const user = users[req.params.id];
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  const { amount, bankName, accountNumber, accountName } = req.body;
+  const { amount, bankName = '', accountNumber = '', accountName = '', bankCode = '' } = req.body;
   const numAmount = Number(amount);
   if (!numAmount || numAmount <= 0) {
-    return res.status(400).json({ error: 'Invalid amount' });
+    return res.status(400).json({ error: 'Invalid withdrawal amount' });
   }
   if (numAmount > user.balance) {
     return res.status(400).json({ error: 'Insufficient available balance' });
   }
 
+  // Determine Paystack bank code
+  let targetBankCode = bankCode;
+  if (!targetBankCode && bankName) {
+    const cleanBank = bankName.trim().toLowerCase();
+    targetBankCode = NIGERIAN_BANK_CODES[cleanBank] || '058';
+  }
+
+  let paystackTransferData: any = null;
+  const secretKey = process.env.PAYSTACK_SECRET_KEY || '';
+
+  // Attempt Paystack automated bank transfer if secret key is present
+  if (secretKey && !secretKey.startsWith('sk_test_xxxx') && accountNumber) {
+    try {
+      console.log(`🚀 Initiating Paystack Transfer of ₦${numAmount} to ${accountNumber} (${bankName})...`);
+
+      // Step 1: Create Paystack Transfer Recipient
+      const recipientRes = await fetch('https://api.paystack.co/transferrecipient', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${secretKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          type: 'nuban',
+          name: accountName || user.codmIgn,
+          account_number: accountNumber.trim(),
+          bank_code: targetBankCode || '058',
+          currency: 'NGN',
+        }),
+      });
+
+      const recipientJson = await recipientRes.json();
+
+      if (recipientJson.status && recipientJson.data?.recipient_code) {
+        const recipientCode = recipientJson.data.recipient_code;
+
+        // Step 2: Initiate Paystack Bank Transfer
+        const transferRes = await fetch('https://api.paystack.co/transfer', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${secretKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            source: 'balance',
+            amount: Math.round(numAmount * 100), // in kobo
+            recipient: recipientCode,
+            reason: `CODM Winnings Cashout for ${user.codmIgn}`,
+          }),
+        });
+
+        paystackTransferData = await transferRes.json();
+        console.log('✅ Paystack Transfer API Response:', paystackTransferData);
+      } else {
+        console.warn('⚠️ Paystack Transfer Recipient failed:', recipientJson.message);
+      }
+    } catch (err: any) {
+      console.error('Paystack Transfer Error:', err.message);
+    }
+  }
+
   user.balance -= numAmount;
+  const isPaystackSuccess = paystackTransferData?.status === true;
+  const descNote = isPaystackSuccess
+    ? `🚀 Paystack Transfer Sent to ${bankName} (${accountNumber} - ${accountName}) [Ref: ${paystackTransferData.data?.reference || 'OK'}]`
+    : `Withdrawal request to ${bankName} (${accountNumber} - ${accountName})`;
+
   const tx = {
     id: `tx_${Date.now()}`,
     type: 'WITHDRAWAL' as const,
     amount: numAmount,
-    description: `Withdrawal to ${bankName} (${accountNumber} - ${accountName})`,
+    description: descNote,
     timestamp: Date.now(),
   };
   user.transactions.unshift(tx);
@@ -641,7 +751,12 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
   await syncUserToDb(user);
   await syncTransactionToDb(user.id, tx);
 
-  res.json({ success: true, balance: user.balance, transaction: tx });
+  res.json({
+    success: true,
+    balance: user.balance,
+    transaction: tx,
+    paystack: paystackTransferData,
+  });
 });
 
 // List all active matches
