@@ -104,20 +104,21 @@ export async function initDatabase() {
     const usersCountRes = await client.query('SELECT COUNT(*) FROM users');
     if (parseInt(usersCountRes.rows[0].count, 10) === 0) {
       console.log('🌱 Seeding initial CODM gladiators into Supabase...');
+      const now = Date.now();
       await client.query(`
         INSERT INTO users (id, username, codm_ign, codm_uid, tier, clan, email, phone, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, created_at)
         VALUES 
-        ('user_ghost', 'Ghost_NG', 'GHOST_NG', '6829471928371902', 'LEGENDARY TIER', '[1V1_PRO]', 'ghost@lagos-codm.com', '+234 803 123 4567', 0, 0, 24500, 14, 3, 1, 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=150&auto=format&fit=crop&q=80', $1),
-        ('user_shadow', 'ShadowSniper', 'ShadowSniper', '6948201948271034', 'MASTER V TIER', '[NIGHT_HAWK]', 'shadow@esports.ng', '+234 812 987 6543', 0, 0, 12000, 8, 5, 0, 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80', $1)
+        ('user_ghost', 'Ghost_NG', 'GHOST_NG', '6829471928371902', 'LEGENDARY TIER', '[1V1_PRO]', 'ghost@lagos-codm.com', '+234 803 123 4567', 0, 0, 24500, 14, 3, 1, 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=150&auto=format&fit=crop&q=80', ${now}),
+        ('user_shadow', 'ShadowSniper', 'ShadowSniper', '6948201948271034', 'MASTER V TIER', '[NIGHT_HAWK]', 'shadow@esports.ng', '+234 812 987 6543', 0, 0, 12000, 8, 5, 0, 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80', ${now})
         ON CONFLICT (id) DO NOTHING;
-      `, [Date.now()]);
+      `);
     }
 
     client.release();
     console.log('✅ Supabase database tables initialized and verified.');
     return true;
   } catch (error) {
-    console.error('⚠️ Supabase connection warning (will use in-memory state fallback if disconnected):', error);
+    console.error('⚠️ Supabase connection warning:', error);
     return false;
   }
 }

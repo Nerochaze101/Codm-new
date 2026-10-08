@@ -118,6 +118,20 @@ export interface Match {
   resolutionNotes?: string;
 }
 
+// SQL escape helper to maintain compatibility with Supabase transaction pooler (PgBouncer)
+function escapeSql(val: any): string {
+  if (val === null || val === undefined) return 'NULL';
+  if (typeof val === 'number') {
+    if (isNaN(val)) return '0';
+    return String(val);
+  }
+  if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE';
+  if (typeof val === 'object') {
+    return "'" + JSON.stringify(val).replace(/'/g, "''") + "'";
+  }
+  return "'" + String(val).replace(/'/g, "''") + "'";
+}
+
 // Helper to calculate tiered rake percentage based on stake amount
 function getRakePercentage(stake: number): number {
   if (stake >= 10000) return 0.05; // 5% for ₦10,000+
@@ -134,16 +148,16 @@ function generateRoomCode(mapName: string): string {
 }
 
 // ==========================================
-// DIRECT DATABASE ACCESS FUNCTIONS (NO IN-MEMORY LOSS)
+// DIRECT DATABASE ACCESS FUNCTIONS
 // ==========================================
 
 async function getUserFromDb(id: string): Promise<UserProfile | null> {
   try {
-    const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+    const userRes = await pool.query(`SELECT * FROM users WHERE id = ${escapeSql(id)}`);
     if (userRes.rows.length === 0) return null;
     const r = userRes.rows[0];
 
-    const txRes = await pool.query('SELECT * FROM transactions WHERE user_id = $1 ORDER BY timestamp DESC', [id]);
+    const txRes = await pool.query(`SELECT * FROM transactions WHERE user_id = ${escapeSql(id)} ORDER BY timestamp DESC`);
     const transactions = txRes.rows.map((t) => ({
       id: t.id,
       type: t.type,
@@ -184,13 +198,12 @@ async function getUserByEmailOrIgn(identifier: string): Promise<{ user: UserProf
   try {
     const cleanIdent = identifier.trim().toLowerCase();
     const userRes = await pool.query(
-      'SELECT * FROM users WHERE LOWER(email) = $1 OR LOWER(codm_ign) = $1 OR LOWER(username) = $1',
-      [cleanIdent]
+      `SELECT * FROM users WHERE LOWER(email) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(codm_ign) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(username) = LOWER(${escapeSql(cleanIdent)})`
     );
     if (userRes.rows.length === 0) return null;
     const r = userRes.rows[0];
 
-    const txRes = await pool.query('SELECT * FROM transactions WHERE user_id = $1 ORDER BY timestamp DESC', [r.id]);
+    const txRes = await pool.query(`SELECT * FROM transactions WHERE user_id = ${escapeSql(r.id)} ORDER BY timestamp DESC`);
     const transactions = txRes.rows.map((t) => ({
       id: t.id,
       type: t.type,
@@ -231,10 +244,31 @@ async function getUserByEmailOrIgn(identifier: string): Promise<{ user: UserProf
 
 async function saveUserToDb(user: UserProfile, password?: string) {
   try {
-    await pool.query(
-      `
+    const passValue = password ? escapeSql(password) : 'users.password_hash';
+    await pool.query(`
       INSERT INTO users (id, username, codm_ign, codm_uid, tier, clan, email, phone, password_hash, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+      VALUES (
+        ${escapeSql(user.id)},
+        ${escapeSql(user.username)},
+        ${escapeSql(user.codmIgn)},
+        ${escapeSql(user.codmUid)},
+        ${escapeSql(user.tier || 'LEGENDARY TIER')},
+        ${escapeSql(user.clan || '[1V1_PRO]')},
+        ${escapeSql(user.email)},
+        ${escapeSql(user.phone)},
+        ${passValue},
+        ${escapeSql(user.balance || 0)},
+        ${escapeSql(user.escrowBalance || 0)},
+        ${escapeSql(user.totalWinnings || 0)},
+        ${escapeSql(user.wins || 0)},
+        ${escapeSql(user.losses || 0)},
+        ${escapeSql(user.draws || 0)},
+        ${escapeSql(user.avatar)},
+        ${escapeSql(user.bankName || null)},
+        ${escapeSql(user.accountNumber || null)},
+        ${escapeSql(user.accountName || null)},
+        ${Date.now()}
+      )
       ON CONFLICT (id) DO UPDATE SET
         username = EXCLUDED.username,
         codm_ign = EXCLUDED.codm_ign,
@@ -254,30 +288,7 @@ async function saveUserToDb(user: UserProfile, password?: string) {
         bank_name = EXCLUDED.bank_name,
         account_number = EXCLUDED.account_number,
         account_name = EXCLUDED.account_name;
-    `,
-      [
-        user.id,
-        user.username,
-        user.codmIgn,
-        user.codmUid,
-        user.tier || 'LEGENDARY TIER',
-        user.clan || '[1V1_PRO]',
-        user.email,
-        user.phone,
-        password || null,
-        user.balance || 0,
-        user.escrowBalance || 0,
-        user.totalWinnings || 0,
-        user.wins || 0,
-        user.losses || 0,
-        user.draws || 0,
-        user.avatar,
-        user.bankName || null,
-        user.accountNumber || null,
-        user.accountName || null,
-        Date.now(),
-      ]
-    );
+    `);
   } catch (err) {
     console.error(`Error saving user ${user.id} to DB:`, err);
   }
@@ -285,27 +296,24 @@ async function saveUserToDb(user: UserProfile, password?: string) {
 
 async function saveTransactionToDb(userId: string, tx: any) {
   try {
-    await pool.query(
-      `
+    await pool.query(`
       INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      VALUES (
+        ${escapeSql(tx.id)},
+        ${escapeSql(userId)},
+        ${escapeSql(tx.type)},
+        ${escapeSql(tx.amount)},
+        ${escapeSql(tx.description || null)},
+        ${escapeSql(tx.matchId || null)},
+        ${escapeSql(tx.timestamp || Date.now())}
+      )
       ON CONFLICT (id) DO UPDATE SET
         type = EXCLUDED.type,
         amount = EXCLUDED.amount,
         description = EXCLUDED.description,
         match_id = EXCLUDED.match_id,
         timestamp = EXCLUDED.timestamp;
-    `,
-      [
-        tx.id,
-        userId,
-        tx.type,
-        tx.amount,
-        tx.description || null,
-        tx.matchId || null,
-        tx.timestamp || Date.now(),
-      ]
-    );
+    `);
   } catch (err) {
     console.error(`Error saving transaction ${tx.id} to DB:`, err);
   }
@@ -313,7 +321,7 @@ async function saveTransactionToDb(userId: string, tx: any) {
 
 async function getMatchFromDb(id: string): Promise<Match | null> {
   try {
-    const res = await pool.query('SELECT * FROM matches WHERE id = $1', [id]);
+    const res = await pool.query(`SELECT * FROM matches WHERE id = ${escapeSql(id)}`);
     if (res.rows.length === 0) return null;
     const m = res.rows[0];
     return {
@@ -377,15 +385,38 @@ async function getAllMatchesFromDb(): Promise<Match[]> {
 
 async function saveMatchToDb(match: any) {
   try {
-    await pool.query(
-      `
+    await pool.query(`
       INSERT INTO matches (
         id, challenge_code, room_code, game_mode, map, rules,
         stake_amount, pot_amount, platform_fee_percentage, platform_fee, winner_payout,
         status, creator_id, creator_data, opponent_id, opponent_data,
         winner_id, winner_ign, resolution_notes, chat_messages, created_at, room_generated_at, settled_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+      VALUES (
+        ${escapeSql(match.id)},
+        ${escapeSql(match.challengeCode)},
+        ${escapeSql(match.roomCode || null)},
+        ${escapeSql(match.gameMode)},
+        ${escapeSql(match.map)},
+        ${escapeSql(match.rules || [])},
+        ${escapeSql(match.stakeAmount)},
+        ${escapeSql(match.potAmount)},
+        ${escapeSql(match.platformFeePercentage || 10)},
+        ${escapeSql(match.platformFee || 0)},
+        ${escapeSql(match.winnerPayout)},
+        ${escapeSql(match.status)},
+        ${escapeSql(match.creator.id)},
+        ${escapeSql(match.creator)},
+        ${match.opponent ? escapeSql(match.opponent.id) : 'NULL'},
+        ${match.opponent ? escapeSql(match.opponent) : 'NULL'},
+        ${escapeSql(match.winnerId || null)},
+        ${escapeSql(match.winnerIgn || null)},
+        ${escapeSql(match.resolutionNotes || null)},
+        ${escapeSql(match.chatMessages || [])},
+        ${escapeSql(match.createdAt)},
+        ${escapeSql(match.roomGeneratedAt || null)},
+        ${escapeSql(match.settledAt || null)}
+      )
       ON CONFLICT (id) DO UPDATE SET
         room_code = EXCLUDED.room_code,
         status = EXCLUDED.status,
@@ -397,33 +428,7 @@ async function saveMatchToDb(match: any) {
         chat_messages = EXCLUDED.chat_messages,
         room_generated_at = EXCLUDED.room_generated_at,
         settled_at = EXCLUDED.settled_at;
-    `,
-      [
-        match.id,
-        match.challengeCode,
-        match.roomCode || null,
-        match.gameMode,
-        match.map,
-        JSON.stringify(match.rules || []),
-        match.stakeAmount,
-        match.potAmount,
-        match.platformFeePercentage || 10,
-        match.platformFee || 0,
-        match.winnerPayout,
-        match.status,
-        match.creator.id,
-        JSON.stringify(match.creator),
-        match.opponent ? match.opponent.id : null,
-        match.opponent ? JSON.stringify(match.opponent) : null,
-        match.winnerId || null,
-        match.winnerIgn || null,
-        match.resolutionNotes || null,
-        JSON.stringify(match.chatMessages || []),
-        match.createdAt,
-        match.roomGeneratedAt || null,
-        match.settledAt || null,
-      ]
-    );
+    `);
   } catch (err) {
     console.error(`Error saving match ${match.id} to DB:`, err);
   }
