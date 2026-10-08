@@ -1036,56 +1036,31 @@ Respond strictly in valid JSON format:
   }
 
   if (resolveWinner === 'draw') {
-    match.status = 'SETTLED';
-    match.winnerId = undefined;
-    match.winnerIgn = 'DRAW (REFUNDED)';
+    const newRoomCode = generateRoomCode(match.map);
 
-    // Refund escrow 100% to creator
-    const creatorUser = users[match.creator.id];
-    if (creatorUser) {
-      creatorUser.balance += match.stakeAmount;
-      creatorUser.escrowBalance = Math.max(0, creatorUser.escrowBalance - match.stakeAmount);
-      creatorUser.draws = (creatorUser.draws || 0) + 1;
-      const txC = {
-        id: `tx_${Date.now()}_draw_c`,
-        type: 'ESCROW_REFUND' as const,
-        amount: match.stakeAmount,
-        description: `⚖️ Draw in Match #${match.roomCode}: 100% of ₦${match.stakeAmount.toLocaleString()} stake refunded`,
-        timestamp: Date.now(),
-        matchId: match.id,
-      };
-      creatorUser.transactions.unshift(txC);
-      await syncUserToDb(creatorUser);
-      await syncTransactionToDb(creatorUser.id, txC);
-    }
+    // Reset result submissions for rematch
+    delete match.creator.resultClaim;
+    delete match.creator.screenshotUrl;
+    delete match.creator.screenshotAnalysis;
+    delete match.creator.submittedAt;
 
-    // Refund escrow 100% to opponent
     if (match.opponent) {
-      const oppUser = users[match.opponent.id];
-      if (oppUser) {
-        oppUser.balance += match.stakeAmount;
-        oppUser.escrowBalance = Math.max(0, oppUser.escrowBalance - match.stakeAmount);
-        oppUser.draws = (oppUser.draws || 0) + 1;
-        const txO = {
-          id: `tx_${Date.now()}_draw_o`,
-          type: 'ESCROW_REFUND' as const,
-          amount: match.stakeAmount,
-          description: `⚖️ Draw in Match #${match.roomCode}: 100% of ₦${match.stakeAmount.toLocaleString()} stake refunded`,
-          timestamp: Date.now(),
-          matchId: match.id,
-        };
-        oppUser.transactions.unshift(txO);
-        await syncUserToDb(oppUser);
-        await syncTransactionToDb(oppUser.id, txO);
-      }
+      delete match.opponent.resultClaim;
+      delete match.opponent.screenshotUrl;
+      delete match.opponent.screenshotAnalysis;
+      delete match.opponent.submittedAt;
     }
 
-    match.resolutionNotes = `Match ended in a DRAW / TIE. Escrow stakes (100%) refunded to both players without platform fee deduction.`;
+    match.roomCode = newRoomCode;
+    match.roomGeneratedAt = Date.now();
+    match.status = 'READY_TO_PLAY';
+    match.resolutionNotes = `Match resulted in a DRAW / TIE. Rematch initiated with new room code #${newRoomCode}. Stakes remain locked in escrow.`;
+
     match.chatMessages.push({
-      id: `msg_${Date.now()}_draw`,
+      id: `msg_${Date.now()}_rematch`,
       senderId: 'SYSTEM',
       senderName: 'CODM Referee Bot',
-      text: `⚖️ MATCH ENDED IN A DRAW! Both players' stakes (₦${match.stakeAmount.toLocaleString()} each) have been 100% refunded to their wallet balances.`,
+      text: `⚖️ DRAW / TIE DETECTED! Both stakes (₦${match.stakeAmount.toLocaleString()} each) remain locked in escrow. 🎯 NEW REMATCH IN-GAME ROOM NUMBER GENERATED: ${newRoomCode}. Both players: open CODM > Private Match > Join #${newRoomCode} and battle!`,
       timestamp: Date.now(),
     });
   } else if (resolveWinner === 'creator' || resolveWinner === 'opponent') {

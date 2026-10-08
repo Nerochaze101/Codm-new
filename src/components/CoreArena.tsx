@@ -468,7 +468,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                   ) : selectedClaim === 'DRAW' ? (
                     <>
                       <Shield className="w-4 h-4" />
-                      <span>Confirm Draw & Refund ₦{myActiveMatch.stakeAmount.toLocaleString()}</span>
+                      <span>Confirm Draw & Generate Rematch Room</span>
                     </>
                   ) : (
                     <>
