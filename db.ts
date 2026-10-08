@@ -1,5 +1,14 @@
 import pg from 'pg';
 import dotenv from 'dotenv';
+import dns from 'dns';
+
+// Prefer IPv4 DNS lookup to prevent ENETUNREACH errors on cloud hosting (e.g. Render)
+try {
+  dns.setDefaultResultOrder('ipv4first');
+} catch (e) {
+  // fallback for older node
+}
+
 dotenv.config();
 
 const { Pool } = pg;

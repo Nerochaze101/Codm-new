@@ -367,6 +367,66 @@ app.get('/api/db-status', async (req, res) => {
   }
 });
 
+// Paystack Integration Diagnostic Endpoint
+app.get('/api/paystack/test-connection', async (req, res) => {
+  const secretKey = process.env.PAYSTACK_SECRET_KEY || '';
+  const publicKey = process.env.VITE_PAYSTACK_PUBLIC_KEY || '';
+
+  if (!secretKey || secretKey.startsWith('sk_test_xxxx')) {
+    return res.json({
+      configured: false,
+      status: 'WARNING',
+      message: 'PAYSTACK_SECRET_KEY is not set or using placeholder key. Please add PAYSTACK_SECRET_KEY to environment variables.',
+      hasPublicKey: Boolean(publicKey),
+    });
+  }
+
+  try {
+    const paystackRes = await fetch('https://api.paystack.co/balance', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${secretKey}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const data = await paystackRes.json();
+    res.json({
+      configured: true,
+      status: paystackRes.ok ? 'SUCCESS' : 'ERROR',
+      paystackResponse: data,
+      publicKeyConfigured: Boolean(publicKey),
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      configured: true,
+      status: 'ERROR',
+      error: err.message,
+    });
+  }
+});
+
+// Verify Paystack transaction by reference
+app.get('/api/paystack/verify/:reference', async (req, res) => {
+  const { reference } = req.params;
+  const secretKey = process.env.PAYSTACK_SECRET_KEY || '';
+
+  try {
+    const paystackRes = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${secretKey}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const data = await paystackRes.json();
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ status: false, message: err.message });
+  }
+});
+
 app.get('/api/users/:id', (req, res) => {
   const user = users[req.params.id];
   if (!user) {
