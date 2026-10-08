@@ -8,6 +8,7 @@ import {
 import { CODM_IMAGES } from '../assets/images';
 import { openPaystackPopup } from '../utils/paystack';
 import { depositWallet } from '../services/api';
+import { CashOutModal } from './CashOutModal';
 
 interface ProfilePageProps {
   currentUser: UserProfile;
@@ -41,6 +42,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
   onSignOut,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
+  const [isCashOutModalOpen, setIsCashOutModalOpen] = useState(false);
   const [editIgn, setEditIgn] = useState(currentUser.codmIgn);
   const [editUid, setEditUid] = useState(currentUser.codmUid);
   const [editEmail, setEditEmail] = useState(currentUser.email);
@@ -261,23 +263,11 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
 
             <button
               onClick={() => {
-                if (!currentUser.bankName || !currentUser.accountNumber) {
-                  setIsEditing(true);
-                  alert('Please save your bank details first before cashing out.');
-                  return;
-                }
-                const amountToCashOut = currentUser.balance;
-                if (amountToCashOut <= 0) {
+                if (currentUser.balance <= 0) {
                   alert('No available balance to cash out.');
                   return;
                 }
-                if (onCashOut) {
-                  onCashOut(amountToCashOut, {
-                    bankName: currentUser.bankName,
-                    accountNumber: currentUser.accountNumber,
-                    accountName: currentUser.accountName || currentUser.codmIgn,
-                  });
-                }
+                setIsCashOutModalOpen(true);
               }}
               disabled={currentUser.balance <= 0}
               className="px-5 py-3.5 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs sm:text-sm transition-all shadow-lg cursor-pointer uppercase flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -288,6 +278,22 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
           </div>
         </div>
       </div>
+
+      <CashOutModal
+        isOpen={isCashOutModalOpen}
+        currentUser={currentUser}
+        onClose={() => setIsCashOutModalOpen(false)}
+        onSaveBankInfo={async (details) => {
+          if (onUpdateUser) {
+            await onUpdateUser(details);
+          }
+        }}
+        onConfirmCashOut={async (amount, details) => {
+          if (onCashOut) {
+            await onCashOut(amount, details);
+          }
+        }}
+      />
 
       {saveSuccess && (
         <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold flex items-center gap-2">
