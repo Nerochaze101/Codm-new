@@ -44,8 +44,15 @@ export async function initDatabase() {
         losses INT DEFAULT 0,
         draws INT DEFAULT 0,
         avatar TEXT,
+        bank_name VARCHAR(255),
+        account_number VARCHAR(255),
+        account_name VARCHAR(255),
         created_at BIGINT
       );
+
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS bank_name VARCHAR(255);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS account_number VARCHAR(255);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS account_name VARCHAR(255);
 
       CREATE TABLE IF NOT EXISTS matches (
         id VARCHAR(255) PRIMARY KEY,

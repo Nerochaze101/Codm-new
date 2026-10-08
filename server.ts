@@ -142,11 +142,36 @@ function generateRoomCode(mapName: string): string {
 const userPasswords: Record<string, string> = {};
 
 // Database synchronization helpers
+async function syncTransactionToDb(userId: string, tx: any) {
+  try {
+    await pool.query(`
+      INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (id) DO UPDATE SET
+        type = EXCLUDED.type,
+        amount = EXCLUDED.amount,
+        description = EXCLUDED.description,
+        match_id = EXCLUDED.match_id,
+        timestamp = EXCLUDED.timestamp;
+    `, [
+      tx.id,
+      userId,
+      tx.type,
+      tx.amount,
+      tx.description || null,
+      tx.matchId || null,
+      tx.timestamp || Date.now()
+    ]);
+  } catch (err) {
+    console.error(`⚠️ Could not sync transaction ${tx.id} to Supabase:`, err);
+  }
+}
+
 async function syncUserToDb(user: UserProfile, password?: string) {
   try {
     await pool.query(`
-      INSERT INTO users (id, username, codm_ign, codm_uid, tier, clan, email, phone, password_hash, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+      INSERT INTO users (id, username, codm_ign, codm_uid, tier, clan, email, phone, password_hash, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
       ON CONFLICT (id) DO UPDATE SET
         username = EXCLUDED.username,
         codm_ign = EXCLUDED.codm_ign,
@@ -162,7 +187,10 @@ async function syncUserToDb(user: UserProfile, password?: string) {
         wins = EXCLUDED.wins,
         losses = EXCLUDED.losses,
         draws = EXCLUDED.draws,
-        avatar = EXCLUDED.avatar;
+        avatar = EXCLUDED.avatar,
+        bank_name = EXCLUDED.bank_name,
+        account_number = EXCLUDED.account_number,
+        account_name = EXCLUDED.account_name;
     `, [
       user.id,
       user.username,
@@ -180,6 +208,9 @@ async function syncUserToDb(user: UserProfile, password?: string) {
       user.losses || 0,
       user.draws || 0,
       user.avatar,
+      user.bankName || null,
+      user.accountNumber || null,
+      user.accountName || null,
       Date.now()
     ]);
   } catch (err) {
@@ -240,7 +271,6 @@ async function syncMatchToDb(match: any) {
 
 async function loadDataFromSupabase() {
   try {
-    await pool.query(`DELETE FROM users WHERE id IN ('user_ghost', 'user_shadow') OR email LIKE '%lagos-codm.com' OR email LIKE '%esports.ng'`);
     const userRows = await pool.query('SELECT * FROM users');
     for (const r of userRows.rows) {
       users[r.id] = {
@@ -259,10 +289,27 @@ async function loadDataFromSupabase() {
         losses: parseInt(r.losses || 0, 10),
         draws: parseInt(r.draws || 0, 10),
         avatar: r.avatar,
+        bankName: r.bank_name || undefined,
+        accountNumber: r.account_number || undefined,
+        accountName: r.account_name || undefined,
         transactions: [],
       };
       if (r.password_hash) {
         userPasswords[r.id] = r.password_hash;
+      }
+    }
+
+    const txRows = await pool.query('SELECT * FROM transactions ORDER BY timestamp DESC');
+    for (const t of txRows.rows) {
+      if (users[t.user_id]) {
+        users[t.user_id].transactions.push({
+          id: t.id,
+          type: t.type,
+          amount: parseFloat(t.amount),
+          description: t.description,
+          timestamp: parseInt(t.timestamp, 10),
+          matchId: t.match_id || undefined,
+        });
       }
     }
 
@@ -291,7 +338,7 @@ async function loadDataFromSupabase() {
         roomGeneratedAt: m.room_generated_at ? parseInt(m.room_generated_at, 10) : undefined,
       };
     }
-    console.log(`📦 Loaded ${Object.keys(users).length} users and ${Object.keys(matches).length} matches from Supabase PostgreSQL.`);
+    console.log(`📦 Loaded ${Object.keys(users).length} users, ${txRows.rows.length} transactions, and ${Object.keys(matches).length} matches from Supabase PostgreSQL.`);
   } catch (err) {
     console.error('⚠️ Could not load data from Supabase:', err);
   }
@@ -329,7 +376,7 @@ app.get('/api/users/:id', (req, res) => {
 });
 
 // Register user with Email, Password, CODM IGN and CODM UID
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
   const { email, password, codmIgn, codmUid, initialDeposit = 0 } = req.body;
   if (!email || !email.trim()) {
     return res.status(400).json({ error: 'Valid email address is required' });
@@ -383,7 +430,10 @@ app.post('/api/auth/register', (req, res) => {
 
   users[id] = newUser;
   userPasswords[id] = password;
-  syncUserToDb(newUser, password);
+  await syncUserToDb(newUser, password);
+  if (newUser.transactions.length > 0) {
+    await syncTransactionToDb(newUser.id, newUser.transactions[0]);
+  }
   res.status(201).json(newUser);
 });
 
@@ -412,7 +462,7 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 // Create/Register user or quick opponent onboarding
-app.post('/api/users', (req, res) => {
+app.post('/api/users', async (req, res) => {
   const { username, codmIgn, codmUid, email, phone, initialDeposit = 0, password } = req.body;
   if (!codmIgn) {
     return res.status(400).json({ error: 'CODM In-Game Name (IGN) is required' });
@@ -448,7 +498,10 @@ app.post('/api/users', (req, res) => {
   if (password) {
     userPasswords[id] = password;
   }
-  syncUserToDb(newUser, password);
+  await syncUserToDb(newUser, password);
+  if (newUser.transactions.length > 0) {
+    await syncTransactionToDb(newUser.id, newUser.transactions[0]);
+  }
   res.json(newUser);
 });
 
@@ -475,7 +528,7 @@ app.patch('/api/users/:id', async (req, res) => {
 });
 
 // Wallet deposit
-app.post('/api/users/:id/deposit', (req, res) => {
+app.post('/api/users/:id/deposit', async (req, res) => {
   const user = users[req.params.id];
   if (!user) return res.status(404).json({ error: 'User not found' });
 
@@ -495,11 +548,14 @@ app.post('/api/users/:id/deposit', (req, res) => {
   };
   user.transactions.unshift(tx);
 
+  await syncUserToDb(user);
+  await syncTransactionToDb(user.id, tx);
+
   res.json({ success: true, balance: user.balance, transaction: tx });
 });
 
 // Wallet withdrawal
-app.post('/api/users/:id/withdraw', (req, res) => {
+app.post('/api/users/:id/withdraw', async (req, res) => {
   const user = users[req.params.id];
   if (!user) return res.status(404).json({ error: 'User not found' });
 
@@ -522,6 +578,9 @@ app.post('/api/users/:id/withdraw', (req, res) => {
   };
   user.transactions.unshift(tx);
 
+  await syncUserToDb(user);
+  await syncTransactionToDb(user.id, tx);
+
   res.json({ success: true, balance: user.balance, transaction: tx });
 });
 
@@ -539,7 +598,7 @@ app.get('/api/matches/:id', (req, res) => {
 });
 
 // Create new 1v1 match challenge (Creator generates link with ₦0 upfront)
-app.post('/api/matches', (req, res) => {
+app.post('/api/matches', async (req, res) => {
   const {
     creatorId,
     gameMode = '1v1 Sniper Only',
@@ -605,12 +664,12 @@ app.post('/api/matches', (req, res) => {
   };
 
   matches[matchId] = newMatch;
-  syncMatchToDb(newMatch);
+  await syncMatchToDb(newMatch);
   res.json(newMatch);
 });
 
 // Opponent accepts challenge and sends stake into escrow
-app.post('/api/matches/:id/opponent-stake', (req, res) => {
+app.post('/api/matches/:id/opponent-stake', async (req, res) => {
   const match = matches[req.params.id];
   if (!match) return res.status(404).json({ error: 'Match not found' });
 
@@ -638,14 +697,15 @@ app.post('/api/matches/:id/opponent-stake', (req, res) => {
     opponent.escrowBalance += match.stakeAmount;
   }
 
-  opponent.transactions.unshift({
+  const tx = {
     id: `tx_${Date.now()}`,
-    type: 'ESCROW_LOCK',
+    type: 'ESCROW_LOCK' as const,
     amount: match.stakeAmount,
     description: `₦${match.stakeAmount.toLocaleString()} stake locked in escrow for challenge #${match.challengeCode}`,
     timestamp: Date.now(),
     matchId: match.id,
-  });
+  };
+  opponent.transactions.unshift(tx);
 
   match.opponent = {
     id: opponent.id,
@@ -666,12 +726,14 @@ app.post('/api/matches/:id/opponent-stake', (req, res) => {
     timestamp: Date.now(),
   });
 
-  syncMatchToDb(match);
+  await syncUserToDb(opponent);
+  await syncTransactionToDb(opponent.id, tx);
+  await syncMatchToDb(match);
   res.json(match);
 });
 
 // Creator sends matching stake after opponent has accepted
-app.post('/api/matches/:id/creator-stake', (req, res) => {
+app.post('/api/matches/:id/creator-stake', async (req, res) => {
   const match = matches[req.params.id];
   if (!match) return res.status(404).json({ error: 'Match not found' });
 
@@ -697,14 +759,15 @@ app.post('/api/matches/:id/creator-stake', (req, res) => {
     creator.escrowBalance += match.stakeAmount;
   }
 
-  creator.transactions.unshift({
+  const tx = {
     id: `tx_${Date.now()}`,
-    type: 'ESCROW_LOCK',
+    type: 'ESCROW_LOCK' as const,
     amount: match.stakeAmount,
     description: `₦${match.stakeAmount.toLocaleString()} matching stake locked in escrow for challenge #${match.challengeCode}`,
     timestamp: Date.now(),
     matchId: match.id,
-  });
+  };
+  creator.transactions.unshift(tx);
 
   match.creator.staked = true;
 
@@ -722,12 +785,14 @@ app.post('/api/matches/:id/creator-stake', (req, res) => {
     timestamp: Date.now(),
   });
 
-  syncMatchToDb(match);
+  await syncUserToDb(creator);
+  await syncTransactionToDb(creator.id, tx);
+  await syncMatchToDb(match);
   res.json(match);
 });
 
 // Legacy / Direct Join handler (maps to opponent-stake)
-app.post('/api/matches/:id/join', (req, res) => {
+app.post('/api/matches/:id/join', async (req, res) => {
   const match = matches[req.params.id];
   if (!match) return res.status(404).json({ error: 'Match not found' });
 
@@ -744,14 +809,15 @@ app.post('/api/matches/:id/join', (req, res) => {
   }
 
   opponent.escrowBalance += match.stakeAmount;
-  opponent.transactions.unshift({
+  const tx = {
     id: `tx_${Date.now()}`,
-    type: 'ESCROW_LOCK',
+    type: 'ESCROW_LOCK' as const,
     amount: match.stakeAmount,
     description: `₦${match.stakeAmount.toLocaleString()} stake locked in escrow for challenge #${match.challengeCode}`,
     timestamp: Date.now(),
     matchId: match.id,
-  });
+  };
+  opponent.transactions.unshift(tx);
 
   match.opponent = {
     id: opponent.id,
@@ -772,11 +838,14 @@ app.post('/api/matches/:id/join', (req, res) => {
     timestamp: Date.now(),
   });
 
+  await syncUserToDb(opponent);
+  await syncTransactionToDb(opponent.id, tx);
+  await syncMatchToDb(match);
   res.json(match);
 });
 
 // Send in-match chat message
-app.post('/api/matches/:id/chat', (req, res) => {
+app.post('/api/matches/:id/chat', async (req, res) => {
   const match = matches[req.params.id];
   if (!match) return res.status(404).json({ error: 'Match not found' });
 
@@ -797,11 +866,12 @@ app.post('/api/matches/:id/chat', (req, res) => {
   };
 
   match.chatMessages.push(newMsg);
+  await syncMatchToDb(match);
   res.json(newMsg);
 });
 
 // Cancel match (only if PENDING_OPPONENT_STAKE or OPPONENT_STAKED_AWAITING_CREATOR)
-app.post('/api/matches/:id/cancel', (req, res) => {
+app.post('/api/matches/:id/cancel', async (req, res) => {
   const match = matches[req.params.id];
   if (!match) return res.status(404).json({ error: 'Match not found' });
 
@@ -815,14 +885,17 @@ app.post('/api/matches/:id/cancel', (req, res) => {
     if (creator) {
       creator.balance += match.stakeAmount;
       creator.escrowBalance = Math.max(0, creator.escrowBalance - match.stakeAmount);
-      creator.transactions.unshift({
+      const tx = {
         id: `tx_${Date.now()}_c`,
-        type: 'ESCROW_REFUND',
+        type: 'ESCROW_REFUND' as const,
         amount: match.stakeAmount,
         description: `₦${match.stakeAmount.toLocaleString()} escrow refunded from cancelled challenge #${match.challengeCode}`,
         timestamp: Date.now(),
         matchId: match.id,
-      });
+      };
+      creator.transactions.unshift(tx);
+      await syncUserToDb(creator);
+      await syncTransactionToDb(creator.id, tx);
     }
   }
 
@@ -832,18 +905,22 @@ app.post('/api/matches/:id/cancel', (req, res) => {
     if (opponent) {
       opponent.balance += match.stakeAmount;
       opponent.escrowBalance = Math.max(0, opponent.escrowBalance - match.stakeAmount);
-      opponent.transactions.unshift({
+      const tx = {
         id: `tx_${Date.now()}_o`,
-        type: 'ESCROW_REFUND',
+        type: 'ESCROW_REFUND' as const,
         amount: match.stakeAmount,
         description: `₦${match.stakeAmount.toLocaleString()} escrow refunded from cancelled challenge #${match.challengeCode}`,
         timestamp: Date.now(),
         matchId: match.id,
-      });
+      };
+      opponent.transactions.unshift(tx);
+      await syncUserToDb(opponent);
+      await syncTransactionToDb(opponent.id, tx);
     }
   }
 
   match.status = 'CANCELLED';
+  await syncMatchToDb(match);
   res.json(match);
 });
 
@@ -969,14 +1046,17 @@ Respond strictly in valid JSON format:
       creatorUser.balance += match.stakeAmount;
       creatorUser.escrowBalance = Math.max(0, creatorUser.escrowBalance - match.stakeAmount);
       creatorUser.draws = (creatorUser.draws || 0) + 1;
-      creatorUser.transactions.unshift({
+      const txC = {
         id: `tx_${Date.now()}_draw_c`,
-        type: 'ESCROW_REFUND',
+        type: 'ESCROW_REFUND' as const,
         amount: match.stakeAmount,
         description: `⚖️ Draw in Match #${match.roomCode}: 100% of ₦${match.stakeAmount.toLocaleString()} stake refunded`,
         timestamp: Date.now(),
         matchId: match.id,
-      });
+      };
+      creatorUser.transactions.unshift(txC);
+      await syncUserToDb(creatorUser);
+      await syncTransactionToDb(creatorUser.id, txC);
     }
 
     // Refund escrow 100% to opponent
@@ -986,14 +1066,17 @@ Respond strictly in valid JSON format:
         oppUser.balance += match.stakeAmount;
         oppUser.escrowBalance = Math.max(0, oppUser.escrowBalance - match.stakeAmount);
         oppUser.draws = (oppUser.draws || 0) + 1;
-        oppUser.transactions.unshift({
+        const txO = {
           id: `tx_${Date.now()}_draw_o`,
-          type: 'ESCROW_REFUND',
+          type: 'ESCROW_REFUND' as const,
           amount: match.stakeAmount,
           description: `⚖️ Draw in Match #${match.roomCode}: 100% of ₦${match.stakeAmount.toLocaleString()} stake refunded`,
           timestamp: Date.now(),
           matchId: match.id,
-        });
+        };
+        oppUser.transactions.unshift(txO);
+        await syncUserToDb(oppUser);
+        await syncTransactionToDb(oppUser.id, txO);
       }
     }
 
@@ -1017,11 +1100,17 @@ Respond strictly in valid JSON format:
 
     // Settle Escrow!
     const creatorUser = users[match.creator.id];
-    if (creatorUser) creatorUser.escrowBalance = Math.max(0, creatorUser.escrowBalance - match.stakeAmount);
+    if (creatorUser) {
+      creatorUser.escrowBalance = Math.max(0, creatorUser.escrowBalance - match.stakeAmount);
+      await syncUserToDb(creatorUser);
+    }
 
     if (match.opponent) {
       const oppUser = users[match.opponent.id];
-      if (oppUser) oppUser.escrowBalance = Math.max(0, oppUser.escrowBalance - match.stakeAmount);
+      if (oppUser) {
+        oppUser.escrowBalance = Math.max(0, oppUser.escrowBalance - match.stakeAmount);
+        await syncUserToDb(oppUser);
+      }
     }
 
     // Winner gets the pot minus 10% platform fee
@@ -1030,16 +1119,18 @@ Respond strictly in valid JSON format:
       winnerUser.wins += 1;
 
       const hasBank = winnerUser.bankName && winnerUser.accountNumber;
+      let txW;
       if (hasBank) {
         // Automatically send funds directly to winner's saved bank account
-        winnerUser.transactions.unshift({
+        txW = {
           id: `tx_${Date.now()}_win_cashout`,
-          type: 'WITHDRAWAL',
+          type: 'WITHDRAWAL' as const,
           amount: match.winnerPayout,
           description: `🚀 Direct Automated Bank Payout: ₦${match.winnerPayout.toLocaleString()} transferred to ${winnerUser.bankName} (${winnerUser.accountNumber} - ${winnerUser.accountName || winnerUser.codmIgn})`,
           timestamp: Date.now(),
           matchId: match.id,
-        });
+        };
+        winnerUser.transactions.unshift(txW);
 
         match.resolutionNotes = `Match verified! Winner is ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} winning funds were automatically sent directly to saved bank account (${winnerUser.bankName} - ${winnerUser.accountNumber}). Zero funds held on platform.`;
 
@@ -1055,14 +1146,15 @@ Respond strictly in valid JSON format:
         winnerUser.balance += match.winnerPayout;
         const payoutDesc = `🏆 Won 1v1 Escrow Match #${match.roomCode} vs ${loserObj.codmIgn}: ₦${match.winnerPayout.toLocaleString()} ready for cashout. Enter bank details to withdraw now.`;
 
-        winnerUser.transactions.unshift({
+        txW = {
           id: `tx_${Date.now()}_win`,
-          type: 'MATCH_WIN_PAYOUT',
+          type: 'MATCH_WIN_PAYOUT' as const,
           amount: match.winnerPayout,
           description: payoutDesc,
           timestamp: Date.now(),
           matchId: match.id,
-        });
+        };
+        winnerUser.transactions.unshift(txW);
 
         match.resolutionNotes = `Match verified! Winner is ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} ready for instant cashout. Enter bank details now to send funds directly to your bank.`;
 
@@ -1075,8 +1167,12 @@ Respond strictly in valid JSON format:
         });
       }
 
+      await syncUserToDb(winnerUser);
+      await syncTransactionToDb(winnerUser.id, txW);
+
       if (loserUser) {
         loserUser.losses += 1;
+        await syncUserToDb(loserUser);
       }
     }
   } else if (resolveWinner === 'dispute') {
@@ -1094,11 +1190,12 @@ Respond strictly in valid JSON format:
     match.status = 'SUBMITTING_RESULTS';
   }
 
+  await syncMatchToDb(match);
   res.json(match);
 });
 
 // Admin manual resolution (for dispute testing)
-app.post('/api/matches/:id/admin-resolve', (req, res) => {
+app.post('/api/matches/:id/admin-resolve', async (req, res) => {
   const match = matches[req.params.id];
   if (!match) return res.status(404).json({ error: 'Match not found' });
 
@@ -1117,28 +1214,40 @@ app.post('/api/matches/:id/admin-resolve', (req, res) => {
 
   // Settle Escrow
   const creatorUser = users[match.creator.id];
-  if (creatorUser) creatorUser.escrowBalance = Math.max(0, creatorUser.escrowBalance - match.stakeAmount);
+  if (creatorUser) {
+    creatorUser.escrowBalance = Math.max(0, creatorUser.escrowBalance - match.stakeAmount);
+    await syncUserToDb(creatorUser);
+  }
 
   if (match.opponent) {
     const oppUser = users[match.opponent.id];
-    if (oppUser) oppUser.escrowBalance = Math.max(0, oppUser.escrowBalance - match.stakeAmount);
+    if (oppUser) {
+      oppUser.escrowBalance = Math.max(0, oppUser.escrowBalance - match.stakeAmount);
+      await syncUserToDb(oppUser);
+    }
   }
 
   if (winnerUser) {
     winnerUser.balance += match.winnerPayout;
     winnerUser.totalWinnings += match.winnerPayout;
     winnerUser.wins += 1;
-    winnerUser.transactions.unshift({
+    const tx = {
       id: `tx_${Date.now()}_win`,
-      type: 'MATCH_WIN_PAYOUT',
+      type: 'MATCH_WIN_PAYOUT' as const,
       amount: match.winnerPayout,
       description: `🏆 Admin resolved 1v1 match #${match.roomCode} win in favor of ${winnerObj.codmIgn}`,
       timestamp: Date.now(),
       matchId: match.id,
-    });
+    };
+    winnerUser.transactions.unshift(tx);
+    await syncUserToDb(winnerUser);
+    await syncTransactionToDb(winnerUser.id, tx);
   }
 
-  if (loserUser) loserUser.losses += 1;
+  if (loserUser) {
+    loserUser.losses += 1;
+    await syncUserToDb(loserUser);
+  }
 
   match.status = 'SETTLED';
   match.winnerId = winnerObj.id;
@@ -1153,6 +1262,7 @@ app.post('/api/matches/:id/admin-resolve', (req, res) => {
     timestamp: Date.now(),
   });
 
+  await syncMatchToDb(match);
   res.json(match);
 });
 
