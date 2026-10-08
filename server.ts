@@ -29,8 +29,7 @@ if (process.env.GEMINI_API_KEY) {
 const app = express();
 app.use(express.json({ limit: '25mb' }));
 
-// In-Memory Data Store
-interface UserProfile {
+export interface UserProfile {
   id: string;
   username: string;
   codmIgn: string;
@@ -59,7 +58,7 @@ interface UserProfile {
   }>;
 }
 
-interface Match {
+export interface Match {
   id: string;
   challengeCode: string;
   roomCode?: string;
@@ -119,16 +118,12 @@ interface Match {
   resolutionNotes?: string;
 }
 
-const users: Record<string, UserProfile> = {};
-
-const matches: Record<string, Match> = {};
-
 // Helper to calculate tiered rake percentage based on stake amount
 function getRakePercentage(stake: number): number {
   if (stake >= 10000) return 0.05; // 5% for ₦10,000+
   if (stake >= 5000) return 0.07;  // 7% for ₦5,000
   if (stake >= 2500) return 0.08;  // 8% for ₦2,500
-  return 0.10;                     // 10% for ₦1,000
+  return 0.10;                     // 10% for ₦100 - ₦1,000
 }
 
 // Helper to generate a room code like CODM-8392-SHP
@@ -138,38 +133,106 @@ function generateRoomCode(mapName: string): string {
   return `CODM-${num}-${suffix}`;
 }
 
-// Password storage for registered users
-const userPasswords: Record<string, string> = {};
+// ==========================================
+// DIRECT DATABASE ACCESS FUNCTIONS (NO IN-MEMORY LOSS)
+// ==========================================
 
-// Database synchronization helpers
-async function syncTransactionToDb(userId: string, tx: any) {
+async function getUserFromDb(id: string): Promise<UserProfile | null> {
   try {
-    await pool.query(`
-      INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      ON CONFLICT (id) DO UPDATE SET
-        type = EXCLUDED.type,
-        amount = EXCLUDED.amount,
-        description = EXCLUDED.description,
-        match_id = EXCLUDED.match_id,
-        timestamp = EXCLUDED.timestamp;
-    `, [
-      tx.id,
-      userId,
-      tx.type,
-      tx.amount,
-      tx.description || null,
-      tx.matchId || null,
-      tx.timestamp || Date.now()
-    ]);
+    const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+    if (userRes.rows.length === 0) return null;
+    const r = userRes.rows[0];
+
+    const txRes = await pool.query('SELECT * FROM transactions WHERE user_id = $1 ORDER BY timestamp DESC', [id]);
+    const transactions = txRes.rows.map((t) => ({
+      id: t.id,
+      type: t.type,
+      amount: parseFloat(t.amount),
+      description: t.description,
+      timestamp: parseInt(t.timestamp, 10),
+      matchId: t.match_id || undefined,
+    }));
+
+    return {
+      id: r.id,
+      username: r.username || r.codm_ign,
+      codmIgn: r.codm_ign,
+      codmUid: r.codm_uid,
+      tier: r.tier || 'LEGENDARY TIER',
+      clan: r.clan || '[1V1_PRO]',
+      email: r.email || '',
+      phone: r.phone || '+234 800 000 0000',
+      balance: parseFloat(r.balance || 0),
+      escrowBalance: parseFloat(r.escrow_balance || 0),
+      totalWinnings: parseFloat(r.total_winnings || 0),
+      wins: parseInt(r.wins || 0, 10),
+      losses: parseInt(r.losses || 0, 10),
+      draws: parseInt(r.draws || 0, 10),
+      avatar: r.avatar,
+      bankName: r.bank_name || undefined,
+      accountNumber: r.account_number || undefined,
+      accountName: r.account_name || undefined,
+      transactions,
+    };
   } catch (err) {
-    console.error(`⚠️ Could not sync transaction ${tx.id} to Supabase:`, err);
+    console.error(`Error loading user ${id} from DB:`, err);
+    return null;
   }
 }
 
-async function syncUserToDb(user: UserProfile, password?: string) {
+async function getUserByEmailOrIgn(identifier: string): Promise<{ user: UserProfile; passwordHash: string } | null> {
   try {
-    await pool.query(`
+    const cleanIdent = identifier.trim().toLowerCase();
+    const userRes = await pool.query(
+      'SELECT * FROM users WHERE LOWER(email) = $1 OR LOWER(codm_ign) = $1 OR LOWER(username) = $1',
+      [cleanIdent]
+    );
+    if (userRes.rows.length === 0) return null;
+    const r = userRes.rows[0];
+
+    const txRes = await pool.query('SELECT * FROM transactions WHERE user_id = $1 ORDER BY timestamp DESC', [r.id]);
+    const transactions = txRes.rows.map((t) => ({
+      id: t.id,
+      type: t.type,
+      amount: parseFloat(t.amount),
+      description: t.description,
+      timestamp: parseInt(t.timestamp, 10),
+      matchId: t.match_id || undefined,
+    }));
+
+    const user: UserProfile = {
+      id: r.id,
+      username: r.username || r.codm_ign,
+      codmIgn: r.codm_ign,
+      codmUid: r.codm_uid,
+      tier: r.tier || 'LEGENDARY TIER',
+      clan: r.clan || '[1V1_PRO]',
+      email: r.email || '',
+      phone: r.phone || '+234 800 000 0000',
+      balance: parseFloat(r.balance || 0),
+      escrowBalance: parseFloat(r.escrow_balance || 0),
+      totalWinnings: parseFloat(r.total_winnings || 0),
+      wins: parseInt(r.wins || 0, 10),
+      losses: parseInt(r.losses || 0, 10),
+      draws: parseInt(r.draws || 0, 10),
+      avatar: r.avatar,
+      bankName: r.bank_name || undefined,
+      accountNumber: r.account_number || undefined,
+      accountName: r.account_name || undefined,
+      transactions,
+    };
+
+    return { user, passwordHash: r.password_hash || '' };
+  } catch (err) {
+    console.error('Error finding user by email or IGN:', err);
+    return null;
+  }
+}
+
+async function saveUserToDb(user: UserProfile, password?: string) {
+  try {
+    await pool.query(
+      `
       INSERT INTO users (id, username, codm_ign, codm_uid, tier, clan, email, phone, password_hash, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, created_at)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
       ON CONFLICT (id) DO UPDATE SET
@@ -191,36 +254,131 @@ async function syncUserToDb(user: UserProfile, password?: string) {
         bank_name = EXCLUDED.bank_name,
         account_number = EXCLUDED.account_number,
         account_name = EXCLUDED.account_name;
-    `, [
-      user.id,
-      user.username,
-      user.codmIgn,
-      user.codmUid,
-      user.tier || 'LEGENDARY TIER',
-      user.clan || '[1V1_PRO]',
-      user.email,
-      user.phone,
-      password || userPasswords[user.id] || null,
-      user.balance || 0,
-      user.escrowBalance || 0,
-      user.totalWinnings || 0,
-      user.wins || 0,
-      user.losses || 0,
-      user.draws || 0,
-      user.avatar,
-      user.bankName || null,
-      user.accountNumber || null,
-      user.accountName || null,
-      Date.now()
-    ]);
+    `,
+      [
+        user.id,
+        user.username,
+        user.codmIgn,
+        user.codmUid,
+        user.tier || 'LEGENDARY TIER',
+        user.clan || '[1V1_PRO]',
+        user.email,
+        user.phone,
+        password || null,
+        user.balance || 0,
+        user.escrowBalance || 0,
+        user.totalWinnings || 0,
+        user.wins || 0,
+        user.losses || 0,
+        user.draws || 0,
+        user.avatar,
+        user.bankName || null,
+        user.accountNumber || null,
+        user.accountName || null,
+        Date.now(),
+      ]
+    );
   } catch (err) {
-    console.error(`⚠️ Could not sync user ${user.id} to Supabase:`, err);
+    console.error(`Error saving user ${user.id} to DB:`, err);
   }
 }
 
-async function syncMatchToDb(match: any) {
+async function saveTransactionToDb(userId: string, tx: any) {
   try {
-    await pool.query(`
+    await pool.query(
+      `
+      INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (id) DO UPDATE SET
+        type = EXCLUDED.type,
+        amount = EXCLUDED.amount,
+        description = EXCLUDED.description,
+        match_id = EXCLUDED.match_id,
+        timestamp = EXCLUDED.timestamp;
+    `,
+      [
+        tx.id,
+        userId,
+        tx.type,
+        tx.amount,
+        tx.description || null,
+        tx.matchId || null,
+        tx.timestamp || Date.now(),
+      ]
+    );
+  } catch (err) {
+    console.error(`Error saving transaction ${tx.id} to DB:`, err);
+  }
+}
+
+async function getMatchFromDb(id: string): Promise<Match | null> {
+  try {
+    const res = await pool.query('SELECT * FROM matches WHERE id = $1', [id]);
+    if (res.rows.length === 0) return null;
+    const m = res.rows[0];
+    return {
+      id: m.id,
+      challengeCode: m.challenge_code,
+      roomCode: m.room_code || undefined,
+      gameMode: m.game_mode,
+      map: m.map,
+      rules: typeof m.rules === 'string' ? JSON.parse(m.rules) : m.rules || [],
+      stakeAmount: parseFloat(m.stake_amount),
+      potAmount: parseFloat(m.pot_amount),
+      platformFeePercentage: parseInt(m.platform_fee_percentage, 10) || 10,
+      platformFee: parseFloat(m.platform_fee || 0),
+      winnerPayout: parseFloat(m.winner_payout),
+      status: m.status,
+      createdAt: parseInt(m.created_at, 10),
+      creator: typeof m.creator_data === 'string' ? JSON.parse(m.creator_data) : m.creator_data,
+      opponent: m.opponent_data ? (typeof m.opponent_data === 'string' ? JSON.parse(m.opponent_data) : m.opponent_data) : undefined,
+      winnerId: m.winner_id || undefined,
+      winnerIgn: m.winner_ign || undefined,
+      resolutionNotes: m.resolution_notes || undefined,
+      chatMessages: typeof m.chat_messages === 'string' ? JSON.parse(m.chat_messages) : m.chat_messages || [],
+      roomGeneratedAt: m.room_generated_at ? parseInt(m.room_generated_at, 10) : undefined,
+    };
+  } catch (err) {
+    console.error(`Error getting match ${id} from DB:`, err);
+    return null;
+  }
+}
+
+async function getAllMatchesFromDb(): Promise<Match[]> {
+  try {
+    const res = await pool.query('SELECT * FROM matches ORDER BY created_at DESC');
+    return res.rows.map((m) => ({
+      id: m.id,
+      challengeCode: m.challenge_code,
+      roomCode: m.room_code || undefined,
+      gameMode: m.game_mode,
+      map: m.map,
+      rules: typeof m.rules === 'string' ? JSON.parse(m.rules) : m.rules || [],
+      stakeAmount: parseFloat(m.stake_amount),
+      potAmount: parseFloat(m.pot_amount),
+      platformFeePercentage: parseInt(m.platform_fee_percentage, 10) || 10,
+      platformFee: parseFloat(m.platform_fee || 0),
+      winnerPayout: parseFloat(m.winner_payout),
+      status: m.status,
+      createdAt: parseInt(m.created_at, 10),
+      creator: typeof m.creator_data === 'string' ? JSON.parse(m.creator_data) : m.creator_data,
+      opponent: m.opponent_data ? (typeof m.opponent_data === 'string' ? JSON.parse(m.opponent_data) : m.opponent_data) : undefined,
+      winnerId: m.winner_id || undefined,
+      winnerIgn: m.winner_ign || undefined,
+      resolutionNotes: m.resolution_notes || undefined,
+      chatMessages: typeof m.chat_messages === 'string' ? JSON.parse(m.chat_messages) : m.chat_messages || [],
+      roomGeneratedAt: m.room_generated_at ? parseInt(m.room_generated_at, 10) : undefined,
+    }));
+  } catch (err) {
+    console.error('Error getting matches from DB:', err);
+    return [];
+  }
+}
+
+async function saveMatchToDb(match: any) {
+  try {
+    await pool.query(
+      `
       INSERT INTO matches (
         id, challenge_code, room_code, game_mode, map, rules,
         stake_amount, pot_amount, platform_fee_percentage, platform_fee, winner_payout,
@@ -239,108 +397,35 @@ async function syncMatchToDb(match: any) {
         chat_messages = EXCLUDED.chat_messages,
         room_generated_at = EXCLUDED.room_generated_at,
         settled_at = EXCLUDED.settled_at;
-    `, [
-      match.id,
-      match.challengeCode,
-      match.roomCode || null,
-      match.gameMode,
-      match.map,
-      JSON.stringify(match.rules || []),
-      match.stakeAmount,
-      match.potAmount,
-      match.platformFeePercentage || 10,
-      match.platformFee || 0,
-      match.winnerPayout,
-      match.status,
-      match.creator.id,
-      JSON.stringify(match.creator),
-      match.opponent ? match.opponent.id : null,
-      match.opponent ? JSON.stringify(match.opponent) : null,
-      match.winnerId || null,
-      match.winnerIgn || null,
-      match.resolutionNotes || null,
-      JSON.stringify(match.chatMessages || []),
-      match.createdAt,
-      match.roomGeneratedAt || null,
-      match.settledAt || null
-    ]);
+    `,
+      [
+        match.id,
+        match.challengeCode,
+        match.roomCode || null,
+        match.gameMode,
+        match.map,
+        JSON.stringify(match.rules || []),
+        match.stakeAmount,
+        match.potAmount,
+        match.platformFeePercentage || 10,
+        match.platformFee || 0,
+        match.winnerPayout,
+        match.status,
+        match.creator.id,
+        JSON.stringify(match.creator),
+        match.opponent ? match.opponent.id : null,
+        match.opponent ? JSON.stringify(match.opponent) : null,
+        match.winnerId || null,
+        match.winnerIgn || null,
+        match.resolutionNotes || null,
+        JSON.stringify(match.chatMessages || []),
+        match.createdAt,
+        match.roomGeneratedAt || null,
+        match.settledAt || null,
+      ]
+    );
   } catch (err) {
-    console.error(`⚠️ Could not sync match ${match.id} to Supabase:`, err);
-  }
-}
-
-async function loadDataFromSupabase() {
-  try {
-    const userRows = await pool.query('SELECT * FROM users');
-    for (const r of userRows.rows) {
-      users[r.id] = {
-        id: r.id,
-        username: r.username || r.codm_ign,
-        codmIgn: r.codm_ign,
-        codmUid: r.codm_uid,
-        tier: r.tier || 'LEGENDARY TIER',
-        clan: r.clan || '[1V1_PRO]',
-        email: r.email || '',
-        phone: r.phone || '+234 800 000 0000',
-        balance: parseFloat(r.balance || 0),
-        escrowBalance: parseFloat(r.escrow_balance || 0),
-        totalWinnings: parseFloat(r.total_winnings || 0),
-        wins: parseInt(r.wins || 0, 10),
-        losses: parseInt(r.losses || 0, 10),
-        draws: parseInt(r.draws || 0, 10),
-        avatar: r.avatar,
-        bankName: r.bank_name || undefined,
-        accountNumber: r.account_number || undefined,
-        accountName: r.account_name || undefined,
-        transactions: [],
-      };
-      if (r.password_hash) {
-        userPasswords[r.id] = r.password_hash;
-      }
-    }
-
-    const txRows = await pool.query('SELECT * FROM transactions ORDER BY timestamp DESC');
-    for (const t of txRows.rows) {
-      if (users[t.user_id]) {
-        users[t.user_id].transactions.push({
-          id: t.id,
-          type: t.type,
-          amount: parseFloat(t.amount),
-          description: t.description,
-          timestamp: parseInt(t.timestamp, 10),
-          matchId: t.match_id || undefined,
-        });
-      }
-    }
-
-    const matchRows = await pool.query('SELECT * FROM matches ORDER BY created_at DESC');
-    for (const m of matchRows.rows) {
-      matches[m.id] = {
-        id: m.id,
-        challengeCode: m.challenge_code,
-        roomCode: m.room_code || undefined,
-        gameMode: m.game_mode,
-        map: m.map,
-        rules: typeof m.rules === 'string' ? JSON.parse(m.rules) : m.rules || [],
-        stakeAmount: parseFloat(m.stake_amount),
-        potAmount: parseFloat(m.pot_amount),
-        platformFeePercentage: parseInt(m.platform_fee_percentage, 10) || 10,
-        platformFee: parseFloat(m.platform_fee || 0),
-        winnerPayout: parseFloat(m.winner_payout),
-        status: m.status,
-        createdAt: parseInt(m.created_at, 10),
-        creator: typeof m.creator_data === 'string' ? JSON.parse(m.creator_data) : m.creator_data,
-        opponent: m.opponent_data ? (typeof m.opponent_data === 'string' ? JSON.parse(m.opponent_data) : m.opponent_data) : undefined,
-        winnerId: m.winner_id || undefined,
-        winnerIgn: m.winner_ign || undefined,
-        resolutionNotes: m.resolution_notes || undefined,
-        chatMessages: typeof m.chat_messages === 'string' ? JSON.parse(m.chat_messages) : m.chat_messages || [],
-        roomGeneratedAt: m.room_generated_at ? parseInt(m.room_generated_at, 10) : undefined,
-      };
-    }
-    console.log(`📦 Loaded ${Object.keys(users).length} users, ${txRows.rows.length} transactions, and ${Object.keys(matches).length} matches from Supabase PostgreSQL.`);
-  } catch (err) {
-    console.error('⚠️ Could not load data from Supabase:', err);
+    console.error(`Error saving match ${match.id} to DB:`, err);
   }
 }
 
@@ -349,20 +434,21 @@ app.get('/api/db-status', async (req, res) => {
   try {
     const client = await pool.connect();
     const result = await client.query('SELECT NOW() as now, version() as version');
+    const uCount = await client.query('SELECT COUNT(*) FROM users');
+    const mCount = await client.query('SELECT COUNT(*) FROM matches');
     client.release();
     res.json({
       connected: true,
       database: 'Supabase PostgreSQL',
       timestamp: result.rows[0].now,
       version: result.rows[0].version,
-      usersCount: Object.keys(users).length,
-      matchesCount: Object.keys(matches).length,
+      usersCount: parseInt(uCount.rows[0].count, 10),
+      matchesCount: parseInt(mCount.rows[0].count, 10),
     });
   } catch (err: any) {
     res.status(500).json({
       connected: false,
       error: err.message,
-      fallback: 'In-memory data store active',
     });
   }
 });
@@ -427,53 +513,9 @@ app.get('/api/paystack/verify/:reference', async (req, res) => {
   }
 });
 
+// Fetch user profile directly from PostgreSQL database
 app.get('/api/users/:id', async (req, res) => {
-  let user = users[req.params.id];
-  if (!user) {
-    try {
-      const dbRes = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
-      if (dbRes.rows.length > 0) {
-        const r = dbRes.rows[0];
-        user = {
-          id: r.id,
-          username: r.username || r.codm_ign,
-          codmIgn: r.codm_ign,
-          codmUid: r.codm_uid,
-          tier: r.tier || 'LEGENDARY TIER',
-          clan: r.clan || '[1V1_PRO]',
-          email: r.email || '',
-          phone: r.phone || '+234 800 000 0000',
-          balance: parseFloat(r.balance || 0),
-          escrowBalance: parseFloat(r.escrow_balance || 0),
-          totalWinnings: parseFloat(r.total_winnings || 0),
-          wins: parseInt(r.wins || 0, 10),
-          losses: parseInt(r.losses || 0, 10),
-          draws: parseInt(r.draws || 0, 10),
-          avatar: r.avatar,
-          bankName: r.bank_name || undefined,
-          accountNumber: r.account_number || undefined,
-          accountName: r.account_name || undefined,
-          transactions: [],
-        };
-        const txRes = await pool.query('SELECT * FROM transactions WHERE user_id = $1 ORDER BY timestamp DESC', [r.id]);
-        user.transactions = txRes.rows.map((t) => ({
-          id: t.id,
-          type: t.type,
-          amount: parseFloat(t.amount),
-          description: t.description,
-          timestamp: parseInt(t.timestamp, 10),
-          matchId: t.match_id || undefined,
-        }));
-        users[r.id] = user;
-        if (r.password_hash) {
-          userPasswords[r.id] = r.password_hash;
-        }
-      }
-    } catch (err) {
-      console.error(`Error querying user ${req.params.id} from PostgreSQL:`, err);
-    }
-  }
-
+  const user = await getUserFromDb(req.params.id);
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
@@ -496,13 +538,11 @@ app.post('/api/auth/register', async (req, res) => {
     return res.status(400).json({ error: 'Call of Duty: Mobile Player ID (UID) is required' });
   }
 
-  // Check if email or IGN is already registered
-  const existingUser = Object.values(users).find(
-    (u) =>
-      u.email.toLowerCase() === email.trim().toLowerCase() ||
-      u.codmIgn.toLowerCase() === codmIgn.trim().toLowerCase()
-  );
-  if (existingUser) {
+  // Check directly in database if email or IGN already exists
+  const existingEmail = await getUserByEmailOrIgn(email);
+  const existingIgn = await getUserByEmailOrIgn(codmIgn);
+
+  if (existingEmail || existingIgn) {
     return res.status(400).json({ error: 'An account with this email or CODM IGN already exists' });
   }
 
@@ -533,44 +573,43 @@ app.post('/api/auth/register', async (req, res) => {
     ] : [],
   };
 
-  users[id] = newUser;
-  userPasswords[id] = password;
-  await syncUserToDb(newUser, password);
+  await saveUserToDb(newUser, password);
   if (newUser.transactions.length > 0) {
-    await syncTransactionToDb(newUser.id, newUser.transactions[0]);
+    await saveTransactionToDb(newUser.id, newUser.transactions[0]);
   }
+
   res.status(201).json(newUser);
 });
 
 // Login with Email or CODM IGN and Password
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { identifier, password } = req.body;
   if (!identifier || !identifier.trim()) {
     return res.status(400).json({ error: 'Email or CODM Username is required' });
   }
 
-  const cleanIdent = identifier.trim().toLowerCase();
-  const user = Object.values(users).find(
-    (u) => u.email.toLowerCase() === cleanIdent || u.codmIgn.toLowerCase() === cleanIdent
-  );
-
-  if (!user) {
+  const account = await getUserByEmailOrIgn(identifier);
+  if (!account) {
     return res.status(404).json({ error: 'No account found matching this email or username' });
   }
 
-  const expectedPassword = userPasswords[user.id];
-  if (expectedPassword && password && expectedPassword !== password) {
+  if (account.passwordHash && password && account.passwordHash !== password) {
     return res.status(401).json({ error: 'Incorrect password. Please try again.' });
   }
 
-  res.json(user);
+  res.json(account.user);
 });
 
-// Create/Register user or quick opponent onboarding
+// Quick opponent onboarding or creation
 app.post('/api/users', async (req, res) => {
   const { username, codmIgn, codmUid, email, phone, initialDeposit = 0, password } = req.body;
   if (!codmIgn) {
     return res.status(400).json({ error: 'CODM In-Game Name (IGN) is required' });
+  }
+
+  const existing = await getUserByEmailOrIgn(codmIgn);
+  if (existing) {
+    return res.json(existing.user);
   }
 
   const id = `user_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
@@ -599,20 +638,16 @@ app.post('/api/users', async (req, res) => {
     ] : [],
   };
 
-  users[id] = newUser;
-  if (password) {
-    userPasswords[id] = password;
-  }
-  await syncUserToDb(newUser, password);
+  await saveUserToDb(newUser, password);
   if (newUser.transactions.length > 0) {
-    await syncTransactionToDb(newUser.id, newUser.transactions[0]);
+    await saveTransactionToDb(newUser.id, newUser.transactions[0]);
   }
   res.json(newUser);
 });
 
-// Update User Profile
+// Update User Profile directly in database
 app.patch('/api/users/:id', async (req, res) => {
-  const user = users[req.params.id];
+  const user = await getUserFromDb(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   const { username, codmIgn, codmUid, email, phone, avatar, tier, clan, bankName, accountNumber, accountName } = req.body;
@@ -628,13 +663,13 @@ app.patch('/api/users/:id', async (req, res) => {
   if (accountNumber !== undefined) user.accountNumber = accountNumber;
   if (accountName !== undefined) user.accountName = accountName;
 
-  await syncUserToDb(user);
+  await saveUserToDb(user);
   res.json(user);
 });
 
-// Wallet deposit
+// Wallet deposit directly into database
 app.post('/api/users/:id/deposit', async (req, res) => {
-  const user = users[req.params.id];
+  const user = await getUserFromDb(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   const { amount, method = 'Instant Transfer (Paystack)' } = req.body;
@@ -653,8 +688,8 @@ app.post('/api/users/:id/deposit', async (req, res) => {
   };
   user.transactions.unshift(tx);
 
-  await syncUserToDb(user);
-  await syncTransactionToDb(user.id, tx);
+  await saveUserToDb(user);
+  await saveTransactionToDb(user.id, tx);
 
   res.json({ success: true, balance: user.balance, transaction: tx });
 });
@@ -676,7 +711,7 @@ app.get('/api/paystack/banks', async (req, res) => {
   }
 });
 
-// Helper mapping for popular Nigerian bank codes
+// Nigerian Bank Codes lookup
 const NIGERIAN_BANK_CODES: Record<string, string> = {
   'opay': '999992',
   'palmpay': '999991',
@@ -703,9 +738,9 @@ const NIGERIAN_BANK_CODES: Record<string, string> = {
   'fidelity bank': '070',
 };
 
-// Wallet withdrawal with Paystack Transfers API
+// Wallet withdrawal with Paystack Transfers API & database update
 app.post('/api/users/:id/withdraw', async (req, res) => {
-  const user = users[req.params.id];
+  const user = await getUserFromDb(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   const { amount, bankName = '', accountNumber = '', accountName = '', bankCode = '' } = req.body;
@@ -717,7 +752,6 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
     return res.status(400).json({ error: 'Insufficient available balance' });
   }
 
-  // Determine Paystack bank code
   let targetBankCode = bankCode;
   if (!targetBankCode && bankName) {
     const cleanBank = bankName.trim().toLowerCase();
@@ -727,7 +761,7 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
   let paystackTransferData: any = null;
   const secretKey = process.env.PAYSTACK_SECRET_KEY || '';
 
-  // Attempt Paystack automated bank transfer if secret key is present
+  // Perform Paystack transfer if configured
   if (secretKey && !secretKey.startsWith('sk_test_xxxx') && accountNumber) {
     try {
       console.log(`🚀 Initiating Paystack Transfer of ₦${numAmount} to ${accountNumber} (${bankName})...`);
@@ -750,31 +784,41 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
 
       const recipientJson = await recipientRes.json();
 
-      if (recipientJson.status && recipientJson.data?.recipient_code) {
-        const recipientCode = recipientJson.data.recipient_code;
-
-        // Step 2: Initiate Paystack Bank Transfer
-        const transferRes = await fetch('https://api.paystack.co/transfer', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${secretKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            source: 'balance',
-            amount: Math.round(numAmount * 100), // in kobo
-            recipient: recipientCode,
-            reason: `CODM Winnings Cashout for ${user.codmIgn}`,
-          }),
-        });
-
-        paystackTransferData = await transferRes.json();
-        console.log('✅ Paystack Transfer API Response:', paystackTransferData);
-      } else {
+      if (!recipientJson.status || !recipientJson.data?.recipient_code) {
         console.warn('⚠️ Paystack Transfer Recipient failed:', recipientJson.message);
+        return res.status(400).json({
+          error: `Paystack Recipient Error: ${recipientJson.message || 'Could not verify recipient bank details'}`,
+        });
+      }
+
+      const recipientCode = recipientJson.data.recipient_code;
+
+      // Step 2: Initiate Paystack Bank Transfer
+      const transferRes = await fetch('https://api.paystack.co/transfer', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${secretKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          source: 'balance',
+          amount: Math.round(numAmount * 100), // in kobo
+          recipient: recipientCode,
+          reason: `CODM Winnings Cashout for ${user.codmIgn}`,
+        }),
+      });
+
+      paystackTransferData = await transferRes.json();
+      console.log('✅ Paystack Transfer API Response:', paystackTransferData);
+
+      if (!paystackTransferData.status) {
+        return res.status(400).json({
+          error: `Paystack Transfer Failed: ${paystackTransferData.message || 'Transfer request was rejected'}`,
+        });
       }
     } catch (err: any) {
       console.error('Paystack Transfer Error:', err.message);
+      return res.status(500).json({ error: `Paystack system error: ${err.message}` });
     }
   }
 
@@ -793,8 +837,8 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
   };
   user.transactions.unshift(tx);
 
-  await syncUserToDb(user);
-  await syncTransactionToDb(user.id, tx);
+  await saveUserToDb(user);
+  await saveTransactionToDb(user.id, tx);
 
   res.json({
     success: true,
@@ -804,20 +848,20 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
   });
 });
 
-// List all active matches
-app.get('/api/matches', (req, res) => {
-  const matchList = Object.values(matches).sort((a, b) => b.createdAt - a.createdAt);
+// List all active matches directly from database
+app.get('/api/matches', async (req, res) => {
+  const matchList = await getAllMatchesFromDb();
   res.json(matchList);
 });
 
-// Get match by id
-app.get('/api/matches/:id', (req, res) => {
-  const match = matches[req.params.id];
+// Get match by id directly from database
+app.get('/api/matches/:id', async (req, res) => {
+  const match = await getMatchFromDb(req.params.id);
   if (!match) return res.status(404).json({ error: 'Match not found' });
   res.json(match);
 });
 
-// Create new 1v1 match challenge (Creator generates link with ₦0 upfront)
+// Create new 1v1 match challenge directly in database
 app.post('/api/matches', async (req, res) => {
   const {
     creatorId,
@@ -832,7 +876,7 @@ app.post('/api/matches', async (req, res) => {
     stakeAmount = 100,
   } = req.body;
 
-  const creator = users[creatorId];
+  const creator = await getUserFromDb(creatorId);
   if (!creator) {
     return res.status(404).json({ error: 'Creator user not found' });
   }
@@ -850,10 +894,10 @@ app.post('/api/matches', async (req, res) => {
   const winnerPayout = potAmount - platformFee;
   const platformFeePercentage = Math.round(rakeRate * 100);
 
-  const newMatch: any = {
+  const newMatch: Match = {
     id: matchId,
     challengeCode,
-    roomCode: undefined, // Room code is generated ONLY after both players pay their stakes
+    roomCode: undefined,
     gameMode,
     map,
     rules,
@@ -870,7 +914,7 @@ app.post('/api/matches', async (req, res) => {
       codmIgn: creator.codmIgn,
       codmUid: creator.codmUid,
       avatar: creator.avatar,
-      staked: false, // Creator has not paid yet
+      staked: false,
     },
     chatMessages: [
       {
@@ -883,14 +927,13 @@ app.post('/api/matches', async (req, res) => {
     ],
   };
 
-  matches[matchId] = newMatch;
-  await syncMatchToDb(newMatch);
+  await saveMatchToDb(newMatch);
   res.json(newMatch);
 });
 
-// Opponent accepts challenge and sends stake into escrow
+// Opponent accepts challenge and sends stake into escrow directly in database
 app.post('/api/matches/:id/opponent-stake', async (req, res) => {
-  const match = matches[req.params.id];
+  const match = await getMatchFromDb(req.params.id);
   if (!match) return res.status(404).json({ error: 'Match not found' });
 
   if (match.status !== 'PENDING_OPPONENT_STAKE') {
@@ -898,14 +941,13 @@ app.post('/api/matches/:id/opponent-stake', async (req, res) => {
   }
 
   const { opponentId, paymentMethod = 'bank_transfer' } = req.body;
-  const opponent = users[opponentId];
+  const opponent = await getUserFromDb(opponentId);
   if (!opponent) return res.status(404).json({ error: 'Opponent not found' });
 
   if (opponent.id === match.creator.id) {
     return res.status(400).json({ error: 'You cannot accept your own challenge. Share the link with an opponent!' });
   }
 
-  // If paying with existing balance
   if (paymentMethod === 'wallet_balance') {
     if (opponent.balance < match.stakeAmount) {
       return res.status(400).json({ error: `Insufficient balance (₦${opponent.balance.toLocaleString()}).` });
@@ -913,7 +955,6 @@ app.post('/api/matches/:id/opponent-stake', async (req, res) => {
     opponent.balance -= match.stakeAmount;
     opponent.escrowBalance += match.stakeAmount;
   } else {
-    // Direct escrow payment
     opponent.escrowBalance += match.stakeAmount;
   }
 
@@ -946,15 +987,15 @@ app.post('/api/matches/:id/opponent-stake', async (req, res) => {
     timestamp: Date.now(),
   });
 
-  await syncUserToDb(opponent);
-  await syncTransactionToDb(opponent.id, tx);
-  await syncMatchToDb(match);
+  await saveUserToDb(opponent);
+  await saveTransactionToDb(opponent.id, tx);
+  await saveMatchToDb(match);
   res.json(match);
 });
 
 // Creator sends matching stake after opponent has accepted
 app.post('/api/matches/:id/creator-stake', async (req, res) => {
-  const match = matches[req.params.id];
+  const match = await getMatchFromDb(req.params.id);
   if (!match) return res.status(404).json({ error: 'Match not found' });
 
   if (match.status !== 'OPPONENT_STAKED_AWAITING_CREATOR') {
@@ -962,7 +1003,7 @@ app.post('/api/matches/:id/creator-stake', async (req, res) => {
   }
 
   const { creatorId, paymentMethod = 'bank_transfer' } = req.body;
-  const creator = users[creatorId];
+  const creator = await getUserFromDb(creatorId);
   if (!creator) return res.status(404).json({ error: 'Creator not found' });
 
   if (creator.id !== match.creator.id) {
@@ -1005,15 +1046,15 @@ app.post('/api/matches/:id/creator-stake', async (req, res) => {
     timestamp: Date.now(),
   });
 
-  await syncUserToDb(creator);
-  await syncTransactionToDb(creator.id, tx);
-  await syncMatchToDb(match);
+  await saveUserToDb(creator);
+  await saveTransactionToDb(creator.id, tx);
+  await saveMatchToDb(match);
   res.json(match);
 });
 
-// Legacy / Direct Join handler (maps to opponent-stake)
+// Legacy / Direct Join handler
 app.post('/api/matches/:id/join', async (req, res) => {
-  const match = matches[req.params.id];
+  const match = await getMatchFromDb(req.params.id);
   if (!match) return res.status(404).json({ error: 'Match not found' });
 
   if (match.status !== 'PENDING_OPPONENT_STAKE') {
@@ -1021,7 +1062,7 @@ app.post('/api/matches/:id/join', async (req, res) => {
   }
 
   const { opponentId } = req.body;
-  const opponent = users[opponentId];
+  const opponent = await getUserFromDb(opponentId);
   if (!opponent) return res.status(404).json({ error: 'Opponent not found' });
 
   if (opponent.id === match.creator.id) {
@@ -1058,15 +1099,15 @@ app.post('/api/matches/:id/join', async (req, res) => {
     timestamp: Date.now(),
   });
 
-  await syncUserToDb(opponent);
-  await syncTransactionToDb(opponent.id, tx);
-  await syncMatchToDb(match);
+  await saveUserToDb(opponent);
+  await saveTransactionToDb(opponent.id, tx);
+  await saveMatchToDb(match);
   res.json(match);
 });
 
-// Send in-match chat message
+// Send in-match chat message directly to database
 app.post('/api/matches/:id/chat', async (req, res) => {
-  const match = matches[req.params.id];
+  const match = await getMatchFromDb(req.params.id);
   if (!match) return res.status(404).json({ error: 'Match not found' });
 
   const { senderId, text } = req.body;
@@ -1074,7 +1115,7 @@ app.post('/api/matches/:id/chat', async (req, res) => {
     return res.status(400).json({ error: 'Message cannot be empty' });
   }
 
-  const user = users[senderId];
+  const user = await getUserFromDb(senderId);
   const senderName = user ? user.codmIgn : 'Player';
 
   const newMsg = {
@@ -1086,13 +1127,13 @@ app.post('/api/matches/:id/chat', async (req, res) => {
   };
 
   match.chatMessages.push(newMsg);
-  await syncMatchToDb(match);
+  await saveMatchToDb(match);
   res.json(newMsg);
 });
 
-// Cancel match (only if PENDING_OPPONENT_STAKE or OPPONENT_STAKED_AWAITING_CREATOR)
+// Cancel match directly in database
 app.post('/api/matches/:id/cancel', async (req, res) => {
-  const match = matches[req.params.id];
+  const match = await getMatchFromDb(req.params.id);
   if (!match) return res.status(404).json({ error: 'Match not found' });
 
   if (match.status !== 'PENDING_OPPONENT_STAKE' && match.status !== 'OPPONENT_STAKED_AWAITING_CREATOR') {
@@ -1101,7 +1142,7 @@ app.post('/api/matches/:id/cancel', async (req, res) => {
 
   // Refund creator if staked
   if (match.creator.staked) {
-    const creator = users[match.creator.id];
+    const creator = await getUserFromDb(match.creator.id);
     if (creator) {
       creator.balance += match.stakeAmount;
       creator.escrowBalance = Math.max(0, creator.escrowBalance - match.stakeAmount);
@@ -1114,14 +1155,14 @@ app.post('/api/matches/:id/cancel', async (req, res) => {
         matchId: match.id,
       };
       creator.transactions.unshift(tx);
-      await syncUserToDb(creator);
-      await syncTransactionToDb(creator.id, tx);
+      await saveUserToDb(creator);
+      await saveTransactionToDb(creator.id, tx);
     }
   }
 
   // Refund opponent if staked
   if (match.opponent?.staked) {
-    const opponent = users[match.opponent.id];
+    const opponent = await getUserFromDb(match.opponent.id);
     if (opponent) {
       opponent.balance += match.stakeAmount;
       opponent.escrowBalance = Math.max(0, opponent.escrowBalance - match.stakeAmount);
@@ -1134,19 +1175,19 @@ app.post('/api/matches/:id/cancel', async (req, res) => {
         matchId: match.id,
       };
       opponent.transactions.unshift(tx);
-      await syncUserToDb(opponent);
-      await syncTransactionToDb(opponent.id, tx);
+      await saveUserToDb(opponent);
+      await saveTransactionToDb(opponent.id, tx);
     }
   }
 
   match.status = 'CANCELLED';
-  await syncMatchToDb(match);
+  await saveMatchToDb(match);
   res.json(match);
 });
 
-// Submit screenshot and match claim
+// Submit screenshot and match claim directly in database
 app.post('/api/matches/:id/submit-result', async (req, res) => {
-  const match = matches[req.params.id];
+  const match = await getMatchFromDb(req.params.id);
   if (!match) return res.status(404).json({ error: 'Match not found' });
 
   const { playerId, claim, screenshotBase64 } = req.body;
@@ -1174,7 +1215,6 @@ app.post('/api/matches/:id/submit-result', async (req, res) => {
 
   if (screenshotBase64 && ai) {
     try {
-      // Clean base64
       const base64Data = screenshotBase64.replace(/^data:image\/[a-z]+;base64,/, '');
       const response = await ai.models.generateContent({
         model: 'gemini-3.8-flash',
@@ -1219,7 +1259,6 @@ Respond strictly in valid JSON format:
       }
     } catch (err: any) {
       console.error('Gemini vision analysis error, using fallback:', err.message);
-      // Fallback stays in place
     }
   }
 
@@ -1244,7 +1283,7 @@ Respond strictly in valid JSON format:
     timestamp: Date.now(),
   });
 
-  // Evaluate match resolution instantly upon claim:
+  // Evaluate match resolution:
   let resolveWinner: 'creator' | 'opponent' | 'draw' | 'dispute' | null = null;
 
   if (claim === 'DRAW') {
@@ -1256,9 +1295,9 @@ Respond strictly in valid JSON format:
   }
 
   if (resolveWinner === 'draw') {
+    // Generate new room code for rematch on Draw!
     const newRoomCode = generateRoomCode(match.map);
 
-    // Reset result submissions for rematch
     delete match.creator.resultClaim;
     delete match.creator.screenshotUrl;
     delete match.creator.screenshotAnalysis;
@@ -1286,29 +1325,29 @@ Respond strictly in valid JSON format:
   } else if (resolveWinner === 'creator' || resolveWinner === 'opponent') {
     const winnerObj = resolveWinner === 'creator' ? match.creator : match.opponent!;
     const loserObj = resolveWinner === 'creator' ? match.opponent! : match.creator;
-    const winnerUser = users[winnerObj.id];
-    const loserUser = users[loserObj.id];
+    const winnerUser = await getUserFromDb(winnerObj.id);
+    const loserUser = await getUserFromDb(loserObj.id);
 
     match.status = 'SETTLED';
     match.winnerId = winnerObj.id;
     match.winnerIgn = winnerObj.codmIgn;
 
     // Settle Escrow!
-    const creatorUser = users[match.creator.id];
+    const creatorUser = await getUserFromDb(match.creator.id);
     if (creatorUser) {
       creatorUser.escrowBalance = Math.max(0, creatorUser.escrowBalance - match.stakeAmount);
-      await syncUserToDb(creatorUser);
+      await saveUserToDb(creatorUser);
     }
 
     if (match.opponent) {
-      const oppUser = users[match.opponent.id];
+      const oppUser = await getUserFromDb(match.opponent.id);
       if (oppUser) {
         oppUser.escrowBalance = Math.max(0, oppUser.escrowBalance - match.stakeAmount);
-        await syncUserToDb(oppUser);
+        await saveUserToDb(oppUser);
       }
     }
 
-    // Winner gets the pot minus 10% platform fee
+    // Winner gets the pot minus platform fee
     if (winnerUser) {
       winnerUser.totalWinnings += match.winnerPayout;
       winnerUser.wins += 1;
@@ -1316,7 +1355,6 @@ Respond strictly in valid JSON format:
       const hasBank = winnerUser.bankName && winnerUser.accountNumber;
       let txW;
       if (hasBank) {
-        // Automatically send funds directly to winner's saved bank account
         txW = {
           id: `tx_${Date.now()}_win_cashout`,
           type: 'WITHDRAWAL' as const,
@@ -1327,7 +1365,7 @@ Respond strictly in valid JSON format:
         };
         winnerUser.transactions.unshift(txW);
 
-        match.resolutionNotes = `Match verified! Winner is ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} winning funds were automatically sent directly to saved bank account (${winnerUser.bankName} - ${winnerUser.accountNumber}). Zero funds held on platform.`;
+        match.resolutionNotes = `Match verified! Winner is ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} winning funds were automatically sent directly to saved bank account (${winnerUser.bankName} - ${winnerUser.accountNumber}).`;
 
         match.chatMessages.push({
           id: `msg_${Date.now()}_settle`,
@@ -1337,7 +1375,6 @@ Respond strictly in valid JSON format:
           timestamp: Date.now(),
         });
       } else {
-        // No bank details saved yet -> balance is placed in wallet temporarily but marked with urgent requirement to cash out immediately
         winnerUser.balance += match.winnerPayout;
         const payoutDesc = `🏆 Won 1v1 Escrow Match #${match.roomCode} vs ${loserObj.codmIgn}: ₦${match.winnerPayout.toLocaleString()} ready for cashout. Enter bank details to withdraw now.`;
 
@@ -1362,12 +1399,12 @@ Respond strictly in valid JSON format:
         });
       }
 
-      await syncUserToDb(winnerUser);
-      await syncTransactionToDb(winnerUser.id, txW);
+      await saveUserToDb(winnerUser);
+      await saveTransactionToDb(winnerUser.id, txW);
 
       if (loserUser) {
         loserUser.losses += 1;
-        await syncUserToDb(loserUser);
+        await saveUserToDb(loserUser);
       }
     }
   } else if (resolveWinner === 'dispute') {
@@ -1381,17 +1418,16 @@ Respond strictly in valid JSON format:
       timestamp: Date.now(),
     });
   } else {
-    // Waiting for other player to submit
     match.status = 'SUBMITTING_RESULTS';
   }
 
-  await syncMatchToDb(match);
+  await saveMatchToDb(match);
   res.json(match);
 });
 
-// Admin manual resolution (for dispute testing)
+// Admin manual resolution directly in database
 app.post('/api/matches/:id/admin-resolve', async (req, res) => {
-  const match = matches[req.params.id];
+  const match = await getMatchFromDb(req.params.id);
   if (!match) return res.status(404).json({ error: 'Match not found' });
 
   const { winnerId } = req.body;
@@ -1404,21 +1440,21 @@ app.post('/api/matches/:id/admin-resolve', async (req, res) => {
 
   const winnerObj = isCreatorWinner ? match.creator : match.opponent!;
   const loserObj = isCreatorWinner ? match.opponent! : match.creator;
-  const winnerUser = users[winnerObj.id];
-  const loserUser = users[loserObj.id];
+  const winnerUser = await getUserFromDb(winnerObj.id);
+  const loserUser = await getUserFromDb(loserObj.id);
 
   // Settle Escrow
-  const creatorUser = users[match.creator.id];
+  const creatorUser = await getUserFromDb(match.creator.id);
   if (creatorUser) {
     creatorUser.escrowBalance = Math.max(0, creatorUser.escrowBalance - match.stakeAmount);
-    await syncUserToDb(creatorUser);
+    await saveUserToDb(creatorUser);
   }
 
   if (match.opponent) {
-    const oppUser = users[match.opponent.id];
+    const oppUser = await getUserFromDb(match.opponent.id);
     if (oppUser) {
       oppUser.escrowBalance = Math.max(0, oppUser.escrowBalance - match.stakeAmount);
-      await syncUserToDb(oppUser);
+      await saveUserToDb(oppUser);
     }
   }
 
@@ -1435,13 +1471,13 @@ app.post('/api/matches/:id/admin-resolve', async (req, res) => {
       matchId: match.id,
     };
     winnerUser.transactions.unshift(tx);
-    await syncUserToDb(winnerUser);
-    await syncTransactionToDb(winnerUser.id, tx);
+    await saveUserToDb(winnerUser);
+    await saveTransactionToDb(winnerUser.id, tx);
   }
 
   if (loserUser) {
     loserUser.losses += 1;
-    await syncUserToDb(loserUser);
+    await saveUserToDb(loserUser);
   }
 
   match.status = 'SETTLED';
@@ -1457,23 +1493,22 @@ app.post('/api/matches/:id/admin-resolve', async (req, res) => {
     timestamp: Date.now(),
   });
 
-  await syncMatchToDb(match);
+  await saveMatchToDb(match);
   res.json(match);
 });
 
 async function startServer() {
-  // 1. Initialize Supabase PostgreSQL database and load state
+  // 1. Initialize Supabase PostgreSQL database
   await initDatabase();
-  await loadDataFromSupabase();
 
-  // Always serve static public assets (images, icons, etc.)
+  // Always serve static public assets
   const publicPath = path.resolve(__dirname, 'public');
   if (fs.existsSync(publicPath)) {
     app.use(express.static(publicPath));
     app.use('/public', express.static(publicPath));
   }
 
-  // Check if production build exists (e.g. on Render after npm run build)
+  // Check production build
   const distPath = path.resolve(__dirname, 'dist');
   const isProduction = process.env.NODE_ENV === 'production' || process.env.RENDER || fs.existsSync(distPath);
 
