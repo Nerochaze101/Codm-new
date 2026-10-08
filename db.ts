@@ -13,10 +13,10 @@ dotenv.config();
 
 const { Pool } = pg;
 
-// Supabase PostgreSQL Connection String
+// Supabase IPv4 Pooler PostgreSQL Connection String
 const DATABASE_URL =
   process.env.DATABASE_URL ||
-  'postgresql://postgres:Hello10122%40ususbhaj@db.zwlovcpkmydzcuoexjbg.supabase.co:5432/postgres';
+  'postgresql://postgres.zwlovcpkmydzcuoexjbg:Hello10122%40ususbhaj@aws-0-eu-west-2.pooler.supabase.com:5432/postgres';
 
 export const pool = new Pool({
   connectionString: DATABASE_URL,
