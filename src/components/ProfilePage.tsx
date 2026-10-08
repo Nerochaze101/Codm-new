@@ -3,9 +3,11 @@ import { UserProfile, Match } from '../types';
 import {
   User, Trophy, Award, TrendingUp, ShieldCheck, Swords,
   Edit3, Check, Copy, ArrowRight, Shield, Zap, Flame, Clock,
-  Calendar, CheckCircle2, AlertCircle, Camera, Crosshair, Users, LogOut, BookOpen
+  Calendar, CheckCircle2, AlertCircle, Camera, Crosshair, Users, LogOut, BookOpen, CreditCard, PlusCircle
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
+import { openPaystackPopup } from '../utils/paystack';
+import { depositWallet } from '../services/api';
 
 interface ProfilePageProps {
   currentUser: UserProfile;
@@ -164,7 +166,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
               </button>
 
               <button
-                onClick={() => onOpenCreateBet('1v1 Sniper Only', 1000)}
+                onClick={() => onOpenCreateBet('1v1 Sniper Only', 100)}
                 className="px-4 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide shadow-md"
               >
                 <Swords className="w-3.5 h-3.5" />
@@ -218,32 +220,72 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
             )}
           </div>
 
-          <button
-            onClick={() => {
-              if (!currentUser.bankName || !currentUser.accountNumber) {
-                setIsEditing(true);
-                alert('Please save your bank details first before cashing out.');
-                return;
-              }
-              const amountToCashOut = currentUser.balance;
-              if (amountToCashOut <= 0) {
-                alert('No available balance to cash out.');
-                return;
-              }
-              if (onCashOut) {
-                onCashOut(amountToCashOut, {
-                  bankName: currentUser.bankName,
-                  accountNumber: currentUser.accountNumber,
-                  accountName: currentUser.accountName || currentUser.codmIgn,
+          <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              onClick={() => {
+                const inputAmt = prompt('Enter deposit amount in Naira (Minimum ₦100):', '1000');
+                if (!inputAmt) return;
+                const num = parseInt(inputAmt, 10);
+                if (isNaN(num) || num < 100) {
+                  alert('Minimum deposit amount is ₦100');
+                  return;
+                }
+
+                openPaystackPopup({
+                  email: currentUser.email || `${currentUser.codmIgn.toLowerCase()}@player.ng`,
+                  amountNaira: num,
+                  reference: `DEP_${Date.now()}`,
+                  metadata: {
+                    userId: currentUser.id,
+                    playerIgn: currentUser.codmIgn,
+                  },
+                  onSuccess: async (ref) => {
+                    try {
+                      await depositWallet(currentUser.id, num, 'Paystack Instant Deposit');
+                      alert(`Successfully funded ₦${num.toLocaleString()} via Paystack!`);
+                      window.location.reload();
+                    } catch (err: any) {
+                      alert(err.message || 'Deposit confirmation failed');
+                    }
+                  },
+                  onError: (err) => {
+                    alert(err.message || 'Paystack payment error');
+                  },
                 });
-              }
-            }}
-            disabled={currentUser.balance <= 0}
-            className="px-6 py-3.5 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-sm transition-all shadow-lg cursor-pointer uppercase flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Zap className="w-4 h-4 fill-current" />
-            <span>Cash Out ₦{currentUser.balance.toLocaleString()}</span>
-          </button>
+              }}
+              className="px-5 py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm transition-all shadow-lg cursor-pointer uppercase flex items-center justify-center gap-2"
+            >
+              <PlusCircle className="w-4 h-4" />
+              <span>Fund Wallet (Paystack)</span>
+            </button>
+
+            <button
+              onClick={() => {
+                if (!currentUser.bankName || !currentUser.accountNumber) {
+                  setIsEditing(true);
+                  alert('Please save your bank details first before cashing out.');
+                  return;
+                }
+                const amountToCashOut = currentUser.balance;
+                if (amountToCashOut <= 0) {
+                  alert('No available balance to cash out.');
+                  return;
+                }
+                if (onCashOut) {
+                  onCashOut(amountToCashOut, {
+                    bankName: currentUser.bankName,
+                    accountNumber: currentUser.accountNumber,
+                    accountName: currentUser.accountName || currentUser.codmIgn,
+                  });
+                }
+              }}
+              disabled={currentUser.balance <= 0}
+              className="px-5 py-3.5 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs sm:text-sm transition-all shadow-lg cursor-pointer uppercase flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Zap className="w-4 h-4 fill-current" />
+              <span>Cash Out ₦{currentUser.balance.toLocaleString()}</span>
+            </button>
+          </div>
         </div>
       </div>
 

@@ -33,7 +33,7 @@ export const RulesPage: React.FC<RulesPageProps> = ({
 
         <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
           <button
-            onClick={() => onOpenCreateBet('1v1 Sniper Only', 1000)}
+            onClick={() => onOpenCreateBet('1v1 Sniper Only', 100)}
             className="px-6 py-3 rounded-2xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs sm:text-sm uppercase tracking-wide transition-all shadow-xl hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-2"
           >
             <Swords className="w-4 h-4 stroke-[2.5]" />

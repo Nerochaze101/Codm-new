@@ -212,7 +212,7 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
             </p>
           </div>
           <button
-            onClick={() => onOpenCreateBet('1v1 Sniper Only', 1000)}
+            onClick={() => onOpenCreateBet('1v1 Sniper Only', 100)}
             className="px-5 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wide cursor-pointer transition-all"
           >
             Create Your First 1v1 Wager

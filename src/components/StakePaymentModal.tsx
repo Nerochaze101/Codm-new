@@ -4,6 +4,7 @@ import {
   X, ShieldCheck, Swords, Copy, Check, ArrowRight, Building2,
   Smartphone, CreditCard, Sparkles, AlertCircle, Clock, CheckCircle2, Lock
 } from 'lucide-react';
+import { openPaystackPopup } from '../utils/paystack';
 
 interface StakePaymentModalProps {
   isOpen: boolean;
@@ -86,11 +87,46 @@ export const StakePaymentModal: React.FC<StakePaymentModalProps> = ({
   const handlePay = async () => {
     setIsProcessing(true);
     setError(null);
-    setStep('verifying');
 
+    // If Debit Card (Paystack) is selected, trigger Paystack Inline SDK
+    if (selectedMethod === 'card') {
+      const launched = openPaystackPopup({
+        email: currentUser.email || `${currentUser.codmIgn.toLowerCase()}@player.ng`,
+        amountNaira: stakeAmount,
+        reference: `STAKE_${match.challengeCode}_${Date.now()}`,
+        metadata: {
+          matchId: match.id,
+          challengeCode: match.challengeCode,
+          role,
+          playerIgn: currentUser.codmIgn,
+        },
+        onSuccess: async (ref) => {
+          try {
+            setStep('verifying');
+            await onConfirmStake('card');
+            onClose();
+          } catch (err: any) {
+            setError(err.message || 'Failed to confirm stake payment');
+            setStep('select');
+          } finally {
+            setIsProcessing(false);
+          }
+        },
+        onClose: () => {
+          setIsProcessing(false);
+        },
+        onError: (err) => {
+          setError(err.message || 'Paystack payment error');
+          setIsProcessing(false);
+        },
+      });
+
+      if (launched) return;
+    }
+
+    setStep('verifying');
     try {
-      // Simulate real-time escrow verification delay for high fidelity
-      await new Promise((resolve) => setTimeout(resolve, 1400));
+      await new Promise((resolve) => setTimeout(resolve, 1200));
       await onConfirmStake(selectedMethod);
       onClose();
     } catch (err: any) {

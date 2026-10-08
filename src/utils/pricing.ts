@@ -11,6 +11,26 @@ export interface TieredRakeItem {
 
 export const TIERED_COMMISSION_SCHEDULE: TieredRakeItem[] = [
   {
+    stake: 100,
+    pot: 200,
+    rakePercent: 0.10,
+    rakePercentFormatted: '10%',
+    platformFee: 20,
+    winnerPayout: 180,
+    paystackCostEstimate: '~₦3',
+    netPlatformProfit: 17,
+  },
+  {
+    stake: 500,
+    pot: 1000,
+    rakePercent: 0.10,
+    rakePercentFormatted: '10%',
+    platformFee: 100,
+    winnerPayout: 900,
+    paystackCostEstimate: '~₦15',
+    netPlatformProfit: 85,
+  },
+  {
     stake: 1000,
     pot: 2000,
     rakePercent: 0.10,
@@ -56,7 +76,7 @@ export function getRakePercentage(stakeAmount: number): number {
   if (stakeAmount >= 10000) return 0.05; // 5% for ₦10,000+
   if (stakeAmount >= 5000) return 0.07;  // 7% for ₦5,000
   if (stakeAmount >= 2500) return 0.08;  // 8% for ₦2,500
-  return 0.10;                     // 10% for ₦1,000
+  return 0.10;                     // 10% for ₦100+
 }
 
 export function calculateMatchEconomics(stakeAmount: number) {

@@ -32,7 +32,7 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
   onOpenWallet,
 }) => {
   const [betType, setBetType] = useState<'solo' | 'squad'>('solo');
-  const [stakeInput, setStakeInput] = useState<string>('1000');
+  const [stakeInput, setStakeInput] = useState<string>('100');
   const [gameModeInput, setGameModeInput] = useState<string>('1v1 Sniper Only');
   const [mapInput, setMapInput] = useState<string>('Shipment');
   const [rulesInput, setRulesInput] = useState<string>('Standard 1v1 rules. No scorestreaks/operators. Screenshot proof required.');
@@ -42,10 +42,10 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
   // Sync initial mode and stake when opened
   React.useEffect(() => {
     if (isOpen) {
-      if (initialStake && initialStake >= 1000) {
+      if (initialStake && initialStake >= 100) {
         setStakeInput(initialStake.toString());
       } else if (!stakeInput) {
-        setStakeInput('1000');
+        setStakeInput('100');
       }
       if (initialMode) {
         setGameModeInput(initialMode);
@@ -60,8 +60,8 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
   const { potAmount, rakePercentFormatted, platformFee, winnerPayout } = calculateMatchEconomics(Math.max(0, stakeAmount));
 
   const handleCreate = async () => {
-    if (!stakeInput.trim() || isNaN(parsedStake) || parsedStake < 1000) {
-      setError('Minimum stake amount is ₦1,000');
+    if (!stakeInput.trim() || isNaN(parsedStake) || parsedStake < 100) {
+      setError('Minimum stake amount is ₦100');
       return;
     }
     if (!gameModeInput.trim()) {
@@ -275,8 +275,8 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
               </span>
             </div>
 
-            <div className="grid grid-cols-4 gap-2 mb-2">
-              {[1000, 2500, 5000, 10000].map((amt) => (
+            <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 mb-2">
+              {[100, 500, 1000, 2500, 5000, 10000].map((amt) => (
                 <button
                   key={amt}
                   type="button"

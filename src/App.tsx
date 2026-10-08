@@ -426,7 +426,7 @@ function MainApp() {
           <div className="flex items-center gap-4">
             <span className="text-neutral-400">Escrow Protected</span>
             <span>·</span>
-            <span>Min Wager: ₦1,000</span>
+            <span>Min Wager: ₦100</span>
             <span>·</span>
             <span>10% Platform Rake</span>
           </div>

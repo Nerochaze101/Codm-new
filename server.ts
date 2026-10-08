@@ -609,7 +609,7 @@ app.post('/api/matches', async (req, res) => {
       'No Operator Skills or Scorestreaks',
       'First to 10 kills or 5 rounds wins',
     ],
-    stakeAmount = 1000,
+    stakeAmount = 100,
   } = req.body;
 
   const creator = users[creatorId];
@@ -618,8 +618,8 @@ app.post('/api/matches', async (req, res) => {
   }
 
   const numStake = Number(stakeAmount);
-  if (numStake < 1000) {
-    return res.status(400).json({ error: 'Minimum stake is ₦1,000' });
+  if (numStake < 100) {
+    return res.status(400).json({ error: 'Minimum stake is ₦100' });
   }
 
   const matchId = `match_${Date.now()}_${Math.floor(Math.random() * 1000)}`;

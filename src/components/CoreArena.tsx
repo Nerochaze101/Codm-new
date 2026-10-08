@@ -651,7 +651,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
               {/* Action Button */}
               <div className="relative z-10 pt-4">
                 <button
-                  onClick={() => onOpenCreateBet && onOpenCreateBet('1v1 Sniper Only', 1000)}
+                  onClick={() => onOpenCreateBet && onOpenCreateBet('1v1 Sniper Only', 100)}
                   className="w-full py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-2xl text-xs sm:text-sm transition-all shadow-xl hover:scale-105 active:scale-95 cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide"
                 >
                   <Swords className="w-4 h-4 stroke-[2.5]" />
@@ -709,7 +709,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
               {/* Action Button */}
               <div className="relative z-10 pt-4">
                 <button
-                  onClick={() => onOpenCreateBet && onOpenCreateBet('Search & Destroy (S&D)', 1000)}
+                  onClick={() => onOpenCreateBet && onOpenCreateBet('Search & Destroy (S&D)', 100)}
                   className="w-full py-3.5 bg-emerald-400 hover:bg-emerald-300 text-neutral-950 font-black rounded-2xl text-xs sm:text-sm transition-all shadow-xl hover:scale-105 active:scale-95 cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide"
                 >
                   <Swords className="w-4 h-4 stroke-[2.5]" />

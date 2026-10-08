@@ -46,7 +46,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onOpenAuth,
 }) => {
   const [activeFormatTab, setActiveFormatTab] = useState<'1v1' | 'normal'>('1v1');
-  const [calcStake, setCalcStake] = useState<number>(1000);
+  const [calcStake, setCalcStake] = useState<number>(100);
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
@@ -219,10 +219,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             {/* Quick Stake Preset Buttons */}
             <div>
               <label className="text-xs font-bold text-neutral-400 uppercase tracking-wider mb-2 block">
-                Choose Stake Amount (Minimum ₦1,000):
+                Choose Stake Amount (Minimum ₦100):
               </label>
               <div className="flex flex-wrap gap-2">
-                {[1000, 2000, 5000, 10000, 25000, 50000].map((amt) => (
+                {[100, 500, 1000, 2000, 5000, 10000].map((amt) => (
                   <button
                     key={amt}
                     onClick={() => setCalcStake(amt)}
