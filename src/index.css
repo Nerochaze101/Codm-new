@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    background-color: #08090d;
+    color: #f3f4f6;
+  }
+}
+
+.font-heading {
+  font-family: 'Chakra Petch', sans-serif;
+}
+
+.font-mono-nums {
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom Tactical Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0d1117;
+}
+::-webkit-scrollbar-thumb {
+  background: #272d3b;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #f59e0b;
+}
+
+/* Subtle carbon & scanline grids */
+.bg-tactical-grid {
+  background-size: 28px 28px;
+  background-image: 
+    linear-gradient(to right, rgba(245, 158, 11, 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+}
+
+/* CODM Slanted Slits & Hexagonal HUD Clips */
+.codm-clip {
+  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
+}
+
+.codm-clip-btn {
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
+}
+
+.codm-card-glow {
+  box-shadow: 0 0 20px -5px rgba(245, 158, 11, 0.15);
+}
+
+.codm-gold-glow {
+  box-shadow: 0 0 25px 0 rgba(245, 158, 11, 0.35);
+}
+
+.codm-cyan-glow {
+  box-shadow: 0 0 25px 0 rgba(16, 185, 129, 0.3);
+}
+
+.codm-border-yellow {
+  border-image: linear-gradient(to right, #f59e0b, #d97706) 1;
+}

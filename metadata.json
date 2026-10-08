@@ -1,0 +1,7 @@
+{
+  "name": "CODM Stake 1v1 - Esports Escrow Wagers",
+  "description": "Escrow-backed 1v1 Call of Duty: Mobile wagering platform in Nigerian Naira (₦). Create stakes, invite rivals, track custom room matches, and automatically verify victory screenshots with AI for instant payouts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
