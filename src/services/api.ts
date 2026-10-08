@@ -15,124 +15,48 @@ export async function signUpUser(data: {
   codmUid: string;
   initialDeposit?: number;
 }): Promise<UserProfile> {
-  try {
-    const res = await fetch('/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (res.ok) {
-      return await res.json();
-    } else {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to sign up');
-    }
-  } catch (e: any) {
-    if (e.message && e.message !== 'Failed to fetch') {
-      throw e;
-    }
+  const res = await fetch('/api/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (res.ok) {
+    return await res.json();
+  } else {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to sign up');
   }
-
-  // Fallback client-side creation
-  const id = `user_${Date.now()}`;
-  const numDeposit = Math.max(0, data.initialDeposit || 0);
-  const newUser: UserProfile = {
-    id,
-    username: data.codmIgn.trim(),
-    codmIgn: data.codmIgn.trim(),
-    codmUid: data.codmUid.trim(),
-    email: data.email.trim(),
-    phone: '+234 800 000 0000',
-    balance: numDeposit,
-    escrowBalance: 0,
-    totalWinnings: 0,
-    wins: 0,
-    losses: 0,
-    draws: 0,
-    avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(data.codmIgn.trim())}`,
-    transactions: numDeposit > 0 ? [
-      {
-        id: `tx_${Date.now()}`,
-        type: 'DEPOSIT',
-        amount: numDeposit,
-        description: `Initial funding ₦${numDeposit.toLocaleString()}`,
-        timestamp: Date.now(),
-      }
-    ] : [],
-  };
-  DEFAULT_USERS[id] = newUser;
-  return newUser;
 }
 
 export async function signInUser(data: {
   identifier: string;
   password?: string;
 }): Promise<UserProfile> {
-  try {
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (res.ok) {
-      return await res.json();
-    } else {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to sign in');
-    }
-  } catch (e: any) {
-    if (e.message && e.message !== 'Failed to fetch') {
-      throw e;
-    }
+  const res = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (res.ok) {
+    return await res.json();
+  } else {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to sign in');
   }
-
-  // Client-side fallback: check in DEFAULT_USERS
-  const clean = data.identifier.trim().toLowerCase();
-  const found = Object.values(DEFAULT_USERS).find(
-    (u) => u.email.toLowerCase() === clean || u.codmIgn.toLowerCase() === clean
-  );
-  if (found) return found;
-
-  throw new Error('Account not found. Please check your credentials or create a new account.');
 }
 
 export async function createUser(data: Partial<UserProfile> & { initialDeposit?: number }): Promise<UserProfile> {
-  try {
-    const res = await fetch('/api/users', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (res.ok) return await res.json();
-  } catch (e) {
-    // fallback
+  const res = await fetch('/api/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (res.ok) {
+    return await res.json();
+  } else {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to create user');
   }
-  const id = `user_${Date.now()}`;
-  const newUser: UserProfile = {
-    id,
-    username: data.username || data.codmIgn || 'Gamer',
-    codmIgn: data.codmIgn || 'CODM_Ace',
-    codmUid: data.codmUid || `67${Math.floor(10000000000000 + Math.random() * 90000000000000)}`,
-    email: data.email || 'player@esports.ng',
-    phone: data.phone || '+234 800 000 0000',
-    balance: data.initialDeposit || 0,
-    escrowBalance: 0,
-    totalWinnings: 0,
-    wins: 0,
-    losses: 0,
-    draws: 0,
-    avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${data.codmIgn}`,
-    transactions: data.initialDeposit ? [
-      {
-        id: `tx_${Date.now()}`,
-        type: 'DEPOSIT',
-        amount: data.initialDeposit,
-        description: `Initial funding ₦${data.initialDeposit.toLocaleString()}`,
-        timestamp: Date.now(),
-      }
-    ] : [],
-  };
-  return newUser;
 }
 
 export async function depositWallet(userId: string, amount: number, method: string) {

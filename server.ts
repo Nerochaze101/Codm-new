@@ -427,8 +427,53 @@ app.get('/api/paystack/verify/:reference', async (req, res) => {
   }
 });
 
-app.get('/api/users/:id', (req, res) => {
-  const user = users[req.params.id];
+app.get('/api/users/:id', async (req, res) => {
+  let user = users[req.params.id];
+  if (!user) {
+    try {
+      const dbRes = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
+      if (dbRes.rows.length > 0) {
+        const r = dbRes.rows[0];
+        user = {
+          id: r.id,
+          username: r.username || r.codm_ign,
+          codmIgn: r.codm_ign,
+          codmUid: r.codm_uid,
+          tier: r.tier || 'LEGENDARY TIER',
+          clan: r.clan || '[1V1_PRO]',
+          email: r.email || '',
+          phone: r.phone || '+234 800 000 0000',
+          balance: parseFloat(r.balance || 0),
+          escrowBalance: parseFloat(r.escrow_balance || 0),
+          totalWinnings: parseFloat(r.total_winnings || 0),
+          wins: parseInt(r.wins || 0, 10),
+          losses: parseInt(r.losses || 0, 10),
+          draws: parseInt(r.draws || 0, 10),
+          avatar: r.avatar,
+          bankName: r.bank_name || undefined,
+          accountNumber: r.account_number || undefined,
+          accountName: r.account_name || undefined,
+          transactions: [],
+        };
+        const txRes = await pool.query('SELECT * FROM transactions WHERE user_id = $1 ORDER BY timestamp DESC', [r.id]);
+        user.transactions = txRes.rows.map((t) => ({
+          id: t.id,
+          type: t.type,
+          amount: parseFloat(t.amount),
+          description: t.description,
+          timestamp: parseInt(t.timestamp, 10),
+          matchId: t.match_id || undefined,
+        }));
+        users[r.id] = user;
+        if (r.password_hash) {
+          userPasswords[r.id] = r.password_hash;
+        }
+      }
+    } catch (err) {
+      console.error(`Error querying user ${req.params.id} from PostgreSQL:`, err);
+    }
+  }
+
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
