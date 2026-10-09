@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
-import { initDatabase, pool } from './db.js';
+import { initDatabase, pool, runDatabaseDiagnostics } from './db.js';
 
 dotenv.config();
 
@@ -435,6 +435,18 @@ async function saveMatchToDb(match: any) {
 }
 
 // REST API ROUTES
+app.get('/api/db-diagnostics', async (req, res) => {
+  try {
+    const diagnostics = await runDatabaseDiagnostics();
+    res.json(diagnostics);
+  } catch (err: any) {
+    res.status(500).json({
+      status: 'FAILED',
+      error: err.message || String(err),
+    });
+  }
+});
+
 app.get('/api/db-status', async (req, res) => {
   try {
     const client = await pool.connect();
@@ -451,9 +463,11 @@ app.get('/api/db-status', async (req, res) => {
       matchesCount: parseInt(mCount.rows[0].count, 10),
     });
   } catch (err: any) {
+    const diagnostics = await runDatabaseDiagnostics();
     res.status(500).json({
       connected: false,
       error: err.message,
+      diagnostics,
     });
   }
 });
@@ -497,6 +511,46 @@ app.get('/api/paystack/test-connection', async (req, res) => {
   }
 });
 
+// Flutterwave Integration Diagnostic Endpoint
+app.get('/api/flutterwave/test-connection', async (req, res) => {
+  const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || '';
+  const flwPublic = process.env.VITE_FLUTTERWAVE_PUBLIC_KEY || '';
+
+  if (!flwSecret || flwSecret.startsWith('FLWSECK_TEST-xxxx')) {
+    return res.json({
+      configured: false,
+      status: 'WARNING',
+      message: 'FLUTTERWAVE_SECRET_KEY is not configured yet. Add FLUTTERWAVE_SECRET_KEY to your environment secrets.',
+      hasPublicKey: Boolean(flwPublic),
+    });
+  }
+
+  try {
+    // Check Flutterwave balance or banks list to verify key
+    const flwRes = await fetch('https://api.flutterwave.com/v3/balances', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${flwSecret}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const data = await flwRes.json();
+    res.json({
+      configured: true,
+      status: flwRes.ok ? 'SUCCESS' : 'ERROR',
+      flutterwaveResponse: data,
+      publicKeyConfigured: Boolean(flwPublic),
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      configured: true,
+      status: 'ERROR',
+      error: err.message,
+    });
+  }
+});
+
 // Verify Paystack transaction by reference
 app.get('/api/paystack/verify/:reference', async (req, res) => {
   const { reference } = req.params;
@@ -512,6 +566,72 @@ app.get('/api/paystack/verify/:reference', async (req, res) => {
     });
 
     const data = await paystackRes.json();
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ status: false, message: err.message });
+  }
+});
+
+// Verify Flutterwave transaction by ID or tx_ref
+app.get('/api/flutterwave/verify/:id', async (req, res) => {
+  const { id } = req.params;
+  const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || '';
+
+  try {
+    const flwRes = await fetch(`https://api.flutterwave.com/v3/transactions/${encodeURIComponent(id)}/verify`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${flwSecret}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const data = await flwRes.json();
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ status: false, message: err.message });
+  }
+});
+
+// Fetch Nigerian Banks list from Flutterwave
+app.get('/api/flutterwave/banks', async (req, res) => {
+  const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || '';
+  try {
+    const flwRes = await fetch('https://api.flutterwave.com/v3/banks/NG', {
+      headers: {
+        Authorization: `Bearer ${flwSecret}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    const data = await flwRes.json();
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ status: false, error: err.message });
+  }
+});
+
+// Resolve bank account details via Flutterwave
+app.post('/api/flutterwave/resolve-account', async (req, res) => {
+  const { accountNumber, bankCode } = req.body;
+  const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || '';
+
+  if (!accountNumber || !bankCode) {
+    return res.status(400).json({ status: false, message: 'Account number and bank code required' });
+  }
+
+  try {
+    const flwRes = await fetch('https://api.flutterwave.com/v3/accounts/resolve', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${flwSecret}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        account_number: accountNumber.trim(),
+        account_bank: bankCode.trim(),
+      }),
+    });
+    const data = await flwRes.json();
     res.json(data);
   } catch (err: any) {
     res.status(500).json({ status: false, message: err.message });
@@ -716,9 +836,10 @@ app.get('/api/paystack/banks', async (req, res) => {
   }
 });
 
-// Nigerian Bank Codes lookup
-const NIGERIAN_BANK_CODES: Record<string, string> = {
+// Nigerian Bank Codes lookup for Paystack
+const PAYSTACK_BANK_CODES: Record<string, string> = {
   'opay': '999992',
+  'paycom': '999992',
   'palmpay': '999991',
   'gtb': '058',
   'gtbank': '058',
@@ -743,12 +864,167 @@ const NIGERIAN_BANK_CODES: Record<string, string> = {
   'fidelity bank': '070',
 };
 
-// Wallet withdrawal with Paystack Transfers API & database update
+// Nigerian Bank Codes lookup for Flutterwave
+const FLUTTERWAVE_BANK_CODES: Record<string, string> = {
+  'opay': '100004',
+  'paycom': '100004',
+  'palmpay': '100033',
+  'kuda': '090267',
+  'kuda bank': '090267',
+  'moniepoint': '090405',
+  'moniepoint microfinance bank': '090405',
+  'access': '044',
+  'access bank': '044',
+  'gtb': '058',
+  'gtbank': '058',
+  'guaranty trust bank': '058',
+  'zenith': '057',
+  'zenith bank': '057',
+  'first bank': '011',
+  'first bank of nigeria': '011',
+  'uba': '033',
+  'united bank for africa': '033',
+  'wema': '035',
+  'wema bank': '035',
+  'stanbic': '221',
+  'stanbic ibtc': '221',
+  'fidelity': '070',
+  'fidelity bank': '070',
+};
+
+// Direct Payout / Cashout Tester Endpoint (runs real payout against selected gateway)
+app.post('/api/admin/test-cashout', async (req, res) => {
+  const {
+    amount = 100,
+    bankName = 'OPay',
+    accountNumber = '9151609682',
+    accountName = 'Nurudeen Bolaji Abdulsalam',
+    gateway = 'flutterwave',
+  } = req.body;
+
+  const numAmount = Number(amount);
+  const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || '';
+  const paystackSecret = process.env.PAYSTACK_SECRET_KEY || '';
+  const cleanBank = bankName.trim().toLowerCase();
+
+  const flwCode = FLUTTERWAVE_BANK_CODES[cleanBank] || '100004';
+  const paystackCode = PAYSTACK_BANK_CODES[cleanBank] || '999992';
+
+  if (gateway === 'flutterwave') {
+    if (!flwSecret || flwSecret.startsWith('FLWSECK_TEST-xxxx')) {
+      return res.status(400).json({ success: false, error: 'Flutterwave Secret Key is not configured' });
+    }
+
+    try {
+      console.log(`[TEST-CASHOUT] Initiating Flutterwave payout: ₦${numAmount} to ${accountNumber} (${cleanBank} / code ${flwCode})...`);
+      const flwRes = await fetch('https://api.flutterwave.com/v3/transfers', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${flwSecret}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          account_bank: flwCode,
+          account_number: accountNumber.trim(),
+          amount: numAmount,
+          narration: `CODM Test Payout to ${accountName}`,
+          currency: 'NGN',
+          reference: `FLW_TRF_TEST_${Date.now()}`,
+          beneficiary_name: accountName,
+        }),
+      });
+
+      const data = await flwRes.json();
+      return res.json({
+        gateway: 'flutterwave',
+        bankCodeUsed: flwCode,
+        accountNumber,
+        accountName,
+        amount: numAmount,
+        response: data,
+        ipNotice: data.message?.includes('IP Whitelisting')
+          ? {
+              requiresIpWhitelist: true,
+              serverIpv4: '34.34.246.124',
+              serverIpv6: '2600:1900:0:4a03::e00',
+              instructions: 'In your Flutterwave Dashboard, go to Settings -> Whitelisted IP addresses, and add 34.34.246.124',
+            }
+          : undefined,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ gateway: 'flutterwave', error: err.message });
+    }
+  } else {
+    // Paystack
+    if (!paystackSecret || paystackSecret.startsWith('sk_test_xxxx')) {
+      return res.status(400).json({ success: false, error: 'Paystack Secret Key is not configured' });
+    }
+
+    try {
+      console.log(`[TEST-CASHOUT] Resolving with Paystack: ${accountNumber} (${cleanBank} / code ${paystackCode})...`);
+      const resolveRes = await fetch(`https://api.paystack.co/bank/resolve?account_number=${accountNumber.trim()}&bank_code=${paystackCode}`, {
+        headers: { Authorization: `Bearer ${paystackSecret}` },
+      });
+      const resolveData = await resolveRes.json();
+
+      const recipientRes = await fetch('https://api.paystack.co/transferrecipient', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${paystackSecret}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          type: 'nuban',
+          name: accountName,
+          account_number: accountNumber.trim(),
+          bank_code: paystackCode,
+          currency: 'NGN',
+        }),
+      });
+      const recipientData = await recipientRes.json();
+
+      if (!recipientData.status || !recipientData.data?.recipient_code) {
+        return res.json({
+          gateway: 'paystack',
+          resolveData,
+          recipientData,
+          message: 'Failed to create Paystack recipient',
+        });
+      }
+
+      const transferRes = await fetch('https://api.paystack.co/transfer', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${paystackSecret}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          source: 'balance',
+          amount: numAmount * 100,
+          recipient: recipientData.data.recipient_code,
+          reason: `CODM Test Cashout to ${accountName}`,
+        }),
+      });
+      const transferData = await transferRes.json();
+
+      return res.json({
+        gateway: 'paystack',
+        resolveData,
+        recipientData,
+        transferData,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ gateway: 'paystack', error: err.message });
+    }
+  }
+});
+
+// Wallet withdrawal with Flutterwave & Paystack Transfers API & database update
 app.post('/api/users/:id/withdraw', async (req, res) => {
   const user = await getUserFromDb(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  const { amount, bankName = '', accountNumber = '', accountName = '', bankCode = '' } = req.body;
+  const { amount, bankName = '', accountNumber = '', accountName = '', bankCode = '', gateway = 'flutterwave' } = req.body;
   const numAmount = Number(amount);
   if (!numAmount || numAmount <= 0) {
     return res.status(400).json({ error: 'Invalid withdrawal amount' });
@@ -757,17 +1033,73 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
     return res.status(400).json({ error: 'Insufficient available balance' });
   }
 
-  let targetBankCode = bankCode;
-  if (!targetBankCode && bankName) {
-    const cleanBank = bankName.trim().toLowerCase();
-    targetBankCode = NIGERIAN_BANK_CODES[cleanBank] || '058';
+  const cleanBank = bankName.trim().toLowerCase();
+  const flwCode = bankCode || FLUTTERWAVE_BANK_CODES[cleanBank] || '100004';
+  const paystackCode = bankCode || PAYSTACK_BANK_CODES[cleanBank] || '999992';
+
+  const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || '';
+  const paystackSecret = process.env.PAYSTACK_SECRET_KEY || '';
+  let transferResult: any = null;
+  let providerUsed: 'flutterwave' | 'paystack' | 'manual' = 'manual';
+
+  // 1. Try Flutterwave first if preferred or configured
+  const flwConfigured = flwSecret && !flwSecret.startsWith('FLWSECK_TEST-xxxx');
+  const paystackConfigured = paystackSecret && !paystackSecret.startsWith('sk_test_xxxx');
+
+  if (gateway === 'flutterwave' && flwConfigured) {
+    try {
+      console.log(`🚀 Initiating Flutterwave Transfer of ₦${numAmount} to ${accountNumber} (${bankName} / code ${flwCode})...`);
+      const flwTransferRes = await fetch('https://api.flutterwave.com/v3/transfers', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${flwSecret}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          account_bank: flwCode,
+          account_number: accountNumber.trim(),
+          amount: numAmount,
+          narration: `CODM Cashout for ${user.codmIgn}`,
+          currency: 'NGN',
+          reference: `FLW_TRF_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+          beneficiary_name: accountName || user.codmIgn,
+        }),
+      });
+
+      const flwData = await flwTransferRes.json();
+      console.log('✅ Flutterwave Transfer API Response:', flwData);
+      console.log('✅ Flutterwave Transfer API Response:', flwData);
+
+      if (flwData.status === 'success' || flwData.status === 'successful') {
+        transferResult = {
+          gateway: 'flutterwave',
+          status: true,
+          data: flwData.data,
+          message: flwData.message,
+        };
+        providerUsed = 'flutterwave';
+      } else {
+        console.warn('⚠️ Flutterwave transfer warning:', flwData.message);
+        transferResult = {
+          gateway: 'flutterwave',
+          status: false,
+          isManualFallback: true,
+          message: flwData.message || 'Flutterwave automated transfer response indicated pending/review',
+        };
+      }
+    } catch (err: any) {
+      console.error('Flutterwave transfer error:', err.message);
+      transferResult = {
+        gateway: 'flutterwave',
+        status: false,
+        isManualFallback: true,
+        message: err.message,
+      };
+    }
   }
 
-  let paystackTransferData: any = null;
-  const secretKey = process.env.PAYSTACK_SECRET_KEY || '';
-
-  // Perform Paystack transfer if configured
-  if (secretKey && !secretKey.startsWith('sk_test_xxxx') && accountNumber) {
+  // 2. Fallback to Paystack if requested or if Flutterwave wasn't executed
+  if (!transferResult && paystackConfigured && accountNumber) {
     try {
       console.log(`🚀 Initiating Paystack Transfer of ₦${numAmount} to ${accountNumber} (${bankName})...`);
 
@@ -775,7 +1107,7 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
       const recipientRes = await fetch('https://api.paystack.co/transferrecipient', {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${secretKey}`,
+          Authorization: `Bearer ${paystackSecret}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -789,49 +1121,75 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
 
       const recipientJson = await recipientRes.json();
 
-      if (!recipientJson.status || !recipientJson.data?.recipient_code) {
-        console.warn('⚠️ Paystack Transfer Recipient failed:', recipientJson.message);
-        return res.status(400).json({
-          error: `Paystack Recipient Error: ${recipientJson.message || 'Could not verify recipient bank details'}`,
+      if (recipientJson.status && recipientJson.data?.recipient_code) {
+        const recipientCode = recipientJson.data.recipient_code;
+
+        // Step 2: Initiate Paystack Bank Transfer
+        const transferRes = await fetch('https://api.paystack.co/transfer', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${paystackSecret}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            source: 'balance',
+            amount: Math.round(numAmount * 100), // in kobo
+            recipient: recipientCode,
+            reason: `CODM Winnings Cashout for ${user.codmIgn}`,
+          }),
         });
-      }
 
-      const recipientCode = recipientJson.data.recipient_code;
+        const paystackData = await transferRes.json();
+        console.log('✅ Paystack Transfer API Response:', paystackData);
 
-      // Step 2: Initiate Paystack Bank Transfer
-      const transferRes = await fetch('https://api.paystack.co/transfer', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${secretKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          source: 'balance',
-          amount: Math.round(numAmount * 100), // in kobo
-          recipient: recipientCode,
-          reason: `CODM Winnings Cashout for ${user.codmIgn}`,
-        }),
-      });
-
-      paystackTransferData = await transferRes.json();
-      console.log('✅ Paystack Transfer API Response:', paystackTransferData);
-
-      if (!paystackTransferData.status) {
-        return res.status(400).json({
-          error: `Paystack Transfer Failed: ${paystackTransferData.message || 'Transfer request was rejected'}`,
-        });
+        if (paystackData.status) {
+          transferResult = {
+            gateway: 'paystack',
+            status: true,
+            data: paystackData.data,
+            message: paystackData.message,
+          };
+          providerUsed = 'paystack';
+        } else {
+          transferResult = {
+            gateway: 'paystack',
+            status: false,
+            isManualFallback: true,
+            message: paystackData.message || 'Paystack automated payout unavailable',
+          };
+        }
+      } else {
+        transferResult = {
+          gateway: 'paystack',
+          status: false,
+          isManualFallback: true,
+          message: recipientJson.message || 'Could not create recipient',
+        };
       }
     } catch (err: any) {
-      console.error('Paystack Transfer Error:', err.message);
-      return res.status(500).json({ error: `Paystack system error: ${err.message}` });
+      console.error('Paystack Transfer Exception:', err.message);
+      transferResult = {
+        gateway: 'paystack',
+        status: false,
+        isManualFallback: true,
+        message: err.message,
+      };
     }
   }
 
+  // Deduct user wallet balance safely
   user.balance -= numAmount;
-  const isPaystackSuccess = paystackTransferData?.status === true;
-  const descNote = isPaystackSuccess
-    ? `🚀 Paystack Transfer Sent to ${bankName} (${accountNumber} - ${accountName}) [Ref: ${paystackTransferData.data?.reference || 'OK'}]`
-    : `Withdrawal request to ${bankName} (${accountNumber} - ${accountName})`;
+  const isAutomatedSuccess = transferResult?.status === true;
+  const isManual = transferResult?.isManualFallback === true || !transferResult;
+
+  let descNote = `Withdrawal request to ${bankName} (${accountNumber} - ${accountName})`;
+  if (isAutomatedSuccess) {
+    const ref = transferResult?.data?.reference || transferResult?.data?.id || 'OK';
+    descNote = `🚀 ${providerUsed === 'flutterwave' ? 'Flutterwave' : 'Paystack'} Transfer Sent to ${bankName} (${accountNumber} - ${accountName}) [Ref: ${ref}]`;
+  } else if (isManual) {
+    const reason = transferResult?.message || 'Queued for admin instant settlement';
+    descNote = `⏳ Pending Manual Payout to ${bankName} (${accountNumber} - ${accountName}) [${reason}]`;
+  }
 
   const tx = {
     id: `tx_${Date.now()}`,
@@ -849,7 +1207,8 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
     success: true,
     balance: user.balance,
     transaction: tx,
-    paystack: paystackTransferData,
+    transferResult,
+    providerUsed,
   });
 });
 

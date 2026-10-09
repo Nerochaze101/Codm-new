@@ -5,6 +5,7 @@ import {
   Smartphone, CreditCard, Sparkles, AlertCircle, Clock, CheckCircle2, Lock
 } from 'lucide-react';
 import { openPaystackPopup } from '../utils/paystack';
+import { openFlutterwavePopup } from '../utils/flutterwave';
 
 interface StakePaymentModalProps {
   isOpen: boolean;
@@ -12,7 +13,7 @@ interface StakePaymentModalProps {
   currentUser: UserProfile;
   role: 'opponent' | 'creator';
   onClose: () => void;
-  onConfirmStake: (paymentMethod: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance') => Promise<void>;
+  onConfirmStake: (paymentMethod: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance' | 'flutterwave') => Promise<void>;
 }
 
 export const StakePaymentModal: React.FC<StakePaymentModalProps> = ({
@@ -23,7 +24,7 @@ export const StakePaymentModal: React.FC<StakePaymentModalProps> = ({
   onClose,
   onConfirmStake,
 }) => {
-  const [selectedMethod, setSelectedMethod] = useState<'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance'>('bank_transfer');
+  const [selectedMethod, setSelectedMethod] = useState<'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance' | 'flutterwave'>('flutterwave');
   const [copiedAcc, setCopiedAcc] = useState(false);
   const [copiedRef, setCopiedRef] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -87,6 +88,46 @@ export const StakePaymentModal: React.FC<StakePaymentModalProps> = ({
   const handlePay = async () => {
     setIsProcessing(true);
     setError(null);
+
+    // If Flutterwave is selected, trigger Flutterwave Inline SDK
+    if (selectedMethod === 'flutterwave') {
+      const launched = openFlutterwavePopup({
+        email: currentUser.email || `${currentUser.codmIgn.toLowerCase()}@player.ng`,
+        name: currentUser.accountName || currentUser.codmIgn,
+        phone: currentUser.phone || '08000000000',
+        amountNaira: stakeAmount,
+        reference: `FLW_STAKE_${match.challengeCode}_${Date.now()}`,
+        title: `CODM Escrow: ${match.challengeCode}`,
+        description: `Stake ₦${stakeAmount.toLocaleString()} in 1v1 ${match.gameMode}`,
+        metadata: {
+          matchId: match.id,
+          challengeCode: match.challengeCode,
+          role,
+          playerIgn: currentUser.codmIgn,
+        },
+        onSuccess: async (ref) => {
+          try {
+            setStep('verifying');
+            await onConfirmStake('flutterwave');
+            onClose();
+          } catch (err: any) {
+            setError(err.message || 'Failed to confirm stake payment');
+            setStep('select');
+          } finally {
+            setIsProcessing(false);
+          }
+        },
+        onClose: () => {
+          setIsProcessing(false);
+        },
+        onError: (err) => {
+          setError(err.message || 'Flutterwave payment error');
+          setIsProcessing(false);
+        },
+      });
+
+      if (launched) return;
+    }
 
     // If Debit Card (Paystack) is selected, trigger Paystack Inline SDK
     if (selectedMethod === 'card') {
@@ -233,6 +274,25 @@ export const StakePaymentModal: React.FC<StakePaymentModalProps> = ({
             </label>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {/* Option: Flutterwave Instant Checkout */}
+              <button
+                type="button"
+                onClick={() => setSelectedMethod('flutterwave')}
+                className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex items-start gap-3 ${
+                  selectedMethod === 'flutterwave'
+                    ? 'bg-amber-500/10 border-amber-400 text-white shadow-md ring-1 ring-amber-400'
+                    : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:border-neutral-700'
+                }`}
+              >
+                <div className="w-8 h-8 rounded-lg bg-neutral-900 border border-neutral-800 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
+                  <Zap className="w-4 h-4 fill-current" />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-amber-400">Flutterwave Checkout</div>
+                  <div className="text-[10px] text-neutral-400">Card, Bank Transfer, USSD, OPay</div>
+                </div>
+              </button>
+
               {/* Option 1: Instant Bank Transfer */}
               <button
                 type="button"

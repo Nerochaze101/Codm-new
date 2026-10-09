@@ -6,7 +6,15 @@ interface CashOutModalProps {
   isOpen: boolean;
   currentUser: UserProfile;
   onClose: () => void;
-  onConfirmCashOut: (amount: number, bankDetails: { bankName: string; accountNumber: string; accountName: string }) => Promise<void>;
+  onConfirmCashOut: (
+    amount: number,
+    bankDetails: {
+      bankName: string;
+      accountNumber: string;
+      accountName: string;
+      gateway?: 'flutterwave' | 'paystack';
+    }
+  ) => Promise<void>;
   onSaveBankInfo?: (bankDetails: { bankName: string; accountNumber: string; accountName: string }) => Promise<void>;
 }
 
@@ -40,6 +48,7 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
   const [bankName, setBankName] = useState<string>('OPay Digital Bank');
   const [accountNumber, setAccountNumber] = useState<string>('');
   const [accountName, setAccountName] = useState<string>('');
+  const [gateway, setGateway] = useState<'flutterwave' | 'paystack'>('flutterwave');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -107,9 +116,10 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
         bankName,
         accountNumber: accountNumber.trim(),
         accountName: accountName.trim(),
+        gateway,
       });
 
-      setSuccessMsg(`Successfully initiated cash out of ₦${amountToWithdraw.toLocaleString()} to ${bankName} (${accountNumber.trim()})!`);
+      setSuccessMsg(`Successfully initiated cash out of ₦${amountToWithdraw.toLocaleString()} via ${gateway === 'flutterwave' ? 'Flutterwave' : 'Paystack'} to ${bankName} (${accountNumber.trim()})!`);
       setTimeout(() => {
         onClose();
       }, 1800);
@@ -198,6 +208,50 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
                 placeholder="Enter amount (e.g. 1000, 5000)"
                 className="w-full pl-8 pr-4 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono-nums font-bold text-sm focus:outline-none focus:border-emerald-400"
               />
+            </div>
+          </div>
+
+          {/* Transfer Gateway Option */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider block">
+              Payout Gateway
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setGateway('flutterwave')}
+                className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between ${
+                  gateway === 'flutterwave'
+                    ? 'bg-amber-500/15 border-amber-400 text-white'
+                    : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-white'
+                }`}
+              >
+                <div>
+                  <div className="text-xs font-bold text-amber-400">Flutterwave</div>
+                  <div className="text-[10px] text-neutral-400">Direct NUBAN / OPay / PalmPay</div>
+                </div>
+                {gateway === 'flutterwave' && (
+                  <div className="w-2 h-2 rounded-full bg-amber-400" />
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setGateway('paystack')}
+                className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between ${
+                  gateway === 'paystack'
+                    ? 'bg-emerald-500/15 border-emerald-400 text-white'
+                    : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-white'
+                }`}
+              >
+                <div>
+                  <div className="text-xs font-bold text-emerald-400">Paystack</div>
+                  <div className="text-[10px] text-neutral-400">Transfers API</div>
+                </div>
+                {gateway === 'paystack' && (
+                  <div className="w-2 h-2 rounded-full bg-emerald-400" />
+                )}
+              </button>
             </div>
           </div>
 

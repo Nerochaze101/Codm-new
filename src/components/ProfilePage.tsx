@@ -7,15 +7,22 @@ import {
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { openPaystackPopup } from '../utils/paystack';
+import { openFlutterwavePopup } from '../utils/flutterwave';
 import { depositWallet } from '../services/api';
 import { CashOutModal } from './CashOutModal';
 
 interface ProfilePageProps {
   currentUser: UserProfile;
   matches: Match[];
-  onUpdateUser?: (updated: Partial<UserProfile>) => Promise<void>;
-  onCashOut?: (amount: number, bankDetails: { bankName: string; accountNumber: string; accountName: string }) => Promise<void>;
-  onNavigateToArena: () => void;
+  onCashOut?: (
+    amount: number,
+    bankDetails: {
+      bankName: string;
+      accountNumber: string;
+      accountName: string;
+      gateway?: 'flutterwave' | 'paystack';
+    }
+  ) => Promise<void>;
   onNavigateToHistory: () => void;
   onNavigateToRules: () => void;
   onOpenCreateBet: (mode?: string, stake?: number) => void;
@@ -233,6 +240,48 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
                   return;
                 }
 
+                openFlutterwavePopup({
+                  email: currentUser.email || `${currentUser.codmIgn.toLowerCase()}@player.ng`,
+                  name: currentUser.accountName || currentUser.codmIgn,
+                  phone: currentUser.phone || '08000000000',
+                  amountNaira: num,
+                  reference: `FLW_DEP_${Date.now()}`,
+                  title: 'Fund CODM Wallet',
+                  description: `Instant deposit of ₦${num.toLocaleString()} to player balance`,
+                  metadata: {
+                    userId: currentUser.id,
+                    playerIgn: currentUser.codmIgn,
+                  },
+                  onSuccess: async (ref) => {
+                    try {
+                      await depositWallet(currentUser.id, num, 'Flutterwave Instant Deposit');
+                      alert(`Successfully funded ₦${num.toLocaleString()} via Flutterwave!`);
+                      window.location.reload();
+                    } catch (err: any) {
+                      alert(err.message || 'Deposit confirmation failed');
+                    }
+                  },
+                  onError: (err) => {
+                    alert(err.message || 'Flutterwave payment error');
+                  },
+                });
+              }}
+              className="px-5 py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm transition-all shadow-lg cursor-pointer uppercase flex items-center justify-center gap-2"
+            >
+              <Zap className="w-4 h-4 fill-current" />
+              <span>Fund (Flutterwave)</span>
+            </button>
+
+            <button
+              onClick={() => {
+                const inputAmt = prompt('Enter deposit amount in Naira (Minimum ₦100):', '1000');
+                if (!inputAmt) return;
+                const num = parseInt(inputAmt, 10);
+                if (isNaN(num) || num < 100) {
+                  alert('Minimum deposit amount is ₦100');
+                  return;
+                }
+
                 openPaystackPopup({
                   email: currentUser.email || `${currentUser.codmIgn.toLowerCase()}@player.ng`,
                   amountNaira: num,
@@ -255,10 +304,10 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
                   },
                 });
               }}
-              className="px-5 py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm transition-all shadow-lg cursor-pointer uppercase flex items-center justify-center gap-2"
+              className="px-5 py-3.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-neutral-200 font-bold rounded-xl text-xs sm:text-sm transition-all shadow-lg cursor-pointer uppercase flex items-center justify-center gap-2"
             >
               <PlusCircle className="w-4 h-4" />
-              <span>Fund Wallet (Paystack)</span>
+              <span>Fund (Paystack)</span>
             </button>
 
             <button

@@ -268,12 +268,21 @@ function MainApp() {
     }
   };
 
-  const handleCashOut = async (amount: number, bankDetails: { bankName: string; accountNumber: string; accountName: string }) => {
+  const handleCashOut = async (
+    amount: number,
+    bankDetails: {
+      bankName: string;
+      accountNumber: string;
+      accountName: string;
+      gateway?: 'flutterwave' | 'paystack';
+    }
+  ) => {
     try {
-      await withdrawWallet(currentUser.id, amount, bankDetails);
+      const res = await withdrawWallet(currentUser.id, amount, bankDetails);
       const updatedUser = await fetchUser(currentUser.id);
       setCurrentUser(updatedUser);
-      alert(`Successfully cashed out ₦${amount.toLocaleString()} to ${bankDetails.bankName} (${bankDetails.accountNumber})!`);
+      const provName = res.providerUsed === 'flutterwave' ? 'Flutterwave' : res.providerUsed === 'paystack' ? 'Paystack' : 'Manual Payout';
+      alert(`Successfully processed cashout of ₦${amount.toLocaleString()} via ${provName} to ${bankDetails.bankName} (${bankDetails.accountNumber})!`);
     } catch (err: any) {
       alert(err.message || 'Cash out failed');
     }

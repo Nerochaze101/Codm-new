@@ -23,8 +23,15 @@ interface CoreArenaProps {
   onOpenWallet?: () => void;
   onRefresh: () => Promise<void>;
   onOpenNewUserOnboarding: (match?: Match) => void;
-  onOpenCreateBet?: (mode?: string, stake?: number) => void;
-  onCashOut?: (amount: number, bankDetails: { bankName: string; accountNumber: string; accountName: string }) => Promise<void>;
+  onCashOut?: (
+    amount: number,
+    bankDetails: {
+      bankName: string;
+      accountNumber: string;
+      accountName: string;
+      gateway?: 'flutterwave' | 'paystack';
+    }
+  ) => Promise<void>;
 }
 
 export const CoreArena: React.FC<CoreArenaProps> = ({

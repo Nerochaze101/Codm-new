@@ -72,7 +72,17 @@ export async function depositWallet(userId: string, amount: number, method: stri
   return await res.json();
 }
 
-export async function withdrawWallet(userId: string, amount: number, bankDetails: { bankName: string; accountNumber: string; accountName: string }) {
+export async function withdrawWallet(
+  userId: string,
+  amount: number,
+  bankDetails: {
+    bankName: string;
+    accountNumber: string;
+    accountName: string;
+    bankCode?: string;
+    gateway?: 'flutterwave' | 'paystack';
+  }
+) {
   const res = await fetch(`/api/users/${userId}/withdraw`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -82,6 +92,16 @@ export async function withdrawWallet(userId: string, amount: number, bankDetails
     const err = await res.json();
     throw new Error(err.error || 'Failed to process withdrawal');
   }
+  return await res.json();
+}
+
+export async function testFlutterwaveConnection() {
+  const res = await fetch('/api/flutterwave/test-connection');
+  return await res.json();
+}
+
+export async function testPaystackConnection() {
+  const res = await fetch('/api/paystack/test-connection');
   return await res.json();
 }
 
