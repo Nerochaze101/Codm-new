@@ -647,7 +647,7 @@ app.get('/api/flutterwave/verify/:id', async (req, res) => {
 
 // Flutterwave Webhook info / diagnostic endpoint
 app.get('/api/flutterwave/webhook-info', (req, res) => {
-  const protocol = req.protocol || 'http';
+  const protocol = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'https';
   const host = req.get('host') || 'localhost:3000';
   const fullWebhookUrl = `${protocol}://${host}/api/flutterwave/webhook`;
   const secretKey = process.env.FLUTTERWAVE_SECRET_KEY || '';
@@ -667,6 +667,15 @@ app.get('/api/flutterwave/webhook-info', (req, res) => {
       step5: 'Click Save / Update Webhook',
     },
     note: 'In-app card & instant transfers are already automatically credited via the checkout callback. The webhook provides a fail-safe backup for slow bank transfers or dropped network connections.',
+  });
+});
+
+// GET ping on /api/flutterwave/webhook for health check
+app.get('/api/flutterwave/webhook', (req, res) => {
+  res.json({
+    status: 'ok',
+    message: 'Flutterwave webhook endpoint is active and healthy. Flutterwave events must be sent via HTTP POST with JSON body and verif-hash header.',
+    secretHashConfigured: true,
   });
 });
 

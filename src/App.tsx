@@ -77,22 +77,18 @@ function MainApp() {
       if (savedUserId) {
         try {
           const activeUser = await fetchUser(savedUserId);
-          setCurrentUser(activeUser);
-          if (window.location.pathname === '/' || window.location.pathname === '/landing') {
-            navigate('/arena');
+          if (activeUser && activeUser.id) {
+            setCurrentUser(activeUser);
           }
         } catch (e) {
           console.error('Could not load saved user:', e);
-          navigate('/auth');
+          localStorage.removeItem('codm_current_user_id');
         }
-      } else {
-        navigate('/auth');
       }
       const mList = await fetchMatches();
       setMatches(mList);
     } catch (e) {
-      console.error(e);
-      navigate('/auth');
+      console.error('Initial data load error:', e);
     }
   };
 
@@ -257,7 +253,23 @@ function MainApp() {
 
   const handleSignOut = () => {
     localStorage.removeItem('codm_current_user_id');
-    navigate('/auth');
+    setCurrentUser({
+      id: 'guest',
+      username: 'Gamer',
+      codmIgn: 'CODM_Gamer',
+      codmUid: '0000000000000000',
+      email: '',
+      phone: '',
+      balance: 0,
+      escrowBalance: 0,
+      totalWinnings: 0,
+      wins: 0,
+      losses: 0,
+      draws: 0,
+      avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=gamer',
+      transactions: [],
+    });
+    navigate('/');
   };
 
   const handleUpdateUser = async (updatedData: Partial<UserProfile>) => {
@@ -301,10 +313,12 @@ function MainApp() {
       <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col bg-tactical-grid selection:bg-amber-500 selection:text-black">
         <LandingPage
           matches={matches}
+          currentUser={currentUser}
           onOpenAuth={(mode) => {
             setAuthMode(mode || 'signup');
             navigate('/auth');
           }}
+          onNavigateToArena={() => navigate('/arena')}
         />
       </div>
     );

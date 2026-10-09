@@ -26,8 +26,9 @@ export const Navbar: React.FC<NavbarProps> = ({
         {/* Zone 1: Single text element brand wordmark with Official Logo Emblem */}
         <div className="flex items-center gap-3">
           <button
-            onClick={() => onNavigate('arena')}
+            onClick={() => onNavigate('landing')}
             className="flex items-center gap-2.5 group text-left focus:outline-none cursor-pointer"
+            title="Go to Home / Landing Page"
           >
             <img
               src={CODM_IMAGES.appLogo}

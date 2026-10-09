@@ -11,7 +11,9 @@ import { calculateMatchEconomics, TIERED_COMMISSION_SCHEDULE } from '../utils/pr
 
 export interface LandingPageProps {
   matches: Match[];
+  currentUser?: UserProfile;
   onOpenAuth: (mode?: 'signin' | 'signup') => void;
+  onNavigateToArena?: () => void;
 }
 
 const FAQS = [
@@ -43,7 +45,9 @@ const FAQS = [
 
 export const LandingPage: React.FC<LandingPageProps> = ({
   matches,
+  currentUser,
   onOpenAuth,
+  onNavigateToArena,
 }) => {
   const [activeFormatTab, setActiveFormatTab] = useState<'1v1' | 'normal'>('1v1');
   const [calcStake, setCalcStake] = useState<number>(100);
@@ -111,21 +115,41 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             </a>
           </nav>
 
-          {/* Action CTAs: Sign In & Sign Up */}
+          {/* Action CTAs: Sign In & Sign Up OR Enter Arena if Authenticated */}
           <div className="flex items-center gap-2 sm:gap-3">
-            <button
-              onClick={() => onOpenAuth('signin')}
-              className="px-4 py-2 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 hover:border-amber-400 text-neutral-200 hover:text-amber-400 font-bold rounded-xl text-xs sm:text-sm transition-all cursor-pointer"
-            >
-              <span>Sign In</span>
-            </button>
-            <button
-              onClick={() => onOpenAuth('signup')}
-              className="px-4.5 py-2 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm shadow-xl transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-1.5"
-            >
-              <span>Sign Up</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
+            {currentUser && currentUser.id !== 'guest' ? (
+              <>
+                <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-neutral-900 border border-neutral-800">
+                  <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="font-mono font-bold text-xs text-neutral-200">
+                    ₦{currentUser.balance.toLocaleString()}
+                  </span>
+                </div>
+                <button
+                  onClick={onNavigateToArena}
+                  className="px-4.5 py-2 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm shadow-xl transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-1.5"
+                >
+                  <Swords className="w-3.5 h-3.5 stroke-[2.5]" />
+                  <span>Enter Arena</span>
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={() => onOpenAuth('signin')}
+                  className="px-4 py-2 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 hover:border-amber-400 text-neutral-200 hover:text-amber-400 font-bold rounded-xl text-xs sm:text-sm transition-all cursor-pointer"
+                >
+                  <span>Sign In</span>
+                </button>
+                <button
+                  onClick={() => onOpenAuth('signup')}
+                  className="px-4.5 py-2 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm shadow-xl transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-1.5"
+                >
+                  <span>Sign Up</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </>
+            )}
           </div>
         </div>
       </header>
@@ -159,21 +183,43 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
             {/* Hero CTAs */}
             <div className="flex flex-wrap items-center gap-3 sm:gap-4 pt-2">
-              <button
-                onClick={() => onOpenAuth('signup')}
-                className="px-7 py-4 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-2xl text-sm sm:text-base shadow-2xl transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-2"
-              >
-                <Swords className="w-5 h-5 stroke-[2.5]" />
-                <span>Create Account & Stake</span>
-              </button>
+              {currentUser && currentUser.id !== 'guest' ? (
+                <>
+                  <button
+                    onClick={onNavigateToArena}
+                    className="px-7 py-4 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-2xl text-sm sm:text-base shadow-2xl transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-2"
+                  >
+                    <Swords className="w-5 h-5 stroke-[2.5]" />
+                    <span>Enter Battle Arena</span>
+                  </button>
 
-              <button
-                onClick={() => onOpenAuth('signin')}
-                className="px-6 py-4 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 hover:border-amber-400 text-neutral-200 hover:text-white font-bold rounded-2xl text-sm sm:text-base transition-all cursor-pointer flex items-center gap-2"
-              >
-                <span>Sign In</span>
-                <ArrowRight className="w-4 h-4" />
-              </button>
+                  <a
+                    href="#calculator"
+                    className="px-6 py-4 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 hover:border-amber-400 text-neutral-200 hover:text-white font-bold rounded-2xl text-sm sm:text-base transition-all cursor-pointer flex items-center gap-2"
+                  >
+                    <span>Wager Calculator</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </a>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => onOpenAuth('signup')}
+                    className="px-7 py-4 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-2xl text-sm sm:text-base shadow-2xl transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-2"
+                  >
+                    <Swords className="w-5 h-5 stroke-[2.5]" />
+                    <span>Create Account & Stake</span>
+                  </button>
+
+                  <button
+                    onClick={() => onOpenAuth('signin')}
+                    className="px-6 py-4 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 hover:border-amber-400 text-neutral-200 hover:text-white font-bold rounded-2xl text-sm sm:text-base transition-all cursor-pointer flex items-center gap-2"
+                  >
+                    <span>Sign In</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                </>
+              )}
             </div>
 
             {/* Trust Markers Grid */}
@@ -329,20 +375,32 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             </div>
 
             <div className="flex flex-wrap items-center gap-3 pt-2">
-              <button
-                onClick={() => onOpenAuth('signup')}
-                className="px-6 py-3 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm shadow-xl transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-2"
-              >
-                <Swords className="w-4 h-4" />
-                <span>Sign Up to Stake ₦{calcStake.toLocaleString()}</span>
-              </button>
+              {currentUser && currentUser.id !== 'guest' ? (
+                <button
+                  onClick={onNavigateToArena}
+                  className="px-6 py-3 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm shadow-xl transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-2"
+                >
+                  <Swords className="w-4 h-4 stroke-[2.5]" />
+                  <span>Enter Arena to Stake ₦{calcStake.toLocaleString()}</span>
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => onOpenAuth('signup')}
+                    className="px-6 py-3 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm shadow-xl transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-2"
+                  >
+                    <Swords className="w-4 h-4" />
+                    <span>Sign Up to Stake ₦{calcStake.toLocaleString()}</span>
+                  </button>
 
-              <button
-                onClick={() => onOpenAuth('signin')}
-                className="px-5 py-3 bg-neutral-800 hover:bg-neutral-700 text-white font-bold rounded-xl text-xs sm:text-sm transition-colors cursor-pointer"
-              >
-                <span>Sign In →</span>
-              </button>
+                  <button
+                    onClick={() => onOpenAuth('signin')}
+                    className="px-5 py-3 bg-neutral-800 hover:bg-neutral-700 text-white font-bold rounded-xl text-xs sm:text-sm transition-colors cursor-pointer"
+                  >
+                    <span>Sign In →</span>
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -406,11 +464,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
             <div className="relative z-10 pt-2">
               <button
-                onClick={() => onOpenAuth('signup')}
+                onClick={currentUser && currentUser.id !== 'guest' ? onNavigateToArena : () => onOpenAuth('signup')}
                 className="w-full py-4 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-2xl text-sm shadow-xl transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center justify-center gap-2 uppercase"
               >
                 <Swords className="w-4 h-4 stroke-[2.5]" />
-                <span>Create Solo 1v1 Bet (Sign Up)</span>
+                <span>{currentUser && currentUser.id !== 'guest' ? 'Stake Solo 1v1 in Arena' : 'Create Solo 1v1 Bet (Sign Up)'}</span>
               </button>
             </div>
           </div>
@@ -457,11 +515,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
             <div className="relative z-10 pt-2">
               <button
-                onClick={() => onOpenAuth('signup')}
+                onClick={currentUser && currentUser.id !== 'guest' ? onNavigateToArena : () => onOpenAuth('signup')}
                 className="w-full py-4 bg-emerald-400 hover:bg-emerald-300 text-neutral-950 font-black rounded-2xl text-sm shadow-xl transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center justify-center gap-2 uppercase"
               >
                 <Users className="w-4 h-4 stroke-[2.5]" />
-                <span>Create Squad Team Bet (Sign Up)</span>
+                <span>{currentUser && currentUser.id !== 'guest' ? 'Stake Squad Team in Arena' : 'Create Squad Team Bet (Sign Up)'}</span>
               </button>
             </div>
           </div>
@@ -573,20 +631,32 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             Fund your wallet with ₦1,000, create your custom battle room, and invite your opponent. Instant escrow, fair play guaranteed.
           </p>
           <div className="flex flex-wrap items-center justify-center gap-4">
-            <button
-              onClick={() => onOpenAuth('signup')}
-              className="px-8 py-4 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-2xl text-base shadow-xl transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-2"
-            >
-              <span>Create Account (Sign Up)</span>
-              <ArrowRight className="w-5 h-5 stroke-[2.5]" />
-            </button>
+            {currentUser && currentUser.id !== 'guest' ? (
+              <button
+                onClick={onNavigateToArena}
+                className="px-8 py-4 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-2xl text-base shadow-xl transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-2"
+              >
+                <Swords className="w-5 h-5 stroke-[2.5]" />
+                <span>Go to Battle Arena</span>
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => onOpenAuth('signup')}
+                  className="px-8 py-4 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-2xl text-base shadow-xl transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-2"
+                >
+                  <span>Create Account (Sign Up)</span>
+                  <ArrowRight className="w-5 h-5 stroke-[2.5]" />
+                </button>
 
-            <button
-              onClick={() => onOpenAuth('signin')}
-              className="px-7 py-4 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-neutral-200 hover:text-white font-bold rounded-2xl text-base transition-all cursor-pointer flex items-center gap-2"
-            >
-              <span>Sign In to Account</span>
-            </button>
+                <button
+                  onClick={() => onOpenAuth('signin')}
+                  className="px-7 py-4 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-neutral-200 hover:text-white font-bold rounded-2xl text-base transition-all cursor-pointer flex items-center gap-2"
+                >
+                  <span>Sign In to Account</span>
+                </button>
+              </>
+            )}
           </div>
         </div>
       </section>
