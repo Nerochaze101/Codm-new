@@ -17,6 +17,7 @@ import { HistoryPage } from './components/HistoryPage';
 import { ProfilePage } from './components/ProfilePage';
 import { CreateBetModal } from './components/CreateBetModal';
 import { OpponentOnboardingModal } from './components/OpponentOnboardingModal';
+import { FundWalletModal } from './components/FundWalletModal';
 
 function MainApp() {
   const navigate = useNavigate();
@@ -47,6 +48,7 @@ function MainApp() {
   const [createBetInitialStake, setCreateBetInitialStake] = useState<number | undefined>(undefined);
   const [isOnboardingModalOpen, setIsOnboardingModalOpen] = useState(false);
   const [onboardingTargetMatch, setOnboardingTargetMatch] = useState<Match | null>(null);
+  const [isFundWalletModalOpen, setIsFundWalletModalOpen] = useState(false);
 
   // Determine current tab from pathname
   const pathname = location.pathname;
@@ -329,6 +331,7 @@ function MainApp() {
         currentTab={currentTab}
         onNavigate={handleNavigate}
         openCreateBetModal={() => handleOpenCreateBet()}
+        onOpenFundWallet={() => setIsFundWalletModalOpen(true)}
         onSignOut={handleSignOut}
       />
 
@@ -463,6 +466,20 @@ function MainApp() {
           setOnboardingTargetMatch(null);
         }}
         onCompleteOnboarding={handleCompleteOnboarding}
+      />
+
+      <FundWalletModal
+        isOpen={isFundWalletModalOpen}
+        currentUser={currentUser}
+        onClose={() => setIsFundWalletModalOpen(false)}
+        onSuccessDeposit={async () => {
+          try {
+            const updated = await fetchUser(currentUser.id);
+            setCurrentUser(updated);
+          } catch (e) {
+            console.error('Error refreshing user after deposit:', e);
+          }
+        }}
       />
     </div>
   );

@@ -8,6 +8,7 @@ export interface NavbarProps {
   currentTab: string;
   onNavigate: (tab: string) => void;
   openCreateBetModal: () => void;
+  onOpenFundWallet?: () => void;
   onSignOut?: () => void;
 }
 
@@ -16,6 +17,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   currentTab,
   onNavigate,
   openCreateBetModal,
+  onOpenFundWallet,
   onSignOut,
 }) => {
   return (
@@ -89,6 +91,21 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Zone 3: Primary Actions & User HUD */}
         <div className="flex items-center gap-2 sm:gap-3">
+          {/* Quick Wallet Balance & Fund Button */}
+          <button
+            onClick={onOpenFundWallet || (() => onNavigate('profile'))}
+            className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-neutral-900 border border-neutral-800 hover:border-amber-400/50 transition-all cursor-pointer group"
+            title="Wallet Balance - Click to fund with Flutterwave"
+          >
+            <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="font-mono font-bold text-xs text-neutral-200 group-hover:text-white transition-colors">
+              ₦{currentUser.balance.toLocaleString()}
+            </span>
+            <span className="text-[10px] font-black text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/30 uppercase tracking-wide">
+              + Fund
+            </span>
+          </button>
+
           {/* Create Bet Button */}
           <button
             onClick={openCreateBetModal}

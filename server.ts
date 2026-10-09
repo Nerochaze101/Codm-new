@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
 import { initDatabase, pool, runDatabaseDiagnostics } from './db.js';
 
@@ -244,7 +245,7 @@ async function getUserByEmailOrIgn(identifier: string): Promise<{ user: UserProf
 
 async function saveUserToDb(user: UserProfile, password?: string) {
   try {
-    const passValue = password ? escapeSql(password) : 'users.password_hash';
+    const passValue = password ? escapeSql(password) : 'NULL';
     await pool.query(`
       INSERT INTO users (id, username, codm_ign, codm_uid, tier, clan, email, phone, password_hash, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, created_at)
       VALUES (
@@ -572,6 +573,57 @@ app.get('/api/paystack/verify/:reference', async (req, res) => {
   }
 });
 
+// Paystack Webhook listener
+app.post('/api/paystack/webhook', async (req, res) => {
+  try {
+    const paystackSecret = process.env.PAYSTACK_SECRET_KEY || '';
+    const hash = crypto.createHmac('sha512', paystackSecret).update(JSON.stringify(req.body)).digest('hex');
+
+    if (hash !== req.headers['x-paystack-signature'] && paystackSecret && !paystackSecret.startsWith('sk_test_xxxx')) {
+      return res.status(401).json({ status: 'error', message: 'Invalid signature' });
+    }
+
+    const event = req.body;
+    if (event?.event === 'charge.success') {
+      const data = event.data;
+      const amountNaira = Number(data.amount) / 100;
+      const ref = data.reference;
+      const email = data.customer?.email;
+      const userId = data.metadata?.userId;
+
+      let targetUser: UserProfile | null = null;
+      if (userId) targetUser = await getUserFromDb(userId);
+      if (!targetUser && email) {
+        const found = await getUserByEmailOrIgn(email);
+        if (found) targetUser = found.user;
+      }
+
+      if (targetUser && amountNaira > 0) {
+        const alreadyCredited = targetUser.transactions.some(
+          (t) => t.id === `tx_${data.id}` || t.description?.includes(ref)
+        );
+
+        if (!alreadyCredited) {
+          targetUser.balance += amountNaira;
+          const newTx = {
+            id: `tx_${data.id || Date.now()}`,
+            type: 'DEPOSIT' as const,
+            amount: amountNaira,
+            description: `Wallet top-up via Paystack Webhook [Ref: ${ref}]`,
+            timestamp: Date.now(),
+          };
+          targetUser.transactions.unshift(newTx);
+          await saveUserToDb(targetUser);
+          await saveTransactionToDb(targetUser.id, newTx);
+        }
+      }
+    }
+    return res.status(200).send('OK');
+  } catch (err: any) {
+    return res.status(200).json({ status: 'error' });
+  }
+});
+
 // Verify Flutterwave transaction by ID or tx_ref
 app.get('/api/flutterwave/verify/:id', async (req, res) => {
   const { id } = req.params;
@@ -590,6 +642,123 @@ app.get('/api/flutterwave/verify/:id', async (req, res) => {
     res.json(data);
   } catch (err: any) {
     res.status(500).json({ status: false, message: err.message });
+  }
+});
+
+// Flutterwave Webhook info / diagnostic endpoint
+app.get('/api/flutterwave/webhook-info', (req, res) => {
+  const protocol = req.protocol || 'http';
+  const host = req.get('host') || 'localhost:3000';
+  const fullWebhookUrl = `${protocol}://${host}/api/flutterwave/webhook`;
+  const secretKey = process.env.FLUTTERWAVE_SECRET_KEY || '';
+  const secretHash = process.env.FLUTTERWAVE_SECRET_HASH || 'flw_sec_b8e217d4a940f5c1e309';
+
+  res.json({
+    status: true,
+    webhookUrl: fullWebhookUrl,
+    hasSecretKey: !!secretKey && !secretKey.startsWith('FLWSECK_TEST-xxxx'),
+    secretHashConfigured: true,
+    secretHash: secretHash,
+    instructions: {
+      step1: 'Log in to your Flutterwave Dashboard at https://dashboard.flutterwave.com',
+      step2: 'Navigate to Settings -> Webhooks',
+      step3: `Set your Webhook URL to: ${fullWebhookUrl}`,
+      step4: `Set your Secret hash to: ${secretHash}`,
+      step5: 'Click Save / Update Webhook',
+    },
+    note: 'In-app card & instant transfers are already automatically credited via the checkout callback. The webhook provides a fail-safe backup for slow bank transfers or dropped network connections.',
+  });
+});
+
+// Flutterwave Webhook listener (handles asynchronous bank transfers, USSD & background settlements)
+app.post('/api/flutterwave/webhook', async (req, res) => {
+  try {
+    const signature = req.headers['verif-hash'];
+    const secretHash = process.env.FLUTTERWAVE_SECRET_HASH || 'flw_sec_b8e217d4a940f5c1e309';
+
+    // Verify secret hash if configured and signature provided
+    if (secretHash && signature && signature !== secretHash) {
+      console.warn('⚠️ Flutterwave webhook: invalid secret hash signature');
+      return res.status(401).json({ status: 'error', message: 'Invalid secret hash' });
+    }
+
+    const payload = req.body;
+    console.log(`🔔 [Flutterwave Webhook] Event: ${payload?.event}, ID: ${payload?.data?.id}, Ref: ${payload?.data?.tx_ref}`);
+
+    if (payload?.event === 'charge.completed' && payload?.data?.status === 'successful') {
+      const flwData = payload.data;
+      const flwId = flwData.id;
+      const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || '';
+
+      let verifiedData = flwData;
+
+      // Server-side verification with Flutterwave API to prevent spoofing
+      if (flwSecret && !flwSecret.startsWith('FLWSECK_TEST-xxxx')) {
+        try {
+          const verifyRes = await fetch(`https://api.flutterwave.com/v3/transactions/${flwId}/verify`, {
+            headers: {
+              Authorization: `Bearer ${flwSecret}`,
+              'Content-Type': 'application/json',
+            },
+          });
+          const verifyJson = await verifyRes.json();
+          if (verifyJson.status === 'success' && verifyJson.data?.status === 'successful') {
+            verifiedData = verifyJson.data;
+          } else {
+            console.warn('⚠️ Flutterwave webhook: verify call returned non-success:', verifyJson);
+            return res.status(200).send('Verified status not successful');
+          }
+        } catch (vErr: any) {
+          console.error('Error verifying transaction during Flutterwave webhook:', vErr.message);
+        }
+      }
+
+      const amount = Number(verifiedData.amount || verifiedData.charged_amount || 0);
+      const txRef = verifiedData.tx_ref || `FLW_${flwId}`;
+      const userId = verifiedData.meta?.userId;
+      const customerEmail = verifiedData.customer?.email;
+
+      let targetUser: UserProfile | null = null;
+      if (userId) {
+        targetUser = await getUserFromDb(userId);
+      }
+      if (!targetUser && customerEmail) {
+        const found = await getUserByEmailOrIgn(customerEmail);
+        if (found) targetUser = found.user;
+      }
+
+      if (targetUser && amount > 0) {
+        // Idempotency check: avoid double credit
+        const alreadyCredited = targetUser.transactions.some(
+          (t) => t.id === `tx_${flwId}` || t.description?.includes(txRef) || t.description?.includes(String(flwId))
+        );
+
+        if (!alreadyCredited) {
+          targetUser.balance += amount;
+          const newTx = {
+            id: `tx_${flwId}`,
+            type: 'DEPOSIT' as const,
+            amount,
+            description: `Wallet top-up via Flutterwave Webhook [Ref: ${txRef}]`,
+            timestamp: Date.now(),
+          };
+          targetUser.transactions.unshift(newTx);
+          await saveUserToDb(targetUser);
+          await saveTransactionToDb(targetUser.id, newTx);
+          console.log(`✅ [Flutterwave Webhook] Credited ₦${amount} to user ${targetUser.id} (${targetUser.codmIgn}). New balance: ₦${targetUser.balance}`);
+        } else {
+          console.log(`ℹ️ [Flutterwave Webhook] Transaction ${flwId} (${txRef}) was already credited previously.`);
+        }
+      } else {
+        console.warn(`⚠️ [Flutterwave Webhook] Target user not identified for payment ref ${txRef}`);
+      }
+    }
+
+    // Always return 200 OK to acknowledge Flutterwave webhook delivery
+    return res.status(200).json({ status: 'success' });
+  } catch (err: any) {
+    console.error('Flutterwave webhook uncaught error:', err);
+    return res.status(200).json({ status: 'error', message: err.message });
   }
 });
 

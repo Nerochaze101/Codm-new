@@ -10,6 +10,7 @@ import { openPaystackPopup } from '../utils/paystack';
 import { openFlutterwavePopup } from '../utils/flutterwave';
 import { depositWallet } from '../services/api';
 import { CashOutModal } from './CashOutModal';
+import { FundWalletModal } from './FundWalletModal';
 
 interface ProfilePageProps {
   currentUser: UserProfile;
@@ -52,6 +53,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [isCashOutModalOpen, setIsCashOutModalOpen] = useState(false);
+  const [isFundModalOpen, setIsFundModalOpen] = useState(false);
   const [editIgn, setEditIgn] = useState(currentUser.codmIgn);
   const [editUid, setEditUid] = useState(currentUser.codmUid);
   const [editEmail, setEditEmail] = useState(currentUser.email);
@@ -233,83 +235,11 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
 
           <div className="flex flex-wrap items-center gap-2.5">
             <button
-              onClick={() => {
-                const inputAmt = prompt('Enter deposit amount in Naira (Minimum ₦100):', '1000');
-                if (!inputAmt) return;
-                const num = parseInt(inputAmt, 10);
-                if (isNaN(num) || num < 100) {
-                  alert('Minimum deposit amount is ₦100');
-                  return;
-                }
-
-                openFlutterwavePopup({
-                  email: currentUser.email || `${currentUser.codmIgn.toLowerCase()}@player.ng`,
-                  name: currentUser.accountName || currentUser.codmIgn,
-                  phone: currentUser.phone || '08000000000',
-                  amountNaira: num,
-                  reference: `FLW_DEP_${Date.now()}`,
-                  title: 'Fund CODM Wallet',
-                  description: `Instant deposit of ₦${num.toLocaleString()} to player balance`,
-                  metadata: {
-                    userId: currentUser.id,
-                    playerIgn: currentUser.codmIgn,
-                  },
-                  onSuccess: async (ref) => {
-                    try {
-                      await depositWallet(currentUser.id, num, 'Flutterwave Instant Deposit');
-                      alert(`Successfully funded ₦${num.toLocaleString()} via Flutterwave!`);
-                      window.location.reload();
-                    } catch (err: any) {
-                      alert(err.message || 'Deposit confirmation failed');
-                    }
-                  },
-                  onError: (err) => {
-                    alert(err.message || 'Flutterwave payment error');
-                  },
-                });
-              }}
-              className="px-5 py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm transition-all shadow-lg cursor-pointer uppercase flex items-center justify-center gap-2"
+              onClick={() => setIsFundModalOpen(true)}
+              className="px-5 py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm transition-all shadow-lg cursor-pointer uppercase flex items-center justify-center gap-2 active:scale-95"
             >
               <Zap className="w-4 h-4 fill-current" />
               <span>Fund (Flutterwave)</span>
-            </button>
-
-            <button
-              onClick={() => {
-                const inputAmt = prompt('Enter deposit amount in Naira (Minimum ₦100):', '1000');
-                if (!inputAmt) return;
-                const num = parseInt(inputAmt, 10);
-                if (isNaN(num) || num < 100) {
-                  alert('Minimum deposit amount is ₦100');
-                  return;
-                }
-
-                openPaystackPopup({
-                  email: currentUser.email || `${currentUser.codmIgn.toLowerCase()}@player.ng`,
-                  amountNaira: num,
-                  reference: `DEP_${Date.now()}`,
-                  metadata: {
-                    userId: currentUser.id,
-                    playerIgn: currentUser.codmIgn,
-                  },
-                  onSuccess: async (ref) => {
-                    try {
-                      await depositWallet(currentUser.id, num, 'Paystack Instant Deposit');
-                      alert(`Successfully funded ₦${num.toLocaleString()} via Paystack!`);
-                      window.location.reload();
-                    } catch (err: any) {
-                      alert(err.message || 'Deposit confirmation failed');
-                    }
-                  },
-                  onError: (err) => {
-                    alert(err.message || 'Paystack payment error');
-                  },
-                });
-              }}
-              className="px-5 py-3.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-neutral-200 font-bold rounded-xl text-xs sm:text-sm transition-all shadow-lg cursor-pointer uppercase flex items-center justify-center gap-2"
-            >
-              <PlusCircle className="w-4 h-4" />
-              <span>Fund (Paystack)</span>
             </button>
 
             <button
@@ -321,7 +251,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
                 setIsCashOutModalOpen(true);
               }}
               disabled={currentUser.balance <= 0}
-              className="px-5 py-3.5 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs sm:text-sm transition-all shadow-lg cursor-pointer uppercase flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-5 py-3.5 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs sm:text-sm transition-all shadow-lg cursor-pointer uppercase flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
             >
               <Zap className="w-4 h-4 fill-current" />
               <span>Cash Out ₦{currentUser.balance.toLocaleString()}</span>
@@ -329,6 +259,17 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
           </div>
         </div>
       </div>
+
+      <FundWalletModal
+        isOpen={isFundModalOpen}
+        currentUser={currentUser}
+        onClose={() => setIsFundModalOpen(false)}
+        onSuccessDeposit={async (newBalance) => {
+          if (onUpdateUser) {
+            await onUpdateUser({ balance: newBalance });
+          }
+        }}
+      />
 
       <CashOutModal
         isOpen={isCashOutModalOpen}
