@@ -163,7 +163,7 @@ function MainApp() {
 
   const handleOpponentStake = async (
     matchId: string,
-    paymentMethod: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance'
+    paymentMethod: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance' | 'flutterwave'
   ) => {
     await opponentStakeMatch(matchId, {
       opponentId: currentUser.id,
@@ -176,7 +176,7 @@ function MainApp() {
 
   const handleCreatorStake = async (
     matchId: string,
-    paymentMethod: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance'
+    paymentMethod: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance' | 'flutterwave'
   ) => {
     await creatorStakeMatch(matchId, {
       creatorId: currentUser.id,

@@ -1114,7 +1114,7 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
           type: 'nuban',
           name: accountName || user.codmIgn,
           account_number: accountNumber.trim(),
-          bank_code: targetBankCode || '058',
+          bank_code: paystackCode || '058',
           currency: 'NGN',
         }),
       });

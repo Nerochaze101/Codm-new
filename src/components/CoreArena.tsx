@@ -14,9 +14,10 @@ interface CoreArenaProps {
   currentUser: UserProfile;
   matches: Match[];
   onCreateBet: (data: { stakeAmount: number; gameMode: string; map: string; rules: string[] }) => Promise<void>;
+  onOpenCreateBet?: (mode?: string, stake?: number) => void;
   onJoinMatch: (matchId: string, opponentId: string) => Promise<void>;
-  onOpponentStake?: (matchId: string, paymentMethod: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance') => Promise<void>;
-  onCreatorStake?: (matchId: string, paymentMethod: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance') => Promise<void>;
+  onOpponentStake?: (matchId: string, paymentMethod: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance' | 'flutterwave') => Promise<void>;
+  onCreatorStake?: (matchId: string, paymentMethod: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance' | 'flutterwave') => Promise<void>;
   onSimulateOpponentStake?: (matchId: string) => Promise<void>;
   onSubmitResult: (matchId: string, claim: 'VICTORY' | 'DEFEAT' | 'DRAW', screenshotBase64?: string) => Promise<void>;
   onCancelMatch: (matchId: string) => Promise<void>;
@@ -117,7 +118,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
     }
   };
 
-  const handleConfirmStake = async (method: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance') => {
+  const handleConfirmStake = async (method: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance' | 'flutterwave') => {
     if (!stakeTargetMatch) return;
     if (stakeRole === 'opponent' && onOpponentStake) {
       await onOpponentStake(stakeTargetMatch.id, method);

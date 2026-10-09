@@ -14,6 +14,8 @@ import { CashOutModal } from './CashOutModal';
 interface ProfilePageProps {
   currentUser: UserProfile;
   matches: Match[];
+  onUpdateUser?: (updatedData: Partial<UserProfile>) => Promise<void>;
+  onNavigateToArena?: () => void;
   onCashOut?: (
     amount: number,
     bankDetails: {

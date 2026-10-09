@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Match, UserProfile } from '../types';
 import {
   X, ShieldCheck, Swords, Copy, Check, ArrowRight, Building2,
-  Smartphone, CreditCard, Sparkles, AlertCircle, Clock, CheckCircle2, Lock
+  Smartphone, CreditCard, Sparkles, AlertCircle, Clock, CheckCircle2, Lock, Zap
 } from 'lucide-react';
 import { openPaystackPopup } from '../utils/paystack';
 import { openFlutterwavePopup } from '../utils/flutterwave';

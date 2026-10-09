@@ -14,8 +14,8 @@ interface MatchRoomProps {
   onSubmitResult: (claim: 'VICTORY' | 'DEFEAT', screenshotBase64?: string) => Promise<void>;
   onSendChat: (text: string) => Promise<void>;
   onRefreshMatch: () => Promise<void>;
-  onOpponentStake?: (paymentMethod: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance') => Promise<void>;
-  onCreatorStake?: (paymentMethod: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance') => Promise<void>;
+  onOpponentStake?: (paymentMethod: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance' | 'flutterwave') => Promise<void>;
+  onCreatorStake?: (paymentMethod: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance' | 'flutterwave') => Promise<void>;
   onSimulateOpponentStake?: () => Promise<void>;
   onSimulateOpponentResult?: (claim: 'VICTORY' | 'DEFEAT') => Promise<void>;
   onAdminResolve?: (winnerId: string) => Promise<void>;
@@ -125,7 +125,7 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
     }
   };
 
-  const handleConfirmStake = async (method: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance') => {
+  const handleConfirmStake = async (method: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance' | 'flutterwave') => {
     if (paymentRole === 'opponent' && onOpponentStake) {
       await onOpponentStake(method);
     } else if (paymentRole === 'creator' && onCreatorStake) {
