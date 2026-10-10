@@ -5,7 +5,7 @@ import {
   ArrowRight, AlertCircle, CheckCircle2, MessageCircle, Wallet,
   UserCheck, RefreshCw, Sparkles, Crosshair, Target, X, Plus,
   Flame, Zap, Users, Flag, Shield, Sliders, ChevronRight, Gamepad2, MapPin,
-  TrendingUp, Award, Clock, Lock
+  TrendingUp, Award, Clock, Lock, AlertTriangle
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { StakePaymentModal } from './StakePaymentModal';
@@ -57,6 +57,8 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [arenaCashoutConfirming, setArenaCashoutConfirming] = useState(false);
+  const [isArenaCashoutSubmitting, setIsArenaCashoutSubmitting] = useState(false);
 
   // Staking Modal state
   const [stakeTargetMatch, setStakeTargetMatch] = useState<Match | null>(null);
@@ -547,32 +549,77 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                     />
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const bankName = (document.getElementById('arenaCashOutBankName') as HTMLInputElement)?.value;
-                      const accountNumber = (document.getElementById('arenaCashOutAccountNumber') as HTMLInputElement)?.value;
-                      const accountName = (document.getElementById('arenaCashOutAccountName') as HTMLInputElement)?.value;
+                  {arenaCashoutConfirming ? (
+                    <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-3 animate-in fade-in">
+                      <div className="flex items-center gap-2 text-amber-400 font-bold text-xs">
+                        <AlertTriangle className="w-4 h-4 shrink-0" />
+                        <span>Confirm Instant Bank Transfer</span>
+                      </div>
+                      <p className="text-[11px] text-neutral-300 leading-relaxed">
+                        Are you sure you want to cash out <strong>₦{currentUser.balance.toLocaleString()}</strong> to your bank account now? Payouts are sent immediately and cannot be cancelled.
+                      </p>
+                      <div className="flex items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          disabled={isArenaCashoutSubmitting}
+                          onClick={async () => {
+                            const bankName = (document.getElementById('arenaCashOutBankName') as HTMLInputElement)?.value;
+                            const accountNumber = (document.getElementById('arenaCashOutAccountNumber') as HTMLInputElement)?.value;
+                            const accountName = (document.getElementById('arenaCashOutAccountName') as HTMLInputElement)?.value;
 
-                      if (!bankName || !accountNumber) {
-                        alert('Please fill in your Bank Name and Account Number to cash out.');
-                        return;
-                      }
+                            if (!bankName || !accountNumber) {
+                              alert('Please fill in your Bank Name and Account Number.');
+                              return;
+                            }
 
-                      if (onCashOut) {
-                        await onCashOut(currentUser.balance, {
-                          bankName,
-                          accountNumber,
-                          accountName: accountName || currentUser.codmIgn,
-                        });
-                        onRefresh();
-                      }
-                    }}
-                    className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs transition-all shadow-lg cursor-pointer uppercase flex items-center justify-center gap-1.5"
-                  >
-                    <Zap className="w-4 h-4 fill-current" />
-                    <span>Cash Out ₦{currentUser.balance.toLocaleString()} to Bank Now</span>
-                  </button>
+                            if (onCashOut) {
+                              setIsArenaCashoutSubmitting(true);
+                              try {
+                                await onCashOut(currentUser.balance, {
+                                  bankName,
+                                  accountNumber,
+                                  accountName: accountName || currentUser.codmIgn,
+                                });
+                                setArenaCashoutConfirming(false);
+                                onRefresh();
+                              } finally {
+                                setIsArenaCashoutSubmitting(false);
+                              }
+                            }
+                          }}
+                          className="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs uppercase cursor-pointer transition-all shadow-md"
+                        >
+                          {isArenaCashoutSubmitting ? 'Sending...' : 'Yes, Confirm Payout Now'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isArenaCashoutSubmitting}
+                          onClick={() => setArenaCashoutConfirming(false)}
+                          className="px-4 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-bold rounded-xl text-xs cursor-pointer transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const bankName = (document.getElementById('arenaCashOutBankName') as HTMLInputElement)?.value;
+                        const accountNumber = (document.getElementById('arenaCashOutAccountNumber') as HTMLInputElement)?.value;
+
+                        if (!bankName || !accountNumber) {
+                          alert('Please enter your Bank Name and Account Number before withdrawing.');
+                          return;
+                        }
+                        setArenaCashoutConfirming(true);
+                      }}
+                      className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs transition-all shadow-lg cursor-pointer uppercase flex items-center justify-center gap-1.5"
+                    >
+                      <Zap className="w-4 h-4 fill-current" />
+                      <span>Review & Cash Out ₦{currentUser.balance.toLocaleString()} to Bank</span>
+                    </button>
+                  )}
                 </div>
               )}
 

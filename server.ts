@@ -436,6 +436,27 @@ async function saveMatchToDb(match: any) {
 }
 
 // REST API ROUTES
+app.get('/api/health', async (req, res) => {
+  try {
+    const client = await pool.connect();
+    const timeRes = await client.query('SELECT NOW() as now');
+    client.release();
+    res.json({
+      status: 'healthy',
+      database: 'connected',
+      pooler: 'Supabase IPv4 Session Pooler (port 5432)',
+      timestamp: timeRes.rows[0]?.now,
+      uptime: process.uptime(),
+    });
+  } catch (err: any) {
+    res.status(503).json({
+      status: 'degraded',
+      database: 'disconnected',
+      error: err.message,
+    });
+  }
+});
+
 app.get('/api/db-diagnostics', async (req, res) => {
   try {
     const diagnostics = await runDatabaseDiagnostics();
@@ -552,6 +573,29 @@ app.get('/api/flutterwave/test-connection', async (req, res) => {
   }
 });
 
+// Fetch Flutterwave settlements & settlement schedule
+app.get('/api/flutterwave/settlements', async (req, res) => {
+  const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || '';
+  if (!flwSecret) {
+    return res.status(400).json({ error: 'FLUTTERWAVE_SECRET_KEY is not configured' });
+  }
+
+  try {
+    const flwRes = await fetch('https://api.flutterwave.com/v3/settlements', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${flwSecret}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const data = await flwRes.json();
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Verify Paystack transaction by reference
 app.get('/api/paystack/verify/:reference', async (req, res) => {
   const { reference } = req.params;
@@ -600,7 +644,11 @@ app.post('/api/paystack/webhook', async (req, res) => {
 
       if (targetUser && amountNaira > 0) {
         const alreadyCredited = targetUser.transactions.some(
-          (t) => t.id === `tx_${data.id}` || t.description?.includes(ref)
+          (t) =>
+            t.id === `tx_${data.id}` ||
+            t.id === `tx_${ref}` ||
+            t.description?.includes(ref) ||
+            t.description?.includes(String(data.id))
         );
 
         if (!alreadyCredited) {
@@ -739,7 +787,11 @@ app.post('/api/flutterwave/webhook', async (req, res) => {
       if (targetUser && amount > 0) {
         // Idempotency check: avoid double credit
         const alreadyCredited = targetUser.transactions.some(
-          (t) => t.id === `tx_${flwId}` || t.description?.includes(txRef) || t.description?.includes(String(flwId))
+          (t) =>
+            t.id === `tx_${flwId}` ||
+            t.id === `tx_${txRef}` ||
+            t.description?.includes(txRef) ||
+            t.description?.includes(String(flwId))
         );
 
         if (!alreadyCredited) {
@@ -970,23 +1022,44 @@ app.patch('/api/users/:id', async (req, res) => {
   res.json(user);
 });
 
-// Wallet deposit directly into database
+// Wallet deposit directly into database with strict idempotency protection
 app.post('/api/users/:id/deposit', async (req, res) => {
   const user = await getUserFromDb(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  const { amount, method = 'Instant Transfer (Paystack)' } = req.body;
+  const { amount, method = 'Instant Transfer', reference, transactionId } = req.body;
   const numAmount = Number(amount);
   if (!numAmount || numAmount <= 0) {
     return res.status(400).json({ error: 'Invalid deposit amount' });
   }
 
+  const refStr = reference ? String(reference).trim() : '';
+  const txIdStr = transactionId ? String(transactionId).trim() : '';
+
+  // IDEMPOTENCY CHECK:
+  // Prevent double crediting if this transaction was already processed by Webhook or client callback
+  const alreadyCredited = user.transactions.some((t) => {
+    if (refStr && (t.id === `tx_${refStr}` || t.description?.includes(refStr))) return true;
+    if (txIdStr && (t.id === `tx_${txIdStr}` || t.description?.includes(txIdStr))) return true;
+    return false;
+  });
+
+  if (alreadyCredited) {
+    console.log(`ℹ️ [Deposit API] Transaction with ref '${refStr || txIdStr}' already credited for user ${user.id}. Skipping duplicate.`);
+    return res.json({ success: true, balance: user.balance, alreadyCredited: true });
+  }
+
+  const finalTxId = txIdStr ? `tx_${txIdStr}` : (refStr ? `tx_${refStr}` : `tx_${Date.now()}`);
+  const descNote = refStr
+    ? `Wallet top-up via ${method} [Ref: ${refStr}]`
+    : (txIdStr ? `Wallet top-up via ${method} [ID: ${txIdStr}]` : `Wallet top-up via ${method}`);
+
   user.balance += numAmount;
   const tx = {
-    id: `tx_${Date.now()}`,
+    id: finalTxId,
     type: 'DEPOSIT' as const,
     amount: numAmount,
-    description: `Wallet top-up via ${method}`,
+    description: descNote,
     timestamp: Date.now(),
   };
   user.transactions.unshift(tx);
@@ -994,6 +1067,7 @@ app.post('/api/users/:id/deposit', async (req, res) => {
   await saveUserToDb(user);
   await saveTransactionToDb(user.id, tx);
 
+  console.log(`✅ [Deposit API] Credited ₦${numAmount} to user ${user.id} (${user.codmIgn}). New balance: ₦${user.balance}`);
   res.json({ success: true, balance: user.balance, transaction: tx });
 });
 
@@ -1120,12 +1194,13 @@ app.post('/api/admin/test-cashout', async (req, res) => {
         accountName,
         amount: numAmount,
         response: data,
-        ipNotice: data.message?.includes('IP Whitelisting')
+        ipNotice: (data.message?.includes('IP Whitelisting') || data.message?.includes('administrator') || data.status === 'error')
           ? {
-              requiresIpWhitelist: true,
-              serverIpv4: '34.34.246.124',
+              requiresIpWhitelistOrApproval: true,
+              serverIpv4: '34.34.246.104',
+              secondaryIpv4: '34.34.246.124',
               serverIpv6: '2600:1900:0:4a03::e00',
-              instructions: 'In your Flutterwave Dashboard, go to Settings -> Whitelisted IP addresses, and add 34.34.246.124',
+              instructions: 'In your Flutterwave Dashboard, go to Settings -> Security / API Keys -> Whitelisted IP addresses, and add 34.34.246.104. Also check your email (nerochazeagent@gmail.com) for Flutterwave transfer approval or IP alert.',
             }
           : undefined,
       });

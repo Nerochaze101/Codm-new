@@ -59,11 +59,17 @@ export async function createUser(data: Partial<UserProfile> & { initialDeposit?:
   }
 }
 
-export async function depositWallet(userId: string, amount: number, method: string) {
+export async function depositWallet(
+  userId: string,
+  amount: number,
+  method: string,
+  reference?: string,
+  transactionId?: string | number
+) {
   const res = await fetch(`/api/users/${userId}/deposit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ amount, method }),
+    body: JSON.stringify({ amount, method, reference, transactionId }),
   });
   if (!res.ok) {
     const err = await res.json();

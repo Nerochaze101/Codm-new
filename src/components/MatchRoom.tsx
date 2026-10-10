@@ -43,6 +43,8 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [roomCashoutConfirming, setRoomCashoutConfirming] = useState(false);
+  const [isRoomCashoutSubmitting, setIsRoomCashoutSubmitting] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentRole, setPaymentRole] = useState<'opponent' | 'creator'>('opponent');
 
@@ -232,32 +234,77 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                 />
               </div>
 
-              <button
-                type="button"
-                onClick={async () => {
-                  const bankName = (document.getElementById('roomCashOutBankName') as HTMLInputElement)?.value;
-                  const accountNumber = (document.getElementById('roomCashOutAccountNumber') as HTMLInputElement)?.value;
-                  const accountName = (document.getElementById('roomCashOutAccountName') as HTMLInputElement)?.value;
+              {roomCashoutConfirming ? (
+                <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-3 animate-in fade-in">
+                  <div className="flex items-center gap-2 text-amber-400 font-bold text-xs">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>Confirm Instant Bank Transfer</span>
+                  </div>
+                  <p className="text-[11px] text-neutral-300 leading-relaxed">
+                    Are you sure you want to cash out <strong>₦{currentUser.balance.toLocaleString()}</strong> to your bank account now? Payouts are sent immediately and cannot be cancelled.
+                  </p>
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      disabled={isRoomCashoutSubmitting}
+                      onClick={async () => {
+                        const bankName = (document.getElementById('roomCashOutBankName') as HTMLInputElement)?.value;
+                        const accountNumber = (document.getElementById('roomCashOutAccountNumber') as HTMLInputElement)?.value;
+                        const accountName = (document.getElementById('roomCashOutAccountName') as HTMLInputElement)?.value;
 
-                  if (!bankName || !accountNumber) {
-                    alert('Please enter your Bank Name and Account Number.');
-                    return;
-                  }
+                        if (!bankName || !accountNumber) {
+                          alert('Please enter your Bank Name and Account Number.');
+                          return;
+                        }
 
-                  if (onCashOut) {
-                    await onCashOut(currentUser.balance, {
-                      bankName,
-                      accountNumber,
-                      accountName: accountName || currentUser.codmIgn,
-                    });
-                    onRefreshMatch();
-                  }
-                }}
-                className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs transition-all shadow-lg cursor-pointer uppercase flex items-center justify-center gap-1.5"
-              >
-                <Zap className="w-4 h-4 fill-current" />
-                <span>Cash Out ₦{currentUser.balance.toLocaleString()} to Bank Now</span>
-              </button>
+                        if (onCashOut) {
+                          setIsRoomCashoutSubmitting(true);
+                          try {
+                            await onCashOut(currentUser.balance, {
+                              bankName,
+                              accountNumber,
+                              accountName: accountName || currentUser.codmIgn,
+                            });
+                            setRoomCashoutConfirming(false);
+                            onRefreshMatch();
+                          } finally {
+                            setIsRoomCashoutSubmitting(false);
+                          }
+                        }
+                      }}
+                      className="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs uppercase cursor-pointer transition-all shadow-md"
+                    >
+                      {isRoomCashoutSubmitting ? 'Sending...' : 'Yes, Confirm Payout Now'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isRoomCashoutSubmitting}
+                      onClick={() => setRoomCashoutConfirming(false)}
+                      className="px-4 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-bold rounded-xl text-xs cursor-pointer transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const bankName = (document.getElementById('roomCashOutBankName') as HTMLInputElement)?.value;
+                    const accountNumber = (document.getElementById('roomCashOutAccountNumber') as HTMLInputElement)?.value;
+
+                    if (!bankName || !accountNumber) {
+                      alert('Please enter your Bank Name and Account Number before withdrawing.');
+                      return;
+                    }
+                    setRoomCashoutConfirming(true);
+                  }}
+                  className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs transition-all shadow-lg cursor-pointer uppercase flex items-center justify-center gap-1.5"
+                >
+                  <Zap className="w-4 h-4 fill-current" />
+                  <span>Review & Cash Out ₦{currentUser.balance.toLocaleString()} to Bank</span>
+                </button>
+              )}
             </div>
           )}
         </div>

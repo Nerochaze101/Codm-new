@@ -72,7 +72,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
         },
         onSuccess: async (ref, txId) => {
           try {
-            const result = await depositWallet(currentUser.id, amountToFund, 'Flutterwave Instant Deposit');
+            const result = await depositWallet(currentUser.id, amountToFund, 'Flutterwave Instant Deposit', ref, txId);
             setIsProcessing(false);
             setSuccessInfo({
               amount: amountToFund,
@@ -110,7 +110,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
         },
         onSuccess: async (ref) => {
           try {
-            const result = await depositWallet(currentUser.id, amountToFund, 'Paystack Instant Deposit');
+            const result = await depositWallet(currentUser.id, amountToFund, 'Paystack Instant Deposit', ref, ref);
             setIsProcessing(false);
             setSuccessInfo({
               amount: amountToFund,
