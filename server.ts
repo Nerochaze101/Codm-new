@@ -1142,7 +1142,61 @@ const FLUTTERWAVE_BANK_CODES: Record<string, string> = {
   'stanbic ibtc': '221',
   'fidelity': '070',
   'fidelity bank': '070',
+  'sterling': '232',
+  'sterling bank': '232',
+  'fcmb': '214',
+  'first city monument bank': '214',
+  'union': '032',
+  'union bank': '032',
+  'providus': '101',
+  'providus bank': '101',
 };
+
+// Smart Bank Code Resolver for Flutterwave
+function getFlutterwaveBankCode(name: string, explicitCode?: string): string {
+  if (explicitCode && /^\d+$/.test(explicitCode.trim())) return explicitCode.trim();
+  const n = (name || '').toLowerCase().trim();
+  if (n.includes('opay') || n.includes('paycom')) return '100004';
+  if (n.includes('palmpay')) return '100033';
+  if (n.includes('kuda')) return '090267';
+  if (n.includes('moniepoint')) return '090405';
+  if (n.includes('gtb') || n.includes('guaranty')) return '058';
+  if (n.includes('zenith')) return '057';
+  if (n.includes('access')) return '044';
+  if (n.includes('first bank')) return '011';
+  if (n.includes('uba') || n.includes('united bank')) return '033';
+  if (n.includes('wema')) return '035';
+  if (n.includes('stanbic')) return '221';
+  if (n.includes('fidelity')) return '070';
+  if (n.includes('sterling')) return '232';
+  if (n.includes('fcmb') || n.includes('monument')) return '214';
+  if (n.includes('union')) return '032';
+  if (n.includes('providus')) return '101';
+  return FLUTTERWAVE_BANK_CODES[n] || '100004';
+}
+
+// Smart Bank Code Resolver for Paystack
+function getPaystackBankCode(name: string, explicitCode?: string): string {
+  if (explicitCode && /^\d+$/.test(explicitCode.trim())) return explicitCode.trim();
+  const n = (name || '').toLowerCase().trim();
+  if (n.includes('opay') || n.includes('paycom')) return '999992';
+  if (n.includes('palmpay')) return '999991';
+  if (n.includes('kuda')) return '50211';
+  if (n.includes('moniepoint')) return '50515';
+  if (n.includes('gtb') || n.includes('guaranty')) return '058';
+  if (n.includes('zenith')) return '057';
+  if (n.includes('access')) return '044';
+  if (n.includes('first bank')) return '011';
+  if (n.includes('uba') || n.includes('united bank')) return '033';
+  if (n.includes('wema')) return '035';
+  if (n.includes('stanbic')) return '221';
+  if (n.includes('fidelity')) return '070';
+  if (n.includes('sterling')) return '232';
+  if (n.includes('fcmb') || n.includes('monument')) return '214';
+  if (n.includes('union')) return '032';
+  if (n.includes('providus')) return '101';
+  return PAYSTACK_BANK_CODES[n] || '999992';
+}
 
 // Direct Payout / Cashout Tester Endpoint (runs real payout against selected gateway)
 app.post('/api/admin/test-cashout', async (req, res) => {
@@ -1152,15 +1206,15 @@ app.post('/api/admin/test-cashout', async (req, res) => {
     accountNumber = '9151609682',
     accountName = 'Nurudeen Bolaji Abdulsalam',
     gateway = 'flutterwave',
+    bankCode,
   } = req.body;
 
   const numAmount = Number(amount);
   const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || '';
   const paystackSecret = process.env.PAYSTACK_SECRET_KEY || '';
-  const cleanBank = bankName.trim().toLowerCase();
 
-  const flwCode = FLUTTERWAVE_BANK_CODES[cleanBank] || '100004';
-  const paystackCode = PAYSTACK_BANK_CODES[cleanBank] || '999992';
+  const flwCode = getFlutterwaveBankCode(bankName, bankCode);
+  const paystackCode = getPaystackBankCode(bankName, bankCode);
 
   if (gateway === 'flutterwave') {
     if (!flwSecret || flwSecret.startsWith('FLWSECK_TEST-xxxx')) {
@@ -1168,7 +1222,7 @@ app.post('/api/admin/test-cashout', async (req, res) => {
     }
 
     try {
-      console.log(`[TEST-CASHOUT] Initiating Flutterwave payout: ₦${numAmount} to ${accountNumber} (${cleanBank} / code ${flwCode})...`);
+      console.log(`[TEST-CASHOUT] Initiating Flutterwave payout: ₦${numAmount} to ${accountNumber} (${bankName} / code ${flwCode})...`);
       const flwRes = await fetch('https://api.flutterwave.com/v3/transfers', {
         method: 'POST',
         headers: {
@@ -1214,7 +1268,7 @@ app.post('/api/admin/test-cashout', async (req, res) => {
     }
 
     try {
-      console.log(`[TEST-CASHOUT] Resolving with Paystack: ${accountNumber} (${cleanBank} / code ${paystackCode})...`);
+      console.log(`[TEST-CASHOUT] Resolving with Paystack: ${accountNumber} (${bankName} / code ${paystackCode})...`);
       const resolveRes = await fetch(`https://api.paystack.co/bank/resolve?account_number=${accountNumber.trim()}&bank_code=${paystackCode}`, {
         headers: { Authorization: `Bearer ${paystackSecret}` },
       });
@@ -1286,9 +1340,8 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
     return res.status(400).json({ error: 'Insufficient available balance' });
   }
 
-  const cleanBank = bankName.trim().toLowerCase();
-  const flwCode = bankCode || FLUTTERWAVE_BANK_CODES[cleanBank] || '100004';
-  const paystackCode = bankCode || PAYSTACK_BANK_CODES[cleanBank] || '999992';
+  const flwCode = getFlutterwaveBankCode(bankName, bankCode);
+  const paystackCode = getPaystackBankCode(bankName, bankCode);
 
   const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || '';
   const paystackSecret = process.env.PAYSTACK_SECRET_KEY || '';

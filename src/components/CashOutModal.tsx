@@ -12,29 +12,36 @@ interface CashOutModalProps {
       bankName: string;
       accountNumber: string;
       accountName: string;
+      bankCode?: string;
       gateway?: 'flutterwave' | 'paystack';
     }
   ) => Promise<void>;
   onSaveBankInfo?: (bankDetails: { bankName: string; accountNumber: string; accountName: string }) => Promise<void>;
 }
 
-const NIGERIAN_BANKS = [
-  'OPay Digital Bank',
-  'PalmPay',
-  'GTBank (Guaranty Trust Bank)',
-  'Kuda Bank',
-  'Moniepoint Microfinance Bank',
-  'Zenith Bank',
-  'Access Bank',
-  'First Bank of Nigeria',
-  'UBA (United Bank for Africa)',
-  'Wema Bank',
-  'Stanbic IBTC Bank',
-  'Fidelity Bank',
-  'Sterling Bank',
-  'FCMB (First City Monument Bank)',
-  'Union Bank',
-  'Providus Bank',
+export interface SupportedBank {
+  name: string;
+  flwCode: string;
+  paystackCode: string;
+}
+
+export const SUPPORTED_BANKS: SupportedBank[] = [
+  { name: 'OPay Digital Bank', flwCode: '100004', paystackCode: '999992' },
+  { name: 'PalmPay', flwCode: '100033', paystackCode: '999991' },
+  { name: 'Moniepoint Microfinance Bank', flwCode: '090405', paystackCode: '50515' },
+  { name: 'Kuda Bank', flwCode: '090267', paystackCode: '50211' },
+  { name: 'GTBank (Guaranty Trust Bank)', flwCode: '058', paystackCode: '058' },
+  { name: 'Zenith Bank', flwCode: '057', paystackCode: '057' },
+  { name: 'Access Bank', flwCode: '044', paystackCode: '044' },
+  { name: 'First Bank of Nigeria', flwCode: '011', paystackCode: '011' },
+  { name: 'UBA (United Bank for Africa)', flwCode: '033', paystackCode: '033' },
+  { name: 'Wema Bank (ALAT)', flwCode: '035', paystackCode: '035' },
+  { name: 'Stanbic IBTC Bank', flwCode: '221', paystackCode: '221' },
+  { name: 'Fidelity Bank', flwCode: '070', paystackCode: '070' },
+  { name: 'Sterling Bank', flwCode: '232', paystackCode: '232' },
+  { name: 'FCMB (First City Monument Bank)', flwCode: '214', paystackCode: '214' },
+  { name: 'Union Bank', flwCode: '032', paystackCode: '032' },
+  { name: 'Providus Bank', flwCode: '101', paystackCode: '101' },
 ];
 
 export const CashOutModal: React.FC<CashOutModalProps> = ({
@@ -51,8 +58,12 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
   const [gateway, setGateway] = useState<'flutterwave' | 'paystack'>('flutterwave');
   const [isConfirmStep, setIsConfirmStep] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isResolving, setIsResolving] = useState(false);
+  const [resolvedAccountName, setResolvedAccountName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  const selectedBankObj = SUPPORTED_BANKS.find((b) => b.name === bankName) || SUPPORTED_BANKS[0];
 
   useEffect(() => {
     if (isOpen) {
@@ -60,12 +71,48 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
       setSuccessMsg(null);
       setIsSubmitting(false);
       setIsConfirmStep(false);
+      setResolvedAccountName(null);
       setAmountInput(currentUser.balance > 0 ? currentUser.balance.toString() : '1000');
       setBankName(currentUser.bankName || 'OPay Digital Bank');
       setAccountNumber(currentUser.accountNumber || '');
       setAccountName(currentUser.accountName || currentUser.codmIgn || '');
     }
   }, [isOpen, currentUser]);
+
+  // Live account resolution via Flutterwave when 10 digits are typed
+  useEffect(() => {
+    const trimmed = accountNumber.trim();
+    if (trimmed.length === 10 && selectedBankObj?.flwCode) {
+      let isMounted = true;
+      setIsResolving(true);
+      fetch('/api/flutterwave/resolve-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountNumber: trimmed,
+          bankCode: selectedBankObj.flwCode,
+        }),
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (!isMounted) return;
+          setIsResolving(false);
+          if (data.status === 'success' && data.data?.account_name) {
+            setResolvedAccountName(data.data.account_name);
+            setAccountName(data.data.account_name);
+          }
+        })
+        .catch(() => {
+          if (isMounted) setIsResolving(false);
+        });
+
+      return () => {
+        isMounted = false;
+      };
+    } else {
+      setResolvedAccountName(null);
+    }
+  }, [accountNumber, bankName]);
 
   if (!isOpen) return null;
 
@@ -122,10 +169,12 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
       }
 
       // Execute cashout
+      const bankCode = gateway === 'flutterwave' ? selectedBankObj.flwCode : selectedBankObj.paystackCode;
       await onConfirmCashOut(amountToWithdraw, {
         bankName,
         accountNumber: accountNumber.trim(),
         accountName: accountName.trim(),
+        bankCode,
         gateway,
       });
 
@@ -364,9 +413,9 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
                   onChange={(e) => setBankName(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-semibold text-xs focus:outline-none focus:border-emerald-400 cursor-pointer"
                 >
-                  {NIGERIAN_BANKS.map((b) => (
-                    <option key={b} value={b} className="bg-neutral-900 text-white">
-                      {b}
+                  {SUPPORTED_BANKS.map((b) => (
+                    <option key={b.name} value={b.name} className="bg-neutral-900 text-white">
+                      {b.name}
                     </option>
                   ))}
                 </select>
@@ -374,9 +423,22 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
 
               {/* Account Number Input */}
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider block">
-                  10-Digit Account Number
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider block">
+                    10-Digit Account Number
+                  </label>
+                  {isResolving && (
+                    <span className="text-[10px] text-amber-400 font-mono animate-pulse">
+                      Verifying with Flutterwave...
+                    </span>
+                  )}
+                  {resolvedAccountName && !isResolving && (
+                    <span className="text-[10px] text-emerald-400 font-mono flex items-center gap-1 font-bold">
+                      <CheckCircle2 className="w-3 h-3" />
+                      Verified
+                    </span>
+                  )}
+                </div>
                 <input
                   type="text"
                   inputMode="numeric"
@@ -387,28 +449,35 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
                     setAccountNumber(val);
                     setError(null);
                   }}
-                  placeholder="e.g. 8031234567 or 9012345678"
+                  placeholder="e.g. 9151609682 (OPay) or bank NUBAN"
                   className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono-nums font-bold text-sm focus:outline-none focus:border-emerald-400"
                 />
               </div>
 
               {/* Account Name Input */}
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider block">
-                  Account Name (As on Bank Record)
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider block">
+                    Account Name (As on Bank Record)
+                  </label>
+                  {resolvedAccountName && (
+                    <span className="text-[10px] text-emerald-400 font-mono">
+                      Matched from bank record
+                    </span>
+                  )}
+                </div>
                 <input
                   type="text"
                   value={accountName}
                   onChange={(e) => setAccountName(e.target.value)}
-                  placeholder="e.g. John Doe or CODM Ace"
+                  placeholder="e.g. Nurudeen Bolaji Abdulsalam"
                   className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-semibold text-xs focus:outline-none focus:border-emerald-400"
                 />
               </div>
 
               <div className="p-3 rounded-xl bg-neutral-950/80 border border-neutral-800 text-[11px] text-neutral-400 flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>Bank details are saved to your profile for instant payouts.</span>
+                <span>Instant automated payout directly from Flutterwave to your bank account.</span>
               </div>
 
               {/* Next Step Review Button */}
