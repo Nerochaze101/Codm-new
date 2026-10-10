@@ -596,6 +596,27 @@ app.get('/api/flutterwave/settlements', async (req, res) => {
   }
 });
 
+// Outbound Server IP Lookup (used to obtain Render IP for Flutterwave Whitelisting)
+app.get('/api/server-ip', async (req, res) => {
+  try {
+    const ipRes = await fetch('https://api.ipify.org?format=json');
+    const ipData = await ipRes.json();
+    return res.json({
+      success: true,
+      ip: ipData.ip,
+      service: 'Render / Cloud Backend',
+      instructions: [
+        `Copy IP: ${ipData.ip}`,
+        'Log in to Flutterwave Dashboard (https://dashboard.flutterwave.com)',
+        'Navigate to Settings -> Security / API Keys -> IP Whitelist',
+        `Paste ${ipData.ip} and save changes.`,
+      ],
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Verify Paystack transaction by reference
 app.get('/api/paystack/verify/:reference', async (req, res) => {
   const { reference } = req.params;
