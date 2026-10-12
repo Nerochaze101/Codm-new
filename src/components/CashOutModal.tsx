@@ -191,7 +191,7 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="relative w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+      <div className="relative w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[95vh] pb-6">
         {/* Header */}
         <div className="p-5 border-b border-neutral-800 bg-neutral-950/80 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -354,7 +354,7 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
                       setError(null);
                     }}
                     placeholder="Enter amount (e.g. 1000, 5000)"
-                    className="w-full pl-8 pr-4 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono-nums font-bold text-sm focus:outline-none focus:border-emerald-400"
+                    className="w-full pl-8 pr-4 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono-nums font-bold text-base focus:outline-none focus:border-emerald-400"
                   />
                 </div>
               </div>
@@ -450,7 +450,7 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
                     setError(null);
                   }}
                   placeholder="e.g. 9151609682 (OPay) or bank NUBAN"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono-nums font-bold text-sm focus:outline-none focus:border-emerald-400"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono-nums font-bold text-base focus:outline-none focus:border-emerald-400"
                 />
               </div>
 
@@ -471,7 +471,7 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
                   value={accountName}
                   onChange={(e) => setAccountName(e.target.value)}
                   placeholder="e.g. Nurudeen Bolaji Abdulsalam"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-semibold text-xs focus:outline-none focus:border-emerald-400"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-semibold text-base focus:outline-none focus:border-emerald-400"
                 />
               </div>
 
