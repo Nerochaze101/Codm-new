@@ -54,7 +54,7 @@ function MainApp() {
   const pathname = location.pathname;
   let currentTab = 'landing';
   if (pathname === '/auth') currentTab = 'auth';
-  else if (pathname === '/arena') currentTab = 'arena';
+  else if (pathname === '/arena' || (pathname === '/' && currentUser.id !== 'guest')) currentTab = 'arena';
   else if (pathname === '/rules') currentTab = 'rules';
   else if (pathname === '/history') currentTab = 'history';
   else if (pathname === '/profile') currentTab = 'profile';
@@ -222,10 +222,14 @@ function MainApp() {
   };
 
   const handleCancelMatch = async (matchId: string) => {
-    await cancelMatch(matchId);
-    const updatedUser = await fetchUser(currentUser.id);
-    setCurrentUser(updatedUser);
-    await loadData();
+    try {
+      await cancelMatch(matchId);
+      const updatedUser = await fetchUser(currentUser.id);
+      setCurrentUser(updatedUser);
+      await loadData();
+    } catch (err: any) {
+      alert(err.message || 'Failed to cancel match');
+    }
   };
 
   const handleSignUp = async (data: {

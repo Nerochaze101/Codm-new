@@ -278,15 +278,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
 
               {/* Action row: Simulate & Cancel */}
               <div className="flex flex-wrap items-center justify-between gap-3 pt-1 text-xs">
-                {onSimulateOpponentStake && isCreatorOfActive && (
-                  <button
-                    onClick={() => onSimulateOpponentStake(myActiveMatch.id)}
-                    className="px-3.5 py-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-amber-400 text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
-                  >
-                    <Zap className="w-3.5 h-3.5" />
-                    <span>Simulate Opponent Staking ₦{myActiveMatch.stakeAmount.toLocaleString()} (Test)</span>
-                  </button>
-                )}
+                {/* Simulated Opponent button removed */}
 
                 {!isCreatorOfActive && (
                   <button
