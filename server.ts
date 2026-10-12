@@ -458,7 +458,64 @@ async function saveMatchToDb(match: any) {
   }
 }
 
+
+async function updatePlatformFinance(fee: number) {
+  try {
+    await pool.query(`
+      UPDATE platform_finance 
+      SET total_fees_collected = total_fees_collected + ${escapeSql(fee)}
+      WHERE id = 'main'
+    `);
+  } catch (err) {
+    console.error('Error updating platform finance:', err);
+  }
+}
+
+async function withdrawPlatformFees(amount: number) {
+  try {
+    const res = await pool.query(`
+      UPDATE platform_finance 
+      SET total_fees_withdrawn = total_fees_withdrawn + ${escapeSql(amount)}
+      WHERE id = 'main' AND (total_fees_collected - total_fees_withdrawn) >= ${escapeSql(amount)}
+      RETURNING *
+    `);
+    return res.rows.length > 0;
+  } catch (err) {
+    console.error('Error withdrawing platform fees:', err);
+    return false;
+  }
+}
+
 // REST API ROUTES
+app.post('/api/admin/withdraw', async (req, res) => {
+  const { userId, amount } = req.body;
+  const user = await getUserFromDb(userId);
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  const success = await withdrawPlatformFees(Number(amount));
+  if (success) {
+    // Also add to user's wallet? Or just record the withdrawal?
+    // User said "withdraw from dashboard", let's assume it goes to their wallet.
+    user.balance += Number(amount);
+    await saveUserToDb(user);
+    res.json({ success: true });
+  } else {
+    res.status(400).json({ error: 'Insufficient funds or withdrawal failed' });
+  }
+});
+
+app.get('/api/admin/finance', async (req, res) => {
+    const { userId } = req.query;
+    const user = await getUserFromDb(userId as string);
+    if (!user || user.role !== 'admin') {
+        return res.status(403).json({ error: 'Unauthorized' });
+    }
+    const resFin = await pool.query(`SELECT * FROM platform_finance WHERE id = 'main'`);
+    res.json(resFin.rows[0]);
+});
+
 app.get('/api/health', async (req, res) => {
   try {
     const client = await pool.connect();
@@ -2312,6 +2369,7 @@ Respond strictly in valid JSON format:
     match.status = 'SETTLED';
     match.winnerId = winnerObj.id;
     match.winnerIgn = winnerObj.codmIgn;
+    await updatePlatformFinance(match.platformFee);
 
     // Settle Escrow
     const creatorUser = await getUserFromDb(match.creator.id);
@@ -2440,6 +2498,7 @@ app.post('/api/matches/:id/admin-resolve', async (req, res) => {
   match.status = 'SETTLED';
   match.winnerId = winnerObj.id;
   match.winnerIgn = winnerObj.codmIgn;
+  await updatePlatformFinance(match.platformFee);
   match.resolutionNotes = `Referee adjudicated in favor of ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} paid out to winner.`;
 
   match.chatMessages.push({

@@ -247,6 +247,7 @@ export async function initDatabase() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by VARCHAR(255);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code VARCHAR(100);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS total_referral_earnings NUMERIC DEFAULT 0;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user';
 
       CREATE TABLE IF NOT EXISTS matches (
         id VARCHAR(255) PRIMARY KEY,
@@ -286,6 +287,15 @@ export async function initDatabase() {
         match_id VARCHAR(255),
         timestamp BIGINT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS platform_finance (
+        id VARCHAR(255) PRIMARY KEY,
+        total_fees_collected NUMERIC DEFAULT 0,
+        total_fees_withdrawn NUMERIC DEFAULT 0
+      );
+      
+      INSERT INTO platform_finance (id, total_fees_collected, total_fees_withdrawn) 
+      VALUES ('main', 0, 0) ON CONFLICT (id) DO NOTHING;
     `);
 
     // Seed default starter players if table is empty

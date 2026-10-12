@@ -34,6 +34,11 @@ export const BottomNavbar: React.FC<BottomNavbarProps> = ({
       label: 'Profile',
       icon: User,
     },
+    {
+      id: 'referrals',
+      label: 'Referrals',
+      icon: Trophy,
+    },
   ];
 
   return (

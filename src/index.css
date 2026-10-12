@@ -6,6 +6,9 @@
     background-color: #08090d;
     color: #f3f4f6;
   }
+  img {
+    opacity: 0.9;
+  }
 }
 
 .font-heading {

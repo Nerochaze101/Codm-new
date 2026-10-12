@@ -18,6 +18,8 @@ import { ProfilePage } from './components/ProfilePage';
 import { CreateBetModal } from './components/CreateBetModal';
 import { OpponentOnboardingModal } from './components/OpponentOnboardingModal';
 import { FundWalletModal } from './components/FundWalletModal';
+import { ReferralPage } from './components/ReferralPage';
+import { AdminDashboard } from './components/AdminDashboard';
 
 function MainApp() {
   const navigate = useNavigate();
@@ -57,6 +59,7 @@ function MainApp() {
   else if (pathname === '/arena' || (pathname === '/' && currentUser.id !== 'guest')) currentTab = 'arena';
   else if (pathname === '/rules') currentTab = 'rules';
   else if (pathname === '/history') currentTab = 'history';
+  else if (pathname === '/referrals') currentTab = 'referrals';
   else if (pathname === '/profile') currentTab = 'profile';
 
   // Initial Data Fetch & URL Deep Link Check
@@ -222,12 +225,15 @@ function MainApp() {
   };
 
   const handleCancelMatch = async (matchId: string) => {
+    console.log('Attempting to cancel match:', matchId);
     try {
       await cancelMatch(matchId);
+      console.log('Match cancellation request successful');
       const updatedUser = await fetchUser(currentUser.id);
       setCurrentUser(updatedUser);
       await loadData();
     } catch (err: any) {
+      console.error('Match cancellation failed:', err);
       alert(err.message || 'Failed to cancel match');
     }
   };
@@ -411,8 +417,26 @@ function MainApp() {
                 onNavigateToArena={() => navigate('/arena')}
                 onNavigateToHistory={() => navigate('/history')}
                 onNavigateToRules={() => navigate('/rules')}
+                onNavigateToReferrals={() => navigate('/referrals')}
                 onOpenCreateBet={handleOpenCreateBet}
                 onSignOut={handleSignOut}
+              />
+            }
+          />
+          <Route
+            path="/referrals"
+            element={
+              <ReferralPage
+                currentUser={currentUser}
+                onNavigateBack={() => navigate('/profile')}
+              />
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <AdminDashboard
+                currentUser={currentUser}
               />
             }
           />
