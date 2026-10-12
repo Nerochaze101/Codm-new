@@ -421,6 +421,7 @@ async function saveMatchToDb(match: any) {
       ON CONFLICT (id) DO UPDATE SET
         room_code = EXCLUDED.room_code,
         status = EXCLUDED.status,
+        creator_data = EXCLUDED.creator_data,
         opponent_id = EXCLUDED.opponent_id,
         opponent_data = EXCLUDED.opponent_data,
         winner_id = EXCLUDED.winner_id,
@@ -2110,33 +2111,90 @@ Respond strictly in valid JSON format:
   // Record submission
   if (isCreator) {
     match.creator.resultClaim = claim;
-    match.creator.screenshotUrl = screenshotBase64;
-    match.creator.screenshotAnalysis = analysisResult;
+    if (screenshotBase64) {
+      match.creator.screenshotUrl = screenshotBase64;
+      match.creator.screenshotAnalysis = analysisResult;
+    }
     match.creator.submittedAt = Date.now();
   } else if (match.opponent) {
     match.opponent.resultClaim = claim;
-    match.opponent.screenshotUrl = screenshotBase64;
-    match.opponent.screenshotAnalysis = analysisResult;
+    if (screenshotBase64) {
+      match.opponent.screenshotUrl = screenshotBase64;
+      match.opponent.screenshotAnalysis = analysisResult;
+    }
     match.opponent.submittedAt = Date.now();
   }
 
-  match.chatMessages.push({
-    id: `msg_${Date.now()}`,
-    senderId: 'SYSTEM',
-    senderName: 'CODM Referee Bot',
-    text: `📸 ${playerIgn} submitted match proof claiming: ${claim}. Analysis confidence: ${Math.round((analysisResult.confidence || 0.95) * 100)}%.`,
-    timestamp: Date.now(),
-  });
+  const cClaim = match.creator.resultClaim;
+  const oClaim = match.opponent?.resultClaim;
+  const isDisputeMode = match.status === 'DISPUTED';
 
-  // Evaluate match resolution:
+  // Evaluate match resolution
   let resolveWinner: 'creator' | 'opponent' | 'draw' | 'dispute' | null = null;
 
-  if (claim === 'DRAW') {
-    resolveWinner = 'draw';
-  } else if (claim === 'VICTORY') {
-    resolveWinner = isCreator ? 'creator' : 'opponent';
-  } else if (claim === 'DEFEAT') {
-    resolveWinner = isCreator ? 'opponent' : 'creator';
+  if (isDisputeMode) {
+    // Already in conflict mode: screenshot proof is evaluated
+    if (screenshotBase64) {
+      match.chatMessages.push({
+        id: `msg_${Date.now()}`,
+        senderId: 'SYSTEM',
+        senderName: 'CODM Referee Bot',
+        text: `📸 ${playerIgn} submitted dispute scoreboard screenshot: ${analysisResult.detectedOutcome} (${Math.round((analysisResult.confidence || 0.95) * 100)}% Confidence).`,
+        timestamp: Date.now(),
+      });
+
+      // Auto-resolve dispute if screenshot clearly shows victory
+      if (analysisResult.detectedOutcome === 'VICTORY' && (analysisResult.confidence || 0) >= 0.8) {
+        resolveWinner = isCreator ? 'creator' : 'opponent';
+      } else if (analysisResult.detectedOutcome === 'DEFEAT') {
+        resolveWinner = isCreator ? 'opponent' : 'creator';
+      }
+    } else {
+      match.chatMessages.push({
+        id: `msg_${Date.now()}`,
+        senderId: 'SYSTEM',
+        senderName: 'CODM Referee Bot',
+        text: `⚠️ Match is in dispute. Please upload your post-game scoreboard screenshot to resolve.`,
+        timestamp: Date.now(),
+      });
+    }
+  } else {
+    // FAST 3-BUTTON MATCH OUTCOME (No screenshot required!)
+    const claimLabel = claim === 'VICTORY' ? 'I Won 🏆' : claim === 'DEFEAT' ? 'I Lost ❌' : 'Draw ⚖️';
+    match.chatMessages.push({
+      id: `msg_${Date.now()}`,
+      senderId: 'SYSTEM',
+      senderName: 'CODM Referee Bot',
+      text: `⚡ ${playerIgn} confirmed match result: "${claimLabel}".`,
+      timestamp: Date.now(),
+    });
+
+    // 1. If this player admitted defeat ("I Lost"), immediate concession!
+    if (claim === 'DEFEAT') {
+      resolveWinner = isCreator ? 'opponent' : 'creator';
+    }
+    // 2. If both players have submitted
+    else if (cClaim && oClaim) {
+      if (cClaim === 'VICTORY' && oClaim === 'DEFEAT') {
+        resolveWinner = 'creator';
+      } else if (cClaim === 'DEFEAT' && oClaim === 'VICTORY') {
+        resolveWinner = 'opponent';
+      } else if (cClaim === 'DRAW' && oClaim === 'DRAW') {
+        resolveWinner = 'draw';
+      } else if (cClaim === 'VICTORY' && oClaim === 'VICTORY') {
+        // CONFLICT! Both claimed "I Won"
+        resolveWinner = 'dispute';
+      } else if (cClaim === 'DEFEAT' && oClaim === 'DEFEAT') {
+        resolveWinner = 'draw';
+      } else {
+        // Conflicting results (e.g. VICTORY vs DRAW)
+        resolveWinner = 'dispute';
+      }
+    }
+    // 3. Only one player has submitted so far
+    else {
+      resolveWinner = null;
+    }
   }
 
   if (resolveWinner === 'draw') {
@@ -2158,13 +2216,13 @@ Respond strictly in valid JSON format:
     match.roomCode = newRoomCode;
     match.roomGeneratedAt = Date.now();
     match.status = 'READY_TO_PLAY';
-    match.resolutionNotes = `Match resulted in a DRAW / TIE. Rematch initiated with new room code #${newRoomCode}. Stakes remain locked in escrow.`;
+    match.resolutionNotes = `Match resulted in a mutual DRAW / TIE. Rematch room #${newRoomCode} generated. Stakes remain securely locked in escrow.`;
 
     match.chatMessages.push({
       id: `msg_${Date.now()}_rematch`,
       senderId: 'SYSTEM',
       senderName: 'CODM Referee Bot',
-      text: `⚖️ DRAW / TIE DETECTED! Both stakes (₦${match.stakeAmount.toLocaleString()} each) remain locked in escrow. 🎯 NEW REMATCH IN-GAME ROOM NUMBER GENERATED: ${newRoomCode}. Both players: open CODM > Private Match > Join #${newRoomCode} and battle!`,
+      text: `⚖️ MUTUAL DRAW CONFIRMED! Stakes remain protected in escrow. 🎯 REMATCH ROOM CODE GENERATED: #${newRoomCode}. Both players join #${newRoomCode} in CODM!`,
       timestamp: Date.now(),
     });
   } else if (resolveWinner === 'creator' || resolveWinner === 'opponent') {
@@ -2177,7 +2235,7 @@ Respond strictly in valid JSON format:
     match.winnerId = winnerObj.id;
     match.winnerIgn = winnerObj.codmIgn;
 
-    // Settle Escrow!
+    // Settle Escrow
     const creatorUser = await getUserFromDb(match.creator.id);
     if (creatorUser) {
       creatorUser.escrowBalance = Math.max(0, creatorUser.escrowBalance - match.stakeAmount);
@@ -2192,57 +2250,32 @@ Respond strictly in valid JSON format:
       }
     }
 
-    // Winner gets the pot minus platform fee
+    // Winner gets the pot minus platform fee credited to wallet balance
     if (winnerUser) {
+      winnerUser.balance += match.winnerPayout;
       winnerUser.totalWinnings += match.winnerPayout;
       winnerUser.wins += 1;
 
       const hasBank = winnerUser.bankName && winnerUser.accountNumber;
-      let txW;
-      if (hasBank) {
-        txW = {
-          id: `tx_${Date.now()}_win_cashout`,
-          type: 'WITHDRAWAL' as const,
-          amount: match.winnerPayout,
-          description: `🚀 Direct Automated Bank Payout: ₦${match.winnerPayout.toLocaleString()} transferred to ${winnerUser.bankName} (${winnerUser.accountNumber} - ${winnerUser.accountName || winnerUser.codmIgn})`,
-          timestamp: Date.now(),
-          matchId: match.id,
-        };
-        winnerUser.transactions.unshift(txW);
+      const txW = {
+        id: `tx_${Date.now()}_win`,
+        type: 'MATCH_WIN_PAYOUT' as const,
+        amount: match.winnerPayout,
+        description: `🏆 Won 1v1 Escrow Match #${match.roomCode} vs ${loserObj.codmIgn}: ₦${match.winnerPayout.toLocaleString()} credited to wallet balance.${hasBank ? ` Ready for instant cashout to ${winnerUser.bankName} (${winnerUser.accountNumber}).` : ' Ready for instant cashout.'}`,
+        timestamp: Date.now(),
+        matchId: match.id,
+      };
+      winnerUser.transactions.unshift(txW);
 
-        match.resolutionNotes = `Match verified! Winner is ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} winning funds were automatically sent directly to saved bank account (${winnerUser.bankName} - ${winnerUser.accountNumber}).`;
+      match.resolutionNotes = `Match resolved! Winner is ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} credited to winner's wallet. Ready for instant cashout!`;
 
-        match.chatMessages.push({
-          id: `msg_${Date.now()}_settle`,
-          senderId: 'SYSTEM',
-          senderName: 'CODM Referee Bot',
-          text: `🏆 MATCH CONCLUDED! Winner: ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} winning payout was automatically sent directly to saved bank details (${winnerUser.bankName} - ${winnerUser.accountNumber})!`,
-          timestamp: Date.now(),
-        });
-      } else {
-        winnerUser.balance += match.winnerPayout;
-        const payoutDesc = `🏆 Won 1v1 Escrow Match #${match.roomCode} vs ${loserObj.codmIgn}: ₦${match.winnerPayout.toLocaleString()} ready for cashout. Enter bank details to withdraw now.`;
-
-        txW = {
-          id: `tx_${Date.now()}_win`,
-          type: 'MATCH_WIN_PAYOUT' as const,
-          amount: match.winnerPayout,
-          description: payoutDesc,
-          timestamp: Date.now(),
-          matchId: match.id,
-        };
-        winnerUser.transactions.unshift(txW);
-
-        match.resolutionNotes = `Match verified! Winner is ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} ready for instant cashout. Enter bank details now to send funds directly to your bank.`;
-
-        match.chatMessages.push({
-          id: `msg_${Date.now()}_settle`,
-          senderId: 'SYSTEM',
-          senderName: 'CODM Referee Bot',
-          text: `🏆 MATCH CONCLUDED! Winner: ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} winning payout is ready! Please enter your bank details below to cash out directly to your bank account.`,
-          timestamp: Date.now(),
-        });
-      }
+      match.chatMessages.push({
+        id: `msg_${Date.now()}_settle`,
+        senderId: 'SYSTEM',
+        senderName: 'CODM Referee Bot',
+        text: `🏆 MATCH CONCLUDED! Winner: ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} winning payout has been added to their wallet balance and is ready for instant cashout!`,
+        timestamp: Date.now(),
+      });
 
       await saveUserToDb(winnerUser);
       await saveTransactionToDb(winnerUser.id, txW);
@@ -2254,16 +2287,17 @@ Respond strictly in valid JSON format:
     }
   } else if (resolveWinner === 'dispute') {
     match.status = 'DISPUTED';
-    match.resolutionNotes = 'Both players claimed Victory with conflicting proof. Match flagged for referee review.';
+    match.resolutionNotes = '⚠️ CONFLICT DETECTED: Both players submitted conflicting results! Post-game scoreboard screenshots are now required to verify the winner.';
     match.chatMessages.push({
       id: `msg_${Date.now()}_dispute`,
       senderId: 'SYSTEM',
       senderName: 'CODM Referee Bot',
-      text: `⚠️ DISPUTE FLAGGED: Both players claimed Victory. Reviewing screenshots with referee admin.`,
+      text: `⚠️ CONFLICT DETECTED: Both players claimed conflicting results! The ₦${match.potAmount.toLocaleString()} escrow pot is safely frozen. Both players must now upload their post-match scoreboard screenshot as proof.`,
       timestamp: Date.now(),
     });
   } else {
     match.status = 'SUBMITTING_RESULTS';
+    match.resolutionNotes = `${playerIgn} claimed "${claim === 'VICTORY' ? 'I Won 🏆' : 'Draw ⚖️'}". Waiting for opponent to confirm or dispute.`;
   }
 
   await saveMatchToDb(match);

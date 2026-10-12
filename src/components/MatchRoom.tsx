@@ -3,7 +3,7 @@ import { Match, UserProfile, ChatMessage } from '../types';
 import {
   Swords, ShieldCheck, Trophy, Copy, Check, Upload, Send, AlertTriangle,
   CheckCircle2, Clock, Sparkles, MessageSquare, ArrowLeft, RefreshCw, FileText,
-  Lock, Share2, UserCheck, Zap
+  Lock, Share2, UserCheck, Zap, Shield, XCircle
 } from 'lucide-react';
 import { StakePaymentModal } from './StakePaymentModal';
 
@@ -11,7 +11,7 @@ interface MatchRoomProps {
   match: Match;
   currentUser: UserProfile;
   onBackToLobby: () => void;
-  onSubmitResult: (claim: 'VICTORY' | 'DEFEAT', screenshotBase64?: string) => Promise<void>;
+  onSubmitResult: (claim: 'VICTORY' | 'DEFEAT' | 'DRAW', screenshotBase64?: string) => Promise<void>;
   onSendChat: (text: string) => Promise<void>;
   onRefreshMatch: () => Promise<void>;
   onOpponentStake?: (paymentMethod: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance' | 'flutterwave') => Promise<void>;
@@ -38,7 +38,7 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
 }) => {
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [selectedClaim, setSelectedClaim] = useState<'VICTORY' | 'DEFEAT'>('VICTORY');
+  const [selectedClaim, setSelectedClaim] = useState<'VICTORY' | 'DEFEAT' | 'DRAW'>('VICTORY');
   const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [chatInput, setChatInput] = useState('');
@@ -98,16 +98,22 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
     setSelectedClaim('DEFEAT');
   };
 
-  const handleResultSubmit = async () => {
-    if (!screenshotPreview && selectedClaim === 'VICTORY') {
-      setSubmitError('Please attach or select a scoreboard screenshot showing your Victory');
+  const handleResultSubmit = async (directClaim?: 'VICTORY' | 'DEFEAT' | 'DRAW') => {
+    const claimToSubmit = directClaim || selectedClaim;
+    const isConflict = match.status === 'DISPUTED';
+
+    if (isConflict && !screenshotPreview) {
+      setSubmitError('Conflict Detected: Please attach or select your scoreboard screenshot proof to resolve the dispute.');
       return;
     }
 
     setIsSubmitting(true);
     setSubmitError(null);
     try {
-      await onSubmitResult(selectedClaim, screenshotPreview || undefined);
+      await onSubmitResult(claimToSubmit, screenshotPreview || undefined);
+      if (isConflict) {
+        setScreenshotPreview(null);
+      }
     } catch (err: any) {
       setSubmitError(err.message || 'Submission failed');
     } finally {
@@ -671,28 +677,30 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
           </div>
 
           {/* Submission Card (Only active when match is in progress or awaiting results) */}
+          {/* Submission Card (Fast 3-button confirmation; screenshot only on conflict) */}
           <div className="p-6 rounded-2xl bg-neutral-900 border border-neutral-800 space-y-5">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-base font-bold font-heading text-white flex items-center gap-2">
-                  <Upload className="w-5 h-5 text-amber-400" />
-                  <span>Submit Post-Game Result & Proof</span>
+                  <Zap className="w-5 h-5 text-amber-400" />
+                  <span>Match Result Confirmation</span>
                 </h3>
                 <p className="text-xs text-neutral-400">
-                  Upload your end-game victory/defeat screenshot for automated AI verification and instant payout.
+                  Instant automated settlement: confirm winner with 3 buttons below. No screenshot required for agreed matches!
                 </p>
               </div>
 
               {myClaim && (
-                <span className="text-xs px-2 py-1 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-semibold">
-                  You Claimed: {myClaim}
+                <span className="text-xs px-2.5 py-1 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-bold">
+                  You Claimed: {myClaim === 'VICTORY' ? 'I Won 🏆' : myClaim === 'DEFEAT' ? 'I Lost ❌' : 'Draw ⚖️'}
                 </span>
               )}
             </div>
 
             {submitError && (
-              <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs">
-                {submitError}
+              <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{submitError}</span>
               </div>
             )}
 
@@ -701,166 +709,204 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                 <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto" />
                 <div className="text-sm font-bold text-white">Match Resolved & Paid Out</div>
                 <p className="text-xs text-neutral-400">
-                  This wager has concluded. Check your wallet balance for credited funds.
+                  This wager has concluded. Winning funds have been credited to the winner's wallet.
                 </p>
               </div>
+            ) : match.status === 'DISPUTED' ? (
+              /* CONFLICT DETECTED - SCREENSHOT REQUIRED ONLY HERE */
+              <div className="p-5 rounded-2xl bg-rose-950/40 border-2 border-rose-500/60 space-y-4">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-xl bg-rose-500/20 text-rose-400 shrink-0">
+                    <AlertTriangle className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <div className="text-sm font-black text-rose-300 font-heading uppercase tracking-wide">
+                      ⚠️ Conflict Detected: Both Players Submitted Conflicting Results!
+                    </div>
+                    <p className="text-xs text-neutral-300 mt-1">
+                      Both players claimed conflicting outcomes. The <strong>₦{match.potAmount.toLocaleString()}</strong> pot is held safely in escrow.
+                    </p>
+                    <p className="text-xs text-amber-400 font-semibold mt-1">
+                      📸 Please upload your post-match CODM scoreboard screenshot proof to resolve the conflict and release your winnings.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-3 pt-2 border-t border-rose-500/20">
+                  <div className="flex flex-col sm:flex-row items-center gap-2">
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      accept="image/*"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="w-full sm:w-auto px-4 py-2 bg-rose-500 hover:bg-rose-400 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      <Upload className="w-4 h-4" />
+                      <span>{screenshotPreview ? 'Change Scoreboard' : 'Upload Scoreboard Screenshot'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={useSampleVictoryScreenshot}
+                      className="w-full sm:w-auto px-3.5 py-2 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs font-bold rounded-xl transition-colors cursor-pointer whitespace-nowrap"
+                    >
+                      Use Demo Scoreboard
+                    </button>
+                  </div>
+
+                  {screenshotPreview && (
+                    <div className="h-44 rounded-xl overflow-hidden border border-rose-500/50 relative bg-black">
+                      <img
+                        src={screenshotPreview}
+                        alt="Scoreboard Preview"
+                        className="w-full h-full object-contain"
+                      />
+                      <div className="absolute top-2 right-2 px-2.5 py-1 rounded bg-black/90 text-[10px] text-emerald-400 font-bold border border-emerald-500/40 font-mono">
+                        PROOF READY FOR REFEREE REVIEW
+                      </div>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => handleResultSubmit(myClaim || 'VICTORY')}
+                    disabled={isSubmitting || !screenshotPreview}
+                    className="w-full py-3.5 bg-rose-500 hover:bg-rose-400 text-white font-black rounded-xl text-xs sm:text-sm transition-all shadow-lg cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2 uppercase tracking-wide"
+                  >
+                    {isSubmitting ? (
+                      <>
+                        <Sparkles className="w-4 h-4 animate-spin" />
+                        <span>Referee Verifying Screenshot...</span>
+                      </>
+                    ) : (
+                      <>
+                        <ShieldCheck className="w-4 h-4" />
+                        <span>Submit Scoreboard Proof & Resolve Dispute</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
             ) : myClaim ? (
-              /* Already submitted, waiting for opponent or settlement */
-              <div className="p-5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-4">
+              /* Already submitted, waiting for opponent */
+              <div className="p-5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-3.5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-emerald-400 text-sm font-bold">
                     <CheckCircle2 className="w-5 h-5" />
-                    <span>Your Screenshot & Claim Received!</span>
+                    <span>Your Result Confirmed: {myClaim === 'VICTORY' ? 'I Won 🏆' : myClaim === 'DEFEAT' ? 'I Lost ❌' : 'Draw ⚖️'}</span>
                   </div>
-                  <span className="text-xs text-neutral-400">Claim: <strong>{myClaim}</strong></span>
+                  <span className="text-xs text-amber-400 font-mono font-bold">₦{match.winnerPayout.toLocaleString()} Payout</span>
                 </div>
 
-                {myScreenshot && (
-                  <div className="relative rounded-lg overflow-hidden max-h-48 border border-neutral-800 bg-black">
-                    <img src={myScreenshot} alt="Submitted Proof" className="w-full h-full object-contain" />
+                <div className="p-4 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-neutral-300 space-y-1.5">
+                  <div className="font-semibold text-white">
+                    ⏳ Waiting for {opponentObj?.codmIgn || 'Opponent'} to confirm...
                   </div>
-                )}
-
-                {myAnalysis && (
-                  <div className="p-3 rounded-lg bg-neutral-900 border border-neutral-800 text-xs space-y-1">
-                    <div className="font-bold text-amber-400 flex items-center gap-1.5">
-                      <Sparkles className="w-3.5 h-3.5" />
-                      <span>AI Verification Result: {myAnalysis.detectedOutcome} ({Math.round((myAnalysis.confidence || 0.95) * 100)}% Confidence)</span>
-                    </div>
-                    <p className="text-neutral-300">{myAnalysis.reasoning}</p>
-                  </div>
-                )}
-
-                <div className="text-xs text-neutral-400 text-center pt-2 border-t border-neutral-800">
-                  Waiting for opponent ({opponentObj?.codmIgn || 'Opponent'}) to submit their proof...
+                  <p className="text-neutral-400 text-[11px]">
+                    ⚡ Fast instant payout: as soon as both players agree, funds will be released immediately to the winner's wallet without any screenshot delay.
+                  </p>
                 </div>
               </div>
             ) : (
-              /* Submission Form */
+              /* 3-BUTTON SUBMISSION FORM (NO SCREENSHOT REQUIRED) */
               <div className="space-y-4">
-                {/* Claim Selection */}
+                {opponentObj && (isCreator ? match.opponent?.resultClaim : match.creator.resultClaim) && (
+                  <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>
+                      <strong>{opponentObj.codmIgn}</strong> declared: <strong className="underline">
+                        {(isCreator ? match.opponent?.resultClaim : match.creator.resultClaim) === 'VICTORY'
+                          ? 'I Won 🏆'
+                          : (isCreator ? match.opponent?.resultClaim : match.creator.resultClaim) === 'DEFEAT'
+                          ? 'I Lost ❌'
+                          : 'Draw ⚖️'}
+                      </strong>. Confirm below to settle immediately!
+                    </span>
+                  </div>
+                )}
+
                 <div>
                   <label className="text-xs font-semibold text-neutral-300 uppercase tracking-wider block mb-2">
-                    Select Your Match Outcome:
+                    Select Your Match Outcome (3 Quick Buttons):
                   </label>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-3 gap-2.5">
                     <button
                       type="button"
                       onClick={() => setSelectedClaim('VICTORY')}
-                      className={`py-3 px-4 rounded-xl border text-sm font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                      className={`py-3.5 px-3 rounded-xl border text-xs font-black transition-all cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-1.5 uppercase ${
                         selectedClaim === 'VICTORY'
-                          ? 'bg-amber-400 text-neutral-950 border-amber-400 shadow-md'
+                          ? 'bg-emerald-500/25 border-emerald-400 text-emerald-400 shadow-md ring-2 ring-emerald-400/50'
                           : 'bg-neutral-950 text-neutral-300 border-neutral-800 hover:border-neutral-700'
                       }`}
                     >
-                      <Trophy className="w-4 h-4" />
-                      <span>I Won (Victory)</span>
+                      <Trophy className="w-4 h-4 text-emerald-400" />
+                      <span>I Won</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => setSelectedClaim('DEFEAT')}
-                      className={`py-3 px-4 rounded-xl border text-sm font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                      className={`py-3.5 px-3 rounded-xl border text-xs font-black transition-all cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-1.5 uppercase ${
                         selectedClaim === 'DEFEAT'
-                          ? 'bg-rose-500 text-white border-rose-500 shadow-md'
+                          ? 'bg-rose-500/25 border-rose-400 text-rose-400 shadow-md ring-2 ring-rose-400/50'
                           : 'bg-neutral-950 text-neutral-300 border-neutral-800 hover:border-neutral-700'
                       }`}
                     >
-                      <span>I Lost (Defeat)</span>
+                      <XCircle className="w-4 h-4 text-rose-400" />
+                      <span>I Lost</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSelectedClaim('DRAW')}
+                      className={`py-3.5 px-3 rounded-xl border text-xs font-black transition-all cursor-pointer flex flex-col sm:flex-row items-center justify-center gap-1.5 uppercase ${
+                        selectedClaim === 'DRAW'
+                          ? 'bg-amber-500/25 border-amber-400 text-amber-400 shadow-md ring-2 ring-amber-400/50'
+                          : 'bg-neutral-950 text-neutral-300 border-neutral-800 hover:border-neutral-700'
+                      }`}
+                    >
+                      <Shield className="w-4 h-4 text-amber-400" />
+                      <span>Draw</span>
                     </button>
                   </div>
                 </div>
 
-                {/* Screenshot Upload / Selector */}
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs font-semibold text-neutral-300 uppercase tracking-wider">
-                      CODM Scoreboard Screenshot
-                    </label>
-                    <span className="text-[11px] text-neutral-400">PNG, JPG up to 10MB</span>
-                  </div>
-
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    accept="image/*"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                  />
-
-                  {screenshotPreview ? (
-                    <div className="relative rounded-xl overflow-hidden border border-amber-500/40 bg-black group max-h-60">
-                      <img
-                        src={screenshotPreview}
-                        alt="Scoreboard preview"
-                        className="w-full h-full object-contain max-h-60"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-semibold gap-1.5"
-                      >
-                        <RefreshCw className="w-4 h-4" />
-                        <span>Change Screenshot</span>
-                      </button>
-                    </div>
-                  ) : (
-                    <div
-                      onClick={() => fileInputRef.current?.click()}
-                      className="p-6 rounded-xl border border-dashed border-neutral-700 hover:border-amber-400/60 bg-neutral-950/60 transition-colors text-center cursor-pointer space-y-2"
-                    >
-                      <Upload className="w-8 h-8 text-neutral-500 mx-auto" />
-                      <div className="text-xs font-bold text-neutral-200">
-                        Click to Upload Match Scoreboard Screenshot
-                      </div>
-                      <p className="text-[11px] text-neutral-400">
-                        Must show victory/defeat banner with kill counts
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Quick Test Demo Screenshot Buttons */}
-                  <div className="flex flex-wrap items-center gap-2 mt-2">
-                    <span className="text-[11px] text-neutral-400">Quick Test Proofs:</span>
-                    <button
-                      type="button"
-                      onClick={useSampleVictoryScreenshot}
-                      className="px-2.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-amber-300 text-xs font-medium transition-colors cursor-pointer"
-                    >
-                      Use Sample Victory Screen
-                    </button>
-                    <button
-                      type="button"
-                      onClick={useSampleDefeatScreenshot}
-                      className="px-2.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-medium transition-colors cursor-pointer"
-                    >
-                      Use Sample Defeat Screen
-                    </button>
-                  </div>
-                </div>
-
-                {/* Submit Action */}
                 <button
                   type="button"
-                  onClick={handleResultSubmit}
+                  onClick={() => handleResultSubmit()}
                   disabled={isSubmitting}
-                  className="w-full py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-bold rounded-xl text-sm transition-all cursor-pointer shadow-lg disabled:opacity-50 flex items-center justify-center gap-2"
+                  className="w-full py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm transition-all cursor-pointer shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 uppercase tracking-wide"
                 >
                   {isSubmitting ? (
                     <>
                       <Sparkles className="w-4 h-4 animate-spin" />
-                      <span>Verifying Screenshot with AI Referee...</span>
+                      <span>Confirming Result...</span>
+                    </>
+                  ) : selectedClaim === 'VICTORY' ? (
+                    <>
+                      <Trophy className="w-4 h-4" />
+                      <span>Confirm "I Won" & Claim ₦{match.winnerPayout.toLocaleString()}</span>
+                    </>
+                  ) : selectedClaim === 'DEFEAT' ? (
+                    <>
+                      <XCircle className="w-4 h-4" />
+                      <span>Confirm "I Lost" (Concede & Settle)</span>
                     </>
                   ) : (
                     <>
-                      <ShieldCheck className="w-5 h-5" />
-                      <span>Submit {selectedClaim} & Claim Payout</span>
+                      <Shield className="w-4 h-4" />
+                      <span>Confirm "Draw" & Rematch</span>
                     </>
                   )}
                 </button>
               </div>
             )}
           </div>
+
 
           {/* Test Action Bar for 1-device demonstration */}
           {onSimulateOpponentResult && match.status !== 'SETTLED' && (
