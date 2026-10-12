@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { UserProfile } from '../types';
 import {
   X, Swords, ShieldCheck, AlertCircle, Crosshair, Target, Zap,
-  Flame, Users, Flag, MapPin, Gamepad2
+  Flame, Users, Flag, MapPin, Gamepad2, Clock
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { calculateMatchEconomics } from '../utils/pricing';
@@ -18,6 +18,7 @@ interface CreateBetModalProps {
     gameMode: string;
     map: string;
     rules: string[];
+    matchDurationMinutes?: number;
   }) => Promise<void>;
   onOpenWallet?: () => void;
 }
@@ -36,6 +37,7 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
   const [gameModeInput, setGameModeInput] = useState<string>('1v1 Sniper Only');
   const [mapInput, setMapInput] = useState<string>('Shipment');
   const [rulesInput, setRulesInput] = useState<string>('Standard 1v1 rules. No scorestreaks/operators. Screenshot proof required.');
+  const [durationInput, setDurationInput] = useState<number>(15);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -50,6 +52,7 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
       if (initialMode) {
         setGameModeInput(initialMode);
       }
+      setDurationInput(15);
     }
   }, [isOpen, initialMode, initialStake]);
 
@@ -85,6 +88,7 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
           'No cheat modifications or glitches',
           'Post-match scoreboard screenshot required for AI verification',
         ],
+        matchDurationMinutes: durationInput,
       });
       onClose();
     } catch (err: any) {
@@ -262,6 +266,33 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
               placeholder="e.g. No scorestreaks, DL Q33 only, First to 10"
               className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-neutral-300 text-xs focus:outline-none focus:border-amber-400"
             />
+          </div>
+
+          {/* Match Duration Selector (15 min minimum) */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Match Duration (15 min Minimum)</span>
+              </label>
+              <span className="text-[10px] text-neutral-400 font-mono">Auto-resolves on expiry</span>
+            </div>
+            <div className="grid grid-cols-5 gap-1.5">
+              {[15, 20, 30, 45, 60].map((mins) => (
+                <button
+                  key={mins}
+                  type="button"
+                  onClick={() => setDurationInput(mins)}
+                  className={`py-2 rounded-xl text-xs font-black font-mono-nums transition-all cursor-pointer border ${
+                    durationInput === mins
+                      ? 'bg-emerald-400 text-neutral-950 border-emerald-400 shadow-md scale-105'
+                      : 'bg-neutral-950 text-neutral-300 border-neutral-800 hover:border-neutral-700'
+                  }`}
+                >
+                  {mins}m
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Stake Amount Selector */}

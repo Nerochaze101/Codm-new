@@ -136,6 +136,7 @@ export async function createMatch(data: {
   gameMode?: string;
   map?: string;
   rules?: string[];
+  matchDurationMinutes?: number;
 }): Promise<Match> {
   const res = await fetch('/api/matches', {
     method: 'POST',

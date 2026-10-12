@@ -129,6 +129,7 @@ function MainApp() {
     gameMode: string;
     map: string;
     rules: string[];
+    matchDurationMinutes?: number;
   }) => {
     await createMatch({
       creatorId: currentUser.id,
@@ -136,6 +137,7 @@ function MainApp() {
       gameMode: data.gameMode,
       map: data.map,
       rules: data.rules,
+      matchDurationMinutes: data.matchDurationMinutes,
     });
 
     const updatedUser = await fetchUser(currentUser.id);

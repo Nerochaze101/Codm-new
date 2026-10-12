@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserProfile, Match } from '../types';
 import {
   Swords, ShieldCheck, Trophy, Copy, Check, Share2, Upload,
@@ -71,6 +71,30 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
       (m.creator.id === currentUser.id || m.opponent?.id === currentUser.id) &&
       m.status !== 'CANCELLED'
   );
+
+  const [timeLeft, setTimeLeft] = useState<string>('');
+  const [isExpired, setIsExpired] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!myActiveMatch?.roomGeneratedAt || !myActiveMatch?.matchDurationMinutes) return;
+    const targetTime = myActiveMatch.roomGeneratedAt + (myActiveMatch.matchDurationMinutes * 60 * 1000);
+    const updateTimer = () => {
+      const diff = targetTime - Date.now();
+      if (diff <= 0) {
+        setTimeLeft('00:00');
+        setIsExpired(true);
+      } else {
+        const mins = Math.floor(diff / (1000 * 60));
+        const secs = Math.floor((diff % (1000 * 60)) / 1000);
+        setTimeLeft(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
+        setIsExpired(false);
+      }
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [myActiveMatch]);
 
   // Open matches created by others that currentUser can join
   const openChallenges = matches.filter(
@@ -341,6 +365,19 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
           {/* STEP 3: Room code generated & Gameplay / Submit results state */}
           {['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(myActiveMatch.status) && (
             <div className="relative z-10 space-y-4">
+              {/* Live Countdown Timer Banner */}
+              {myActiveMatch.roomGeneratedAt && (
+                <div className="flex items-center justify-between p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 text-xs shadow-inner">
+                  <div className="flex items-center gap-2 text-neutral-300">
+                    <Clock className="w-4 h-4 text-amber-400 animate-pulse" />
+                    <span>Match Countdown ({myActiveMatch.matchDurationMinutes || 15}m):</span>
+                  </div>
+                  <span className={`font-mono font-black text-sm px-3 py-1 rounded-lg ${isExpired ? 'bg-rose-500/20 text-rose-400 animate-bounce' : 'bg-amber-500/20 text-amber-400'}`}>
+                    {timeLeft || '15:00'}
+                  </span>
+                </div>
+              )}
+
               {/* Room Code Revealed Banner */}
               {myActiveMatch.roomCode && (
                 <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/40 text-center space-y-1">

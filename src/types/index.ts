@@ -1,6 +1,6 @@
 export interface Transaction {
   id: string;
-  type: 'DEPOSIT' | 'ESCROW_LOCK' | 'ESCROW_REFUND' | 'MATCH_WIN_PAYOUT' | 'WITHDRAWAL';
+  type: 'DEPOSIT' | 'ESCROW_LOCK' | 'ESCROW_REFUND' | 'MATCH_WIN_PAYOUT' | 'WITHDRAWAL' | 'REFERRAL_EARNING';
   amount: number;
   description: string;
   timestamp: number;
@@ -26,6 +26,10 @@ export interface UserProfile {
   bankName?: string;
   accountNumber?: string;
   accountName?: string;
+  referredBy?: string;
+  referralCode?: string;
+  totalReferralEarnings?: number;
+  referralCount?: number;
   transactions: Transaction[];
 }
 
@@ -68,6 +72,7 @@ export interface Match {
   platformFeePercentage: number;
   platformFee: number;
   winnerPayout: number;
+  matchDurationMinutes?: number;
   status:
     | 'PENDING_OPPONENT_STAKE'
     | 'OPPONENT_STAKED_AWAITING_CREATOR'

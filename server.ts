@@ -49,9 +49,12 @@ export interface UserProfile {
   bankName?: string;
   accountNumber?: string;
   accountName?: string;
+  referredBy?: string;
+  referralCode?: string;
+  totalReferralEarnings?: number;
   transactions: Array<{
     id: string;
-    type: 'DEPOSIT' | 'ESCROW_LOCK' | 'ESCROW_REFUND' | 'MATCH_WIN_PAYOUT' | 'WITHDRAWAL';
+    type: 'DEPOSIT' | 'ESCROW_LOCK' | 'ESCROW_REFUND' | 'MATCH_WIN_PAYOUT' | 'WITHDRAWAL' | 'REFERRAL_EARNING';
     amount: number;
     description: string;
     timestamp: number;
@@ -71,6 +74,7 @@ export interface Match {
   platformFeePercentage: number;
   platformFee: number;
   winnerPayout: number;
+  matchDurationMinutes?: number;
   status:
     | 'PENDING_OPPONENT_STAKE'
     | 'OPPONENT_STAKED_AWAITING_CREATOR'
@@ -187,6 +191,9 @@ async function getUserFromDb(id: string): Promise<UserProfile | null> {
       bankName: r.bank_name || undefined,
       accountNumber: r.account_number || undefined,
       accountName: r.account_name || undefined,
+      referredBy: r.referred_by || undefined,
+      referralCode: r.referral_code || r.username?.toLowerCase() || r.codm_ign?.toLowerCase(),
+      totalReferralEarnings: parseFloat(r.total_referral_earnings || 0),
       transactions,
     };
   } catch (err) {
@@ -199,7 +206,7 @@ async function getUserByEmailOrIgn(identifier: string): Promise<{ user: UserProf
   try {
     const cleanIdent = identifier.trim().toLowerCase();
     const userRes = await pool.query(
-      `SELECT * FROM users WHERE LOWER(email) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(codm_ign) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(username) = LOWER(${escapeSql(cleanIdent)})`
+      `SELECT * FROM users WHERE LOWER(email) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(codm_ign) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(username) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(referral_code) = LOWER(${escapeSql(cleanIdent)})`
     );
     if (userRes.rows.length === 0) return null;
     const r = userRes.rows[0];
@@ -233,6 +240,9 @@ async function getUserByEmailOrIgn(identifier: string): Promise<{ user: UserProf
       bankName: r.bank_name || undefined,
       accountNumber: r.account_number || undefined,
       accountName: r.account_name || undefined,
+      referredBy: r.referred_by || undefined,
+      referralCode: r.referral_code || r.username?.toLowerCase() || r.codm_ign?.toLowerCase(),
+      totalReferralEarnings: parseFloat(r.total_referral_earnings || 0),
       transactions,
     };
 
@@ -243,11 +253,16 @@ async function getUserByEmailOrIgn(identifier: string): Promise<{ user: UserProf
   }
 }
 
+async function getUserByReferralCodeOrIdentifier(identifier: string): Promise<UserProfile | null> {
+  const res = await getUserByEmailOrIgn(identifier);
+  return res ? res.user : null;
+}
+
 async function saveUserToDb(user: UserProfile, password?: string) {
   try {
     const passValue = password ? escapeSql(password) : 'NULL';
     await pool.query(`
-      INSERT INTO users (id, username, codm_ign, codm_uid, tier, clan, email, phone, password_hash, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, created_at)
+      INSERT INTO users (id, username, codm_ign, codm_uid, tier, clan, email, phone, password_hash, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, created_at)
       VALUES (
         ${escapeSql(user.id)},
         ${escapeSql(user.username)},
@@ -268,6 +283,9 @@ async function saveUserToDb(user: UserProfile, password?: string) {
         ${escapeSql(user.bankName || null)},
         ${escapeSql(user.accountNumber || null)},
         ${escapeSql(user.accountName || null)},
+        ${escapeSql(user.referredBy || null)},
+        ${escapeSql(user.referralCode || user.username?.toLowerCase() || user.codmIgn?.toLowerCase() || null)},
+        ${escapeSql(user.totalReferralEarnings || 0)},
         ${Date.now()}
       )
       ON CONFLICT (id) DO UPDATE SET
@@ -288,7 +306,8 @@ async function saveUserToDb(user: UserProfile, password?: string) {
         avatar = EXCLUDED.avatar,
         bank_name = EXCLUDED.bank_name,
         account_number = EXCLUDED.account_number,
-        account_name = EXCLUDED.account_name;
+        account_name = EXCLUDED.account_name,
+        referred_by = EXCLUDED.referred_by,
     `);
   } catch (err) {
     console.error(`Error saving user ${user.id} to DB:`, err);
@@ -337,6 +356,7 @@ async function getMatchFromDb(id: string): Promise<Match | null> {
       platformFeePercentage: parseInt(m.platform_fee_percentage, 10) || 10,
       platformFee: parseFloat(m.platform_fee || 0),
       winnerPayout: parseFloat(m.winner_payout),
+      matchDurationMinutes: parseInt(m.match_duration_minutes, 10) || 15,
       status: m.status,
       createdAt: parseInt(m.created_at, 10),
       creator: typeof m.creator_data === 'string' ? JSON.parse(m.creator_data) : m.creator_data,
@@ -368,6 +388,7 @@ async function getAllMatchesFromDb(): Promise<Match[]> {
       platformFeePercentage: parseInt(m.platform_fee_percentage, 10) || 10,
       platformFee: parseFloat(m.platform_fee || 0),
       winnerPayout: parseFloat(m.winner_payout),
+      matchDurationMinutes: parseInt(m.match_duration_minutes, 10) || 15,
       status: m.status,
       createdAt: parseInt(m.created_at, 10),
       creator: typeof m.creator_data === 'string' ? JSON.parse(m.creator_data) : m.creator_data,
@@ -390,7 +411,7 @@ async function saveMatchToDb(match: any) {
       INSERT INTO matches (
         id, challenge_code, room_code, game_mode, map, rules,
         stake_amount, pot_amount, platform_fee_percentage, platform_fee, winner_payout,
-        status, creator_id, creator_data, opponent_id, opponent_data,
+        match_duration_minutes, status, creator_id, creator_data, opponent_id, opponent_data,
         winner_id, winner_ign, resolution_notes, chat_messages, created_at, room_generated_at, settled_at
       )
       VALUES (
@@ -405,6 +426,7 @@ async function saveMatchToDb(match: any) {
         ${escapeSql(match.platformFeePercentage || 10)},
         ${escapeSql(match.platformFee || 0)},
         ${escapeSql(match.winnerPayout)},
+        ${escapeSql(match.matchDurationMinutes || 15)},
         ${escapeSql(match.status)},
         ${escapeSql(match.creator.id)},
         ${escapeSql(match.creator)},
@@ -416,11 +438,12 @@ async function saveMatchToDb(match: any) {
         ${escapeSql(match.chatMessages || [])},
         ${escapeSql(match.createdAt)},
         ${escapeSql(match.roomGeneratedAt || null)},
-        ${escapeSql(match.settledAt || null)}
+        ${escapeSql(match.settled_at || match.settledAt || null)}
       )
       ON CONFLICT (id) DO UPDATE SET
         room_code = EXCLUDED.room_code,
         status = EXCLUDED.status,
+        match_duration_minutes = EXCLUDED.match_duration_minutes,
         creator_data = EXCLUDED.creator_data,
         opponent_id = EXCLUDED.opponent_id,
         opponent_data = EXCLUDED.opponent_data,
@@ -429,7 +452,6 @@ async function saveMatchToDb(match: any) {
         resolution_notes = EXCLUDED.resolution_notes,
         chat_messages = EXCLUDED.chat_messages,
         room_generated_at = EXCLUDED.room_generated_at,
-        settled_at = EXCLUDED.settled_at;
     `);
   } catch (err) {
     console.error(`Error saving match ${match.id} to DB:`, err);
@@ -1720,6 +1742,7 @@ app.post('/api/matches', async (req, res) => {
       'First to 10 kills or 5 rounds wins',
     ],
     stakeAmount = 100,
+    matchDurationMinutes = 15,
   } = req.body;
 
   const creator = await getUserFromDb(creatorId);
@@ -1731,6 +1754,8 @@ app.post('/api/matches', async (req, res) => {
   if (numStake < 100) {
     return res.status(400).json({ error: 'Minimum stake is ₦100' });
   }
+
+  const numDuration = Math.max(15, parseInt(matchDurationMinutes, 10) || 15);
 
   const matchId = `match_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
   const challengeCode = `CHALLENGE-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -1752,6 +1777,7 @@ app.post('/api/matches', async (req, res) => {
     platformFeePercentage,
     platformFee,
     winnerPayout,
+    matchDurationMinutes: numDuration,
     status: 'PENDING_OPPONENT_STAKE',
     createdAt: Date.now(),
     creator: {
@@ -1891,6 +1917,58 @@ app.post('/api/matches/:id/creator-stake', async (req, res) => {
     text: `🎉 BOTH STAKES CONFIRMED! Total Pot: ₦${match.potAmount.toLocaleString()} secured in automated escrow. 🎯 IN-GAME ROOM NUMBER GENERATED: ${generatedRoomCode}. Both players: open CODM > Multiplayer > Private Match > Join #${generatedRoomCode} and battle!`,
     timestamp: Date.now(),
   });
+
+  // Referral System: earn 10% on platform fee for life as soon as they play per bet
+  try {
+    if (creator.referredBy) {
+      const referrer = await getUserByReferralCodeOrIdentifier(creator.referredBy);
+      if (referrer && referrer.id !== creator.id) {
+        const commission = Math.round(match.platformFee * 0.10);
+        if (commission > 0) {
+          referrer.balance += commission;
+          referrer.totalReferralEarnings = (referrer.totalReferralEarnings || 0) + commission;
+          const refTx = {
+            id: `tx_ref_${Date.now()}_c`,
+            type: 'REFERRAL_EARNING' as const,
+            amount: commission,
+            description: `Referral commission (10% of platform fee) from ${creator.codmIgn} playing challenge #${match.challengeCode}`,
+            timestamp: Date.now(),
+            matchId: match.id,
+          };
+          referrer.transactions.unshift(refTx);
+          await saveUserToDb(referrer);
+          await saveTransactionToDb(referrer.id, refTx);
+        }
+      }
+    }
+
+    if (match.opponent) {
+      const opponentUser = await getUserFromDb(match.opponent.id);
+      if (opponentUser && opponentUser.referredBy) {
+        const referrer = await getUserByReferralCodeOrIdentifier(opponentUser.referredBy);
+        if (referrer && referrer.id !== opponentUser.id) {
+          const commission = Math.round(match.platformFee * 0.10);
+          if (commission > 0) {
+            referrer.balance += commission;
+            referrer.totalReferralEarnings = (referrer.totalReferralEarnings || 0) + commission;
+            const refTx = {
+              id: `tx_ref_${Date.now()}_o`,
+              type: 'REFERRAL_EARNING' as const,
+              amount: commission,
+              description: `Referral commission (10% of platform fee) from ${opponentUser.codmIgn} playing challenge #${match.challengeCode}`,
+              timestamp: Date.now(),
+              matchId: match.id,
+            };
+            referrer.transactions.unshift(refTx);
+            await saveUserToDb(referrer);
+            await saveTransactionToDb(referrer.id, refTx);
+          }
+        }
+      }
+    }
+  } catch (refErr) {
+    console.error('Error processing referral commission:', refErr);
+  }
 
   await saveUserToDb(creator);
   await saveTransactionToDb(creator.id, tx);

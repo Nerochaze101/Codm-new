@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Match, UserProfile, ChatMessage } from '../types';
 import {
   Swords, ShieldCheck, Trophy, Copy, Check, Upload, Send, AlertTriangle,
@@ -53,6 +53,30 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
   const isCreator = match.creator.id === currentUser.id;
   const isOpponent = match.opponent?.id === currentUser.id;
   const isParticipant = isCreator || isOpponent;
+
+  const [timeLeft, setTimeLeft] = useState<string>('');
+  const [isExpired, setIsExpired] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!match.roomGeneratedAt || !match.matchDurationMinutes) return;
+    const targetTime = match.roomGeneratedAt + (match.matchDurationMinutes * 60 * 1000);
+    const updateTimer = () => {
+      const diff = targetTime - Date.now();
+      if (diff <= 0) {
+        setTimeLeft('00:00');
+        setIsExpired(true);
+      } else {
+        const mins = Math.floor(diff / (1000 * 60));
+        const secs = Math.floor((diff % (1000 * 60)) / 1000);
+        setTimeLeft(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
+        setIsExpired(false);
+      }
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [match]);
 
   const myClaim = isCreator ? match.creator.resultClaim : match.opponent?.resultClaim;
   const myScreenshot = isCreator ? match.creator.screenshotUrl : match.opponent?.screenshotUrl;
@@ -449,6 +473,22 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
               </button>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Live Countdown Timer Banner */}
+      {match.roomGeneratedAt && ['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(match.status) && (
+        <div className="flex items-center justify-between p-4 rounded-2xl bg-neutral-900 border border-neutral-800 text-xs shadow-md">
+          <div className="flex items-center gap-2.5 text-neutral-300">
+            <Clock className="w-5 h-5 text-amber-400 animate-pulse" />
+            <div>
+              <div className="font-bold text-white text-sm">Match Countdown Timer</div>
+              <div className="text-[11px] text-neutral-400">Finish match and submit result before time expires ({match.matchDurationMinutes || 15}m duration)</div>
+            </div>
+          </div>
+          <span className={`font-mono font-black text-base px-4 py-2 rounded-xl ${isExpired ? 'bg-rose-500/20 text-rose-400 animate-bounce' : 'bg-amber-500/20 text-amber-400'}`}>
+            {timeLeft || '15:00'}
+          </span>
         </div>
       )}
 

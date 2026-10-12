@@ -235,12 +235,18 @@ export async function initDatabase() {
         bank_name VARCHAR(255),
         account_number VARCHAR(255),
         account_name VARCHAR(255),
+        referred_by VARCHAR(255),
+        referral_code VARCHAR(100),
+        total_referral_earnings NUMERIC DEFAULT 0,
         created_at BIGINT
       );
 
       ALTER TABLE users ADD COLUMN IF NOT EXISTS bank_name VARCHAR(255);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS account_number VARCHAR(255);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS account_name VARCHAR(255);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by VARCHAR(255);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code VARCHAR(100);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS total_referral_earnings NUMERIC DEFAULT 0;
 
       CREATE TABLE IF NOT EXISTS matches (
         id VARCHAR(255) PRIMARY KEY,
@@ -254,6 +260,7 @@ export async function initDatabase() {
         platform_fee_percentage INT DEFAULT 10,
         platform_fee NUMERIC DEFAULT 0,
         winner_payout NUMERIC NOT NULL,
+        match_duration_minutes INT DEFAULT 15,
         status VARCHAR(100) NOT NULL,
         creator_id VARCHAR(255) NOT NULL,
         creator_data JSONB NOT NULL,
@@ -267,6 +274,8 @@ export async function initDatabase() {
         room_generated_at BIGINT,
         settled_at BIGINT
       );
+
+      ALTER TABLE matches ADD COLUMN IF NOT EXISTS match_duration_minutes INT DEFAULT 15;
 
       CREATE TABLE IF NOT EXISTS transactions (
         id VARCHAR(255) PRIMARY KEY,
