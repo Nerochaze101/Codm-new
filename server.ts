@@ -793,7 +793,13 @@ app.post('/api/flutterwave/webhook', async (req, res) => {
 
       const amount = Number(verifiedData.amount || verifiedData.charged_amount || 0);
       const txRef = verifiedData.tx_ref || `FLW_${flwId}`;
-      const userId = verifiedData.meta?.userId;
+      let userId = verifiedData.meta?.userId;
+      if (!userId && txRef.startsWith('FLW_BT_')) {
+        const parts = txRef.split('_');
+        if (parts.length >= 4) {
+          userId = `${parts[2]}_${parts[3]}_${parts[4]}`;
+        }
+      }
       const customerEmail = verifiedData.customer?.email;
 
       let targetUser: UserProfile | null = null;
@@ -806,22 +812,24 @@ app.post('/api/flutterwave/webhook', async (req, res) => {
       }
 
       if (targetUser && amount > 0) {
-        // Idempotency check: avoid double credit
-        const alreadyCredited = targetUser.transactions.some(
-          (t) =>
-            t.id === `tx_${flwId}` ||
-            t.id === `tx_${txRef}` ||
-            t.description?.includes(txRef) ||
-            t.description?.includes(String(flwId))
-        );
+        // Idempotency check directly in Postgres transactions table
+        const checkWebhookTx = await pool.query(`
+          SELECT id FROM transactions 
+          WHERE user_id = ${escapeSql(targetUser.id)} 
+            AND (
+              id = ${escapeSql('tx_' + flwId)} 
+              OR id = ${escapeSql('tx_' + txRef)} 
+              OR description LIKE ${escapeSql('%' + txRef + '%')}
+            )
+        `);
 
-        if (!alreadyCredited) {
+        if (checkWebhookTx.rows.length === 0) {
           targetUser.balance += amount;
           const newTx = {
             id: `tx_${flwId}`,
             type: 'DEPOSIT' as const,
             amount,
-            description: `Wallet top-up via Flutterwave Webhook [Ref: ${txRef}]`,
+            description: `Wallet top-up via Flutterwave [Ref: ${txRef}]`,
             timestamp: Date.now(),
           };
           targetUser.transactions.unshift(newTx);
@@ -858,6 +866,152 @@ app.get('/api/flutterwave/banks', async (req, res) => {
     res.json(data);
   } catch (err: any) {
     res.status(500).json({ status: false, error: err.message });
+  }
+});
+
+// Dynamic Bank Transfer Generator (charges via bank_transfer)
+app.post('/api/flutterwave/charge-bank-transfer', async (req, res) => {
+  const { userId, amount } = req.body;
+  const numAmount = Number(amount);
+  if (!numAmount || numAmount < 100) {
+    return res.status(400).json({ status: 'error', message: 'Minimum deposit amount is ₦100' });
+  }
+
+  const user = await getUserFromDb(userId);
+  if (!user) {
+    return res.status(404).json({ status: 'error', message: 'User not found' });
+  }
+
+  const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || '';
+  if (!flwSecret || flwSecret.startsWith('FLWSECK_TEST-xxxx')) {
+    return res.status(500).json({ status: 'error', message: 'Flutterwave Secret Key is not configured' });
+  }
+
+  const txRef = `FLW_BT_${user.id}_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+  try {
+    const chargeRes = await fetch('https://api.flutterwave.com/v3/charges?type=bank_transfer', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${flwSecret}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        amount: numAmount,
+        currency: 'NGN',
+        email: user.email || `${user.codmIgn.toLowerCase()}@player.ng`,
+        tx_ref: txRef,
+        fullname: user.accountName || user.codmIgn,
+        meta: {
+          userId: user.id,
+          playerIgn: user.codmIgn,
+        },
+      }),
+    });
+
+    const data = await chargeRes.json();
+    if (data.status === 'success' && data.meta?.authorization) {
+      const auth = data.meta.authorization;
+      return res.json({
+        status: 'success',
+        txRef,
+        accountNumber: auth.transfer_account,
+        bankName: auth.transfer_bank || 'Flutterwave MFB',
+        accountName: auth.transfer_note?.replace(/^Please make a bank transfer to\s*/i, '').trim() || 'Quadri Abdulsalam FLW',
+        amount: Number(auth.transfer_amount) || numAmount,
+        expiration: auth.account_expiration,
+        transferReference: auth.transfer_reference,
+      });
+    }
+
+    return res.status(400).json({
+      status: 'error',
+      message: data.message || 'Could not initiate bank transfer account with Flutterwave',
+    });
+  } catch (err: any) {
+    return res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// Dynamic Bank Transfer Manual Check / Polling Verifier
+app.post('/api/flutterwave/verify-bank-transfer', async (req, res) => {
+  const { userId, txRef } = req.body;
+  if (!userId || !txRef) {
+    return res.status(400).json({ status: 'error', message: 'userId and txRef required' });
+  }
+
+  const user = await getUserFromDb(userId);
+  if (!user) {
+    return res.status(404).json({ status: 'error', message: 'User not found' });
+  }
+
+  const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || '';
+
+  try {
+    const verifyRes = await fetch(`https://api.flutterwave.com/v3/transactions/verify_by_reference?tx_ref=${encodeURIComponent(txRef)}`, {
+      headers: { Authorization: `Bearer ${flwSecret}` },
+    });
+    const verifyData = await verifyRes.json();
+
+    if (verifyData.status === 'success' && verifyData.data?.status === 'successful') {
+      const txData = verifyData.data;
+      const amount = Number(txData.amount || txData.charged_amount);
+      const flwId = txData.id;
+
+      // Idempotency check in Postgres transactions table directly
+      const checkTx = await pool.query(`
+        SELECT id FROM transactions 
+        WHERE user_id = ${escapeSql(user.id)} 
+          AND (
+            id = ${escapeSql('tx_' + flwId)} 
+            OR id = ${escapeSql('tx_' + txRef)} 
+            OR description LIKE ${escapeSql('%' + txRef + '%')}
+          )
+      `);
+
+      if (checkTx.rows.length > 0) {
+        const freshUser = await getUserFromDb(user.id);
+        return res.json({
+          status: 'success',
+          verified: true,
+          balance: freshUser?.balance ?? user.balance,
+          alreadyCredited: true,
+          amount,
+        });
+      }
+
+      // Credit user in DB
+      user.balance += amount;
+      const tx = {
+        id: `tx_${flwId}`,
+        type: 'DEPOSIT' as const,
+        amount,
+        description: `Wallet top-up via Direct Bank Transfer [Ref: ${txRef}]`,
+        timestamp: Date.now(),
+      };
+      user.transactions.unshift(tx);
+
+      await saveUserToDb(user);
+      await saveTransactionToDb(user.id, tx);
+
+      console.log(`✅ [Direct Bank Transfer] Credited ₦${amount} to user ${user.id} (${user.codmIgn}). New balance: ₦${user.balance}`);
+
+      return res.json({
+        status: 'success',
+        verified: true,
+        balance: user.balance,
+        amount,
+        transaction: tx,
+      });
+    }
+
+    return res.json({
+      status: 'pending',
+      verified: false,
+      message: 'Transfer is not yet confirmed by the bank. If you just sent it, please wait a moment for inter-bank clearing and tap again.',
+    });
+  } catch (err: any) {
+    return res.status(500).json({ status: 'error', message: err.message });
   }
 });
 
