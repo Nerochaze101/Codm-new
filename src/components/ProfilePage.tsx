@@ -165,6 +165,43 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
                     <span>Escrow Winnings: ₦{currentUser.totalWinnings.toLocaleString()}</span>
                   </div>
                 </div>
+
+                {/* Referrals Section */}
+                <div className="pt-4 border-t border-neutral-700/50 mt-2">
+                  <div className="flex items-center gap-2 mb-3 text-emerald-400">
+                    <Users className="w-4 h-4" />
+                    <span className="text-xs font-bold uppercase tracking-wider">Referral Program (Earn 10% for Life)</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="p-3 rounded-xl bg-neutral-950 border border-neutral-800">
+                      <div className="text-[10px] text-neutral-400 uppercase">Your Referral Link</div>
+                      <div className="flex items-center gap-2 mt-1">
+                        <input
+                          type="text"
+                          readOnly
+                          value={`${window.location.origin}/?ref=${currentUser.referralCode}`}
+                          className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono"
+                        />
+                        <button
+                          onClick={() => navigator.clipboard.writeText(`${window.location.origin}/?ref=${currentUser.referralCode}`)}
+                          className="p-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 transition-colors"
+                        >
+                          <Copy className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="p-3 rounded-xl bg-neutral-950 border border-neutral-800 text-center">
+                        <div className="text-[10px] text-neutral-400 uppercase">Total Referrals</div>
+                        <div className="text-xl font-black text-white">{currentUser.referralCount || 0}</div>
+                      </div>
+                      <div className="p-3 rounded-xl bg-emerald-950/20 border border-emerald-500/20 text-center">
+                        <div className="text-[10px] text-emerald-400 uppercase">Total Earnings</div>
+                        <div className="text-xl font-black text-emerald-400">₦{(currentUser.totalReferralEarnings || 0).toLocaleString()}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 
