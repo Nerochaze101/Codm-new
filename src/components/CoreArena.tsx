@@ -348,18 +348,30 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
               </div>
 
               {isCreatorOfActive && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setStakeTargetMatch(myActiveMatch);
-                    setStakeRole('creator');
-                    setIsStakeModalOpen(true);
-                  }}
-                  className="w-full py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm transition-all cursor-pointer shadow-xl flex items-center justify-center gap-2 uppercase tracking-wide"
-                >
-                  <Lock className="w-4 h-4 stroke-[2.5]" />
-                  <span>Send Matching ₦{myActiveMatch.stakeAmount.toLocaleString()} Stake (Unlock Room #)</span>
-                </button>
+                <div className="space-y-4 pt-4 border-t border-neutral-800">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStakeTargetMatch(myActiveMatch);
+                      setStakeRole('creator');
+                      setIsStakeModalOpen(true);
+                    }}
+                    className="w-full py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm transition-all cursor-pointer shadow-xl flex items-center justify-center gap-2 uppercase tracking-wide"
+                  >
+                    <Lock className="w-4 h-4 stroke-[2.5]" />
+                    <span>Send Matching ₦{myActiveMatch.stakeAmount.toLocaleString()} Stake (Unlock Room #)</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (confirm(`Cancel this wager challenge?`)) {
+                        onCancelMatch(myActiveMatch.id);
+                      }
+                    }}
+                    className="w-full text-rose-400 hover:text-rose-300 transition-colors text-xs font-medium cursor-pointer"
+                  >
+                    Cancel Challenge
+                  </button>
+                </div>
               )}
             </div>
           )}

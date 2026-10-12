@@ -19,6 +19,7 @@ import { CreateBetModal } from './components/CreateBetModal';
 import { OpponentOnboardingModal } from './components/OpponentOnboardingModal';
 import { FundWalletModal } from './components/FundWalletModal';
 import { ReferralPage } from './components/ReferralPage';
+import { WalletPage } from './components/WalletPage';
 import { AdminDashboard } from './components/AdminDashboard';
 
 function MainApp() {
@@ -61,6 +62,7 @@ function MainApp() {
   else if (pathname === '/rules') currentTab = 'rules';
   else if (pathname === '/history') currentTab = 'history';
   else if (pathname === '/referrals') currentTab = 'referrals';
+  else if (pathname === '/wallet') currentTab = 'wallet';
   else if (pathname === '/profile') currentTab = 'profile';
 
   // Initial Data Fetch & URL Deep Link Check
@@ -437,6 +439,16 @@ function MainApp() {
               <ReferralPage
                 currentUser={currentUser}
                 onNavigateBack={() => navigate('/profile')}
+              />
+            }
+          />
+          <Route
+            path="/wallet"
+            element={
+              <WalletPage
+                currentUser={currentUser}
+                onUpdateUser={handleUpdateUser}
+                onCashOut={handleCashOut}
               />
             }
           />

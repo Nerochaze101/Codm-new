@@ -1,6 +1,6 @@
 import React from 'react';
 import { UserProfile } from '../types';
-import { Swords, Trophy, ShieldCheck, Clock, User } from 'lucide-react';
+import { Swords, Trophy, ShieldCheck, Clock, User, CreditCard } from 'lucide-react';
 
 interface BottomNavbarProps {
   currentUser: UserProfile;
@@ -33,6 +33,11 @@ export const BottomNavbar: React.FC<BottomNavbarProps> = ({
       id: 'profile',
       label: 'Profile',
       icon: User,
+    },
+    {
+      id: 'wallet',
+      label: 'Wallet',
+      icon: CreditCard,
     },
     {
       id: 'referrals',
