@@ -42,6 +42,7 @@ function MainApp() {
     transactions: [],
   });
   const [matches, setMatches] = useState<Match[]>([]);
+  const [isMatchesLoading, setIsMatchesLoading] = useState<boolean>(true);
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signup');
 
   // Modals & configuration
@@ -90,8 +91,10 @@ function MainApp() {
       }
       const mList = await fetchMatches();
       setMatches(mList);
+      setIsMatchesLoading(false);
     } catch (e) {
       console.error('Initial data load error:', e);
+      setIsMatchesLoading(false);
     }
   };
 
@@ -100,10 +103,13 @@ function MainApp() {
       const uid = userToFetchId || currentUser.id;
       const u = await fetchUser(uid);
       setCurrentUser(u);
+      setIsMatchesLoading(true);
       const mList = await fetchMatches();
       setMatches(mList);
+      setIsMatchesLoading(false);
     } catch (e) {
       console.error(e);
+      setIsMatchesLoading(false);
     }
   };
 
@@ -369,6 +375,7 @@ function MainApp() {
               <CoreArena
                 currentUser={currentUser}
                 matches={matches}
+                isMatchesLoading={isMatchesLoading}
                 onCreateBet={handleCreateBet}
                 onJoinMatch={handleJoinMatch}
                 onOpponentStake={handleOpponentStake}
@@ -401,6 +408,7 @@ function MainApp() {
               <HistoryPage
                 currentUser={currentUser}
                 matches={matches}
+                isMatchesLoading={isMatchesLoading}
                 onNavigateToArena={() => navigate('/arena')}
                 onOpenCreateBet={handleOpenCreateBet}
               />

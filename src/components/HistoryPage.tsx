@@ -6,10 +6,12 @@ import {
   RefreshCw, Plus
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
+import { SkeletonLoader } from './SkeletonLoader';
 
 interface HistoryPageProps {
   currentUser: UserProfile;
   matches: Match[];
+  isMatchesLoading?: boolean;
   onNavigateToArena: () => void;
   onOpenCreateBet: (mode?: string, stake?: number) => void;
 }
@@ -17,6 +19,7 @@ interface HistoryPageProps {
 export const HistoryPage: React.FC<HistoryPageProps> = ({
   currentUser,
   matches,
+  isMatchesLoading,
   onNavigateToArena,
   onOpenCreateBet,
 }) => {
@@ -56,6 +59,14 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
   const defeatsCount = myMatches.filter((m) => m.status === 'SETTLED' && m.winnerId && m.winnerId !== currentUser.id && !isDrawMatch(m)).length;
   const drawsCount = myMatches.filter((m) => isDrawMatch(m)).length + (currentUser.draws || 0);
   const activeCount = myMatches.filter((m) => ['PENDING_OPPONENT', 'READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING'].includes(m.status)).length;
+
+  if (isMatchesLoading) {
+    return (
+      <div className="max-w-4xl mx-auto space-y-8 pb-16">
+        <SkeletonLoader count={4} />
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-4xl mx-auto space-y-8 pb-16">

@@ -8,11 +8,13 @@ import {
   TrendingUp, Award, Clock, Lock, AlertTriangle, XCircle
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
+import { SkeletonLoader } from './SkeletonLoader';
 import { StakePaymentModal } from './StakePaymentModal';
 
 interface CoreArenaProps {
   currentUser: UserProfile;
   matches: Match[];
+  isMatchesLoading?: boolean;
   onCreateBet: (data: { stakeAmount: number; gameMode: string; map: string; rules: string[] }) => Promise<void>;
   onOpenCreateBet?: (mode?: string, stake?: number) => void;
   onJoinMatch: (matchId: string, opponentId: string) => Promise<void>;
@@ -38,6 +40,7 @@ interface CoreArenaProps {
 export const CoreArena: React.FC<CoreArenaProps> = ({
   currentUser,
   matches,
+  isMatchesLoading,
   onCreateBet,
   onJoinMatch,
   onOpponentStake,
@@ -159,6 +162,14 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
     }
     await onRefresh();
   };
+
+  if (isMatchesLoading) {
+    return (
+      <div className="max-w-6xl mx-auto space-y-8 pb-16">
+        <SkeletonLoader count={3} />
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 pb-16">
