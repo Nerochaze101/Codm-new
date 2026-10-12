@@ -11,6 +11,34 @@ import { CODM_IMAGES } from '../assets/images';
 import { SkeletonLoader } from './SkeletonLoader';
 import { StakePaymentModal } from './StakePaymentModal';
 
+// Helper for card background
+const CardBackground = () => (
+  <div className="absolute inset-0 z-0 opacity-10">
+    <img
+      src={CODM_IMAGES.cardBgSubtle}
+      alt="Card Background"
+      className="w-full h-full object-cover"
+    />
+    <div className="absolute inset-0 bg-neutral-900/60" />
+  </div>
+);
+
+// ... (rest of the file content)
+// Update lines 810-814
+// Original:
+// 810:             <div
+// 811:               className="relative overflow-hidden rounded-3xl p-6 sm:p-8 border-2 border-amber-500/50 hover:border-amber-400 bg-neutral-900 shadow-2xl transition-all flex flex-col justify-between min-h-[260px] group"
+// 812:             >
+// 813:               {/* Background Shipment Image */}
+//
+// New:
+// 810:             <div
+// 811:               className="relative overflow-hidden rounded-3xl p-6 sm:p-8 border-2 border-amber-500/50 hover:border-amber-400 bg-neutral-900 shadow-2xl transition-all flex flex-col justify-between min-h-[260px] group"
+// 812:             >
+// 813:               <CardBackground />
+// 814:               {/* Background Shipment Image */}
+
+
 interface CoreArenaProps {
   currentUser: UserProfile;
   matches: Match[];
@@ -811,6 +839,8 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
               className="relative overflow-hidden rounded-3xl p-6 sm:p-8 border-2 border-amber-500/50 hover:border-amber-400 bg-neutral-900 shadow-2xl transition-all flex flex-col justify-between min-h-[260px] group"
             >
               {/* Background Shipment Image */}
+              <CardBackground />
+              {/* Background Shipment Image */}
               <div className="absolute inset-0 z-0">
                 <img
                   src={CODM_IMAGES.shipment1v1}
@@ -868,6 +898,8 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
             <div
               className="relative overflow-hidden rounded-3xl p-6 sm:p-8 border-2 border-emerald-500/50 hover:border-emerald-400 bg-neutral-900 shadow-2xl transition-all flex flex-col justify-between min-h-[260px] group"
             >
+              {/* Background Squad Image */}
+              <CardBackground />
               {/* Background Squad Image */}
               <div className="absolute inset-0 z-0">
                 <img

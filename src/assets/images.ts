@@ -8,11 +8,15 @@ import trophyPotLocal from './images/codm_trophy_pot_1791303439079.jpg';
 import scoreVictoryLocal from './images/codm_score_victory_1791303464940.jpg';
 import matchRoomBgLocal from './images/match_room_bg_1791331746985.jpg';
 import appLogoLocal from './images/18012397-6DAC-458A-9230-E51DC47747A9.png';
+import cardBgSubtleLocal from './images/card_bg_subtle_1791810583071.jpg';
 
 export const CODM_IMAGES = {
   // App Official Professional Logo Icon Emblem
   appLogo: '/public/18012397-6DAC-458A-9230-E51DC47747A9.png',
   appLogoFallback: '/18012397-6DAC-458A-9230-E51DC47747A9.png',
+
+  // Subtle Card Background
+  cardBgSubtle: cardBgSubtleLocal || '/src/assets/images/card_bg_subtle_1791810583071.jpg',
 
   // Active Match Room Card Background
   matchRoomBg: matchRoomBgLocal || '/src/assets/images/match_room_bg_1791331746985.jpg',

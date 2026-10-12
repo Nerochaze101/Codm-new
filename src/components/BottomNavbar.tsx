@@ -1,6 +1,7 @@
 import React from 'react';
 import { UserProfile } from '../types';
 import { Swords, Trophy, ShieldCheck, Clock, User, CreditCard } from 'lucide-react';
+import { useSound } from '../hooks/useSound';
 
 interface BottomNavbarProps {
   currentUser: UserProfile;
@@ -13,6 +14,8 @@ export const BottomNavbar: React.FC<BottomNavbarProps> = ({
   currentTab,
   onNavigate,
 }) => {
+  const playTabSound = useSound('/assets/audio/shotgun.mp3');
+
   const navItems = [
     {
       id: 'arena',
@@ -59,7 +62,10 @@ export const BottomNavbar: React.FC<BottomNavbarProps> = ({
           return (
             <button
               key={item.id}
-              onClick={() => onNavigate(item.id)}
+              onClick={() => {
+                playTabSound();
+                onNavigate(item.id);
+              }}
               className={`relative flex flex-col items-center justify-center py-1.5 px-2.5 sm:px-4 rounded-xl transition-all duration-200 cursor-pointer group ${
                 isActive
                   ? 'bg-amber-400/15 text-amber-400 border border-amber-500/40 shadow-md shadow-amber-500/10'
