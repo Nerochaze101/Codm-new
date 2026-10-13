@@ -1754,8 +1754,35 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
     }
   }
 
-  // Deduct user wallet balance safely
-  user.balance -= numAmount;
+  // Deduct user wallet balance safely and atomically in PostgreSQL database
+  const deductRes = await pool.query(`
+    UPDATE users 
+    SET balance = GREATEST(0, balance - ${escapeSql(numAmount)})
+    WHERE id = ${escapeSql(user.id)} AND balance >= ${escapeSql(numAmount)}
+    RETURNING balance;
+  `);
+
+  if (deductRes.rows.length === 0) {
+    return res.status(400).json({ error: 'Insufficient available balance' });
+  }
+
+  const newBalance = parseFloat(deductRes.rows[0].balance);
+  user.balance = newBalance;
+
+  // Persist updated bank details if provided
+  if (bankName || accountNumber) {
+    user.bankName = bankName || user.bankName;
+    user.accountNumber = accountNumber || user.accountNumber;
+    user.accountName = accountName || user.accountName;
+    await pool.query(`
+      UPDATE users 
+      SET bank_name = COALESCE(${escapeSql(bankName || null)}, bank_name),
+          account_number = COALESCE(${escapeSql(accountNumber || null)}, account_number),
+          account_name = COALESCE(${escapeSql(accountName || null)}, account_name)
+      WHERE id = ${escapeSql(user.id)}
+    `);
+  }
+
   const isAutomatedSuccess = transferResult?.status === true;
   const isManual = transferResult?.isManualFallback === true || !transferResult;
 
@@ -1775,18 +1802,69 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
     description: descNote,
     timestamp: Date.now(),
   };
-  user.transactions.unshift(tx);
-
-  await saveUserToDb(user);
   await saveTransactionToDb(user.id, tx);
 
   res.json({
     success: true,
-    balance: user.balance,
+    balance: newBalance,
     transaction: tx,
     transferResult,
     providerUsed,
   });
+});
+
+// Clean up transaction history & reconcile ledger for a clean profile view
+app.post('/api/users/:id/clean-history', async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const user = await getUserFromDb(userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const { clearAll = false } = req.body || {};
+
+    if (clearAll) {
+      // Clear all past transactions for a fresh clean history slate
+      await pool.query(`DELETE FROM transactions WHERE user_id = ${escapeSql(userId)}`);
+    } else {
+      // Deduplicate messy double-credited deposits and duplicate withdrawal logs
+      const txRes = await pool.query(
+        `SELECT * FROM transactions WHERE user_id = ${escapeSql(userId)} ORDER BY timestamp ASC`
+      );
+      const rawTxs = txRes.rows;
+      const seenKeys = new Set<string>();
+      const txsToDelete: string[] = [];
+
+      for (const t of rawTxs) {
+        let isDuplicate = false;
+        // Group by type, amount, and 60-second time window
+        const timeBucket = Math.floor(parseInt(t.timestamp, 10) / 60000);
+        const dedupeKey = `${t.type}_${t.amount}_${timeBucket}`;
+
+        if (seenKeys.has(dedupeKey)) {
+          isDuplicate = true;
+        } else {
+          seenKeys.add(dedupeKey);
+        }
+
+        if (isDuplicate) {
+          txsToDelete.push(t.id);
+        }
+      }
+
+      for (const delId of txsToDelete) {
+        await pool.query(`DELETE FROM transactions WHERE id = ${escapeSql(delId)}`);
+      }
+    }
+
+    const refreshedUser = await getUserFromDb(userId);
+    res.json({
+      success: true,
+      user: refreshedUser,
+    });
+  } catch (err: any) {
+    console.error('Error cleaning history:', err);
+    res.status(500).json({ error: err.message || 'Failed to clean history' });
+  }
 });
 
 // List all active matches directly from database

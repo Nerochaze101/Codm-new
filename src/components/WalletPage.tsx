@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import { UserProfile } from '../types';
-import { ShieldCheck, Zap, Filter, Clock, CheckCircle2, AlertTriangle, AlertCircle } from 'lucide-react';
+import {
+  ShieldCheck, Zap, Filter, Clock, CheckCircle2,
+  AlertTriangle, AlertCircle, Trash2, RefreshCw, ArrowDownLeft,
+  ArrowUpRight, Trophy
+} from 'lucide-react';
 import { CashOutModal } from './CashOutModal';
 import { FundWalletModal } from './FundWalletModal';
 
@@ -16,31 +20,72 @@ interface WalletPageProps {
       gateway?: 'flutterwave' | 'paystack';
     }
   ) => Promise<void>;
+  onCleanHistory?: (clearAll?: boolean) => Promise<void>;
 }
 
 export const WalletPage: React.FC<WalletPageProps> = ({
   currentUser,
   onUpdateUser,
   onCashOut,
+  onCleanHistory,
 }) => {
   const [isCashOutModalOpen, setIsCashOutModalOpen] = useState(false);
   const [isFundModalOpen, setIsFundModalOpen] = useState(false);
-  const [filter, setFilter] = useState<'ALL' | 'PAYOUTS'>('ALL');
+  const [filter, setFilter] = useState<'ALL' | 'PAYOUTS' | 'DEPOSITS' | 'WINNINGS'>('ALL');
+  const [isCleaning, setIsCleaning] = useState(false);
 
-  const filteredTransactions = filter === 'PAYOUTS' 
-    ? currentUser.transactions.filter(t => t.type === 'WITHDRAWAL')
-    : currentUser.transactions;
+  const filteredTransactions = currentUser.transactions.filter((t) => {
+    if (filter === 'PAYOUTS') return t.type === 'WITHDRAWAL';
+    if (filter === 'DEPOSITS') return t.type === 'DEPOSIT';
+    if (filter === 'WINNINGS') return t.type === 'MATCH_WIN_PAYOUT' || t.type === 'REFERRAL_EARNING';
+    return true;
+  });
 
   const getStatusBadge = (tx: any) => {
-    // Mock status based on timestamp for demonstration
-    const age = Date.now() - tx.timestamp;
-    if (age < 60000) return { label: 'Processing', color: 'bg-amber-500/10 text-amber-400 border-amber-500/30', icon: Clock };
-    if (age < 3600000) return { label: 'Completed', color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30', icon: CheckCircle2 };
-    return { label: 'Completed', color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30', icon: CheckCircle2 };
+    if (tx.type === 'WITHDRAWAL') {
+      const desc = tx.description || '';
+      if (desc.includes('cannot be processed') || desc.includes('Failed') || desc.includes('Flagged') || desc.includes('Declined')) {
+        return { label: 'Flagged', color: 'bg-rose-500/10 text-rose-400 border-rose-500/30', icon: AlertTriangle };
+      }
+      if (desc.includes('Pending') || desc.includes('Queued') || desc.includes('⏳')) {
+        return { label: 'Processing', color: 'bg-amber-500/10 text-amber-400 border-amber-500/30', icon: Clock };
+      }
+      return { label: 'Completed', color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30', icon: CheckCircle2 };
+    }
+
+    if (tx.type === 'DEPOSIT') {
+      return { label: 'Credited', color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30', icon: CheckCircle2 };
+    }
+
+    if (tx.type === 'MATCH_WIN_PAYOUT') {
+      return { label: 'Won Wager', color: 'bg-amber-500/10 text-amber-400 border-amber-500/30', icon: Trophy };
+    }
+
+    if (tx.type === 'ESCROW_LOCK') {
+      return { label: 'Escrow Locked', color: 'bg-neutral-800 text-neutral-400 border-neutral-700', icon: ShieldCheck };
+    }
+
+    return { label: 'Completed', color: 'bg-neutral-800 text-neutral-300 border-neutral-700', icon: CheckCircle2 };
+  };
+
+  const handleClean = async (clearAll: boolean) => {
+    if (!onCleanHistory) return;
+    const confirmMsg = clearAll
+      ? 'Are you sure you want to completely clear all transaction history for a fresh start?'
+      : 'Clean up duplicate and un-deducted transaction records to restore a pristine history?';
+    if (!window.confirm(confirmMsg)) return;
+
+    setIsCleaning(true);
+    try {
+      await onCleanHistory(clearAll);
+    } finally {
+      setIsCleaning(false);
+    }
   };
 
   return (
     <div className="max-w-4xl mx-auto space-y-8 pb-16">
+      {/* 1. Wallet Balance Hero Card */}
       <div className="p-6 rounded-3xl bg-neutral-900 border-2 border-emerald-500/30 space-y-4 shadow-xl">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="space-y-1">
@@ -48,7 +93,7 @@ export const WalletPage: React.FC<WalletPageProps> = ({
               <ShieldCheck className="w-4 h-4" />
               <span>Available Wallet Balance</span>
             </div>
-            <div className="text-3xl font-black text-white font-mono-nums">
+            <div className="text-3xl sm:text-4xl font-black text-white font-mono-nums">
               ₦{currentUser.balance.toLocaleString()}
             </div>
             {currentUser.bankName && currentUser.accountNumber ? (
@@ -57,7 +102,7 @@ export const WalletPage: React.FC<WalletPageProps> = ({
               </p>
             ) : (
               <p className="text-xs text-amber-400 font-mono">
-                ⚠️ No bank details saved yet. Edit profile to save bank details before cashing out.
+                ⚠️ No bank details saved yet. Enter bank info during cashout to receive automatic payouts.
               </p>
             )}
           </div>
@@ -68,7 +113,7 @@ export const WalletPage: React.FC<WalletPageProps> = ({
               className="px-5 py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm transition-all shadow-lg cursor-pointer uppercase flex items-center justify-center gap-2 active:scale-95"
             >
               <Zap className="w-4 h-4 fill-current" />
-              <span>Fund</span>
+              <span>Top Up</span>
             </button>
 
             <button
@@ -89,46 +134,143 @@ export const WalletPage: React.FC<WalletPageProps> = ({
         </div>
       </div>
 
-      <div className="bg-neutral-900 rounded-3xl border border-neutral-800 p-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-black text-white">Transactions</h3>
+      {/* 2. Clean Transaction History Card */}
+      <div className="bg-neutral-900 rounded-3xl border border-neutral-800 p-6 space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-neutral-800 pb-4">
+          <div>
+            <h3 className="text-lg font-black font-heading text-white uppercase tracking-wide">
+              Financial Transaction Ledger
+            </h3>
+            <p className="text-xs text-neutral-400">
+              Verified payouts, deposits, and escrow deductions
+            </p>
+          </div>
+
+          {/* Action to clean/reconcile history */}
+          {onCleanHistory && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleClean(false)}
+                disabled={isCleaning}
+                title="Deduplicate messy records and sync clean history"
+                className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-200 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isCleaning ? 'animate-spin text-amber-400' : ''}`} />
+                <span>Reconcile & Clean</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleClean(true)}
+                disabled={isCleaning}
+                title="Clear all transactions for a fresh clean history"
+                className="px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Clear History</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Filter Pills */}
+        <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={() => setFilter(filter === 'ALL' ? 'PAYOUTS' : 'ALL')}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
-              filter === 'PAYOUTS' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-neutral-800 text-neutral-400'
+            onClick={() => setFilter('ALL')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+              filter === 'ALL' ? 'bg-amber-400 text-neutral-950 font-black' : 'bg-neutral-800 text-neutral-400 hover:text-white'
             }`}
           >
-            <Filter className="w-3.5 h-3.5" />
-            {filter === 'PAYOUTS' ? 'Show Successful Payouts' : 'All Transactions'}
+            All ({currentUser.transactions.length})
+          </button>
+          <button
+            onClick={() => setFilter('PAYOUTS')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5 ${
+              filter === 'PAYOUTS' ? 'bg-emerald-500 text-neutral-950 font-black' : 'bg-neutral-800 text-neutral-400 hover:text-white'
+            }`}
+          >
+            <ArrowUpRight className="w-3.5 h-3.5" />
+            <span>Successful Payouts</span>
+          </button>
+          <button
+            onClick={() => setFilter('DEPOSITS')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5 ${
+              filter === 'DEPOSITS' ? 'bg-blue-500 text-white font-black' : 'bg-neutral-800 text-neutral-400 hover:text-white'
+            }`}
+          >
+            <ArrowDownLeft className="w-3.5 h-3.5" />
+            <span>Deposits</span>
+          </button>
+          <button
+            onClick={() => setFilter('WINNINGS')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5 ${
+              filter === 'WINNINGS' ? 'bg-amber-500 text-neutral-950 font-black' : 'bg-neutral-800 text-neutral-400 hover:text-white'
+            }`}
+          >
+            <Trophy className="w-3.5 h-3.5" />
+            <span>Match Winnings</span>
           </button>
         </div>
         
-        <div className="space-y-2">
+        {/* Transactions List */}
+        <div className="space-y-2.5">
           {filteredTransactions.length === 0 ? (
-            <p className="text-sm text-neutral-500 text-center py-4">No transactions found.</p>
+            <div className="text-center py-12 px-4 rounded-2xl bg-neutral-950/60 border border-neutral-800/80 space-y-2">
+              <CheckCircle2 className="w-8 h-8 text-neutral-600 mx-auto" />
+              <p className="text-sm font-bold text-neutral-400">History is completely clean</p>
+              <p className="text-xs text-neutral-500">No transactions found under this filter.</p>
+            </div>
           ) : (
             filteredTransactions.map((tx) => {
-              const badge = tx.type === 'WITHDRAWAL' ? getStatusBadge(tx) : null;
+              const badge = getStatusBadge(tx);
+              const isDebit = tx.type === 'WITHDRAWAL' || tx.type === 'ESCROW_LOCK';
+
               return (
-                <div key={tx.id} className="flex items-center justify-between p-4 bg-neutral-950 rounded-xl border border-neutral-800">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-neutral-800 rounded-lg">
-                      <Zap className="w-4 h-4 text-emerald-500" />
+                <div
+                  key={tx.id}
+                  className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-neutral-950 rounded-2xl border border-neutral-800/90 hover:border-neutral-700 transition-all gap-3"
+                >
+                  <div className="flex items-start gap-3.5">
+                    <div className={`p-2.5 rounded-xl shrink-0 ${
+                      tx.type === 'WITHDRAWAL'
+                        ? 'bg-rose-500/10 text-rose-400'
+                        : tx.type === 'DEPOSIT'
+                        ? 'bg-blue-500/10 text-blue-400'
+                        : tx.type === 'MATCH_WIN_PAYOUT'
+                        ? 'bg-amber-500/10 text-amber-400'
+                        : 'bg-neutral-800 text-neutral-400'
+                    }`}>
+                      {tx.type === 'WITHDRAWAL' ? (
+                        <ArrowUpRight className="w-4 h-4 stroke-[2.5]" />
+                      ) : tx.type === 'DEPOSIT' ? (
+                        <ArrowDownLeft className="w-4 h-4 stroke-[2.5]" />
+                      ) : tx.type === 'MATCH_WIN_PAYOUT' ? (
+                        <Trophy className="w-4 h-4 stroke-[2.5]" />
+                      ) : (
+                        <Zap className="w-4 h-4" />
+                      )}
                     </div>
                     <div>
-                      <p className="text-sm font-bold text-white">{tx.description}</p>
-                      <p className="text-[10px] text-neutral-500 font-mono">{new Date(tx.timestamp).toLocaleString()}</p>
+                      <p className="text-xs sm:text-sm font-bold text-white leading-snug">
+                        {tx.description}
+                      </p>
+                      <p className="text-[10px] text-neutral-500 font-mono mt-1">
+                        {new Date(tx.timestamp).toLocaleString()} · ID: {tx.id}
+                      </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    {badge && (
-                      <span className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-bold border ${badge.color}`}>
-                        <badge.icon className="w-3 h-3" />
-                        {badge.label}
-                      </span>
-                    )}
-                    <span className={`font-mono-nums font-bold ${tx.type === 'WITHDRAWAL' ? 'text-rose-400' : 'text-emerald-400'}`}>
-                      {tx.type === 'WITHDRAWAL' ? '-' : '+'}₦{tx.amount.toLocaleString()}
+
+                  <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-1 sm:pt-0 border-t sm:border-t-0 border-neutral-900">
+                    <span className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-bold border ${badge.color}`}>
+                      <badge.icon className="w-3 h-3" />
+                      <span>{badge.label}</span>
+                    </span>
+
+                    <span className={`font-mono-nums font-black text-sm sm:text-base ${
+                      isDebit ? 'text-rose-400' : 'text-emerald-400'
+                    }`}>
+                      {isDebit ? '-' : '+'}₦{tx.amount.toLocaleString()}
                     </span>
                   </div>
                 </div>

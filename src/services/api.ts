@@ -261,3 +261,18 @@ export async function adminResolveMatch(matchId: string, winnerId: string): Prom
   }
   return await res.json();
 }
+
+export async function cleanUserHistory(userId: string, clearAll: boolean = false): Promise<UserProfile> {
+  const res = await fetch(`/api/users/${userId}/clean-history`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clearAll }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to clean history');
+  }
+  const data = await res.json();
+  return data.user;
+}
+

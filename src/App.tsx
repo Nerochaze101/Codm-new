@@ -5,7 +5,8 @@ import {
   fetchUser, fetchMatches, fetchMatch, createMatch, joinMatch,
   opponentStakeMatch, creatorStakeMatch,
   cancelMatch, submitMatchResult,
-  createUser, signUpUser, signInUser, updateUser, withdrawWallet
+  createUser, signUpUser, signInUser, updateUser, withdrawWallet,
+  cleanUserHistory
 } from './services/api';
 import { Navbar } from './components/Navbar';
 import { LandingPage } from './components/LandingPage';
@@ -312,12 +313,34 @@ function MainApp() {
   ) => {
     try {
       const res = await withdrawWallet(currentUser.id, amount, bankDetails);
+      // Immediately deduct balance from state for instant responsiveness
+      if (res && res.balance !== undefined) {
+        setCurrentUser(prev => ({
+          ...prev,
+          balance: res.balance,
+          transactions: res.transaction ? [res.transaction, ...(prev.transactions || [])] : prev.transactions,
+        }));
+      }
       const updatedUser = await fetchUser(currentUser.id);
-      setCurrentUser(updatedUser);
+      if (updatedUser) {
+        setCurrentUser(updatedUser);
+      }
       const provName = res.providerUsed === 'flutterwave' ? 'Flutterwave' : res.providerUsed === 'paystack' ? 'Paystack' : 'Manual Payout';
-      alert(`Successfully processed cashout of ₦${amount.toLocaleString()} via ${provName} to ${bankDetails.bankName} (${bankDetails.accountNumber})!`);
+      alert(`Successfully processed cashout of ₦${amount.toLocaleString()} via ${provName} to ${bankDetails.bankName} (${bankDetails.accountNumber})! New balance: ₦${(res.balance ?? updatedUser?.balance ?? 0).toLocaleString()}`);
     } catch (err: any) {
       alert(err.message || 'Cash out failed');
+    }
+  };
+
+  const handleCleanHistory = async (clearAll: boolean = false) => {
+    try {
+      const refreshed = await cleanUserHistory(currentUser.id, clearAll);
+      if (refreshed) {
+        setCurrentUser(refreshed);
+      }
+      alert(clearAll ? 'Transaction history has been cleanly cleared.' : 'Transaction history cleaned and duplicate records removed successfully!');
+    } catch (err: any) {
+      alert(err.message || 'Failed to clean history');
     }
   };
 
@@ -448,6 +471,7 @@ function MainApp() {
                 currentUser={currentUser}
                 onUpdateUser={handleUpdateUser}
                 onCashOut={handleCashOut}
+                onCleanHistory={handleCleanHistory}
               />
             }
           />
