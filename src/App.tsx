@@ -8,7 +8,6 @@ import {
   createUser, signUpUser, signInUser, updateUser, withdrawWallet
 } from './services/api';
 import { Navbar } from './components/Navbar';
-import { BottomNavbar } from './components/BottomNavbar';
 import { LandingPage } from './components/LandingPage';
 import { AuthPage } from './components/AuthPage';
 import { CoreArena } from './components/CoreArena';
@@ -369,7 +368,7 @@ function MainApp() {
         onSignOut={handleSignOut}
       />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-28">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-12">
         <Routes>
           <Route
             path="/arena"
@@ -485,12 +484,6 @@ function MainApp() {
           />
         </Routes>
       </main>
-
-      <BottomNavbar
-        currentUser={currentUser}
-        currentTab={currentTab}
-        onNavigate={handleNavigate}
-      />
 
       <footer className="border-t border-neutral-900 bg-neutral-950 py-6 mt-auto">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-neutral-500">
