@@ -68,16 +68,19 @@ export const WalletPage: React.FC<WalletPageProps> = ({
     return { label: 'Completed', color: 'bg-neutral-800 text-neutral-300 border-neutral-700', icon: CheckCircle2 };
   };
 
+  const [cleanStatus, setCleanStatus] = useState<string | null>(null);
+
   const handleClean = async (clearAll: boolean) => {
     if (!onCleanHistory) return;
-    const confirmMsg = clearAll
-      ? 'Are you sure you want to completely clear all transaction history for a fresh start?'
-      : 'Clean up duplicate and un-deducted transaction records to restore a pristine history?';
-    if (!window.confirm(confirmMsg)) return;
-
     setIsCleaning(true);
+    setCleanStatus(null);
     try {
       await onCleanHistory(clearAll);
+      setCleanStatus(clearAll ? 'Transaction history cleanly cleared.' : 'Ledger reconciled and duplicate records cleaned!');
+      setTimeout(() => setCleanStatus(null), 4000);
+    } catch (err: any) {
+      setCleanStatus(err.message || 'Failed to reconcile history');
+      setTimeout(() => setCleanStatus(null), 4000);
     } finally {
       setIsCleaning(false);
     }
@@ -173,6 +176,13 @@ export const WalletPage: React.FC<WalletPageProps> = ({
             </div>
           )}
         </div>
+
+        {cleanStatus && (
+          <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-400 text-xs font-bold flex items-center gap-2 animate-in fade-in">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{cleanStatus}</span>
+          </div>
+        )}
 
         {/* Filter Pills */}
         <div className="flex flex-wrap items-center gap-2">

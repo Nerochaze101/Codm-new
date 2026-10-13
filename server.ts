@@ -259,9 +259,12 @@ async function getUserByReferralCodeOrIdentifier(identifier: string): Promise<Us
   return res ? res.user : null;
 }
 
-async function saveUserToDb(user: UserProfile, password?: string) {
+async function saveUserToDb(user: UserProfile, password?: string, forceBalanceUpdate: boolean = false) {
   try {
     const passValue = password ? escapeSql(password) : 'NULL';
+    const balanceUpdateFragment = forceBalanceUpdate
+      ? `balance = EXCLUDED.balance, escrow_balance = EXCLUDED.escrow_balance, total_winnings = EXCLUDED.total_winnings,`
+      : `balance = users.balance, escrow_balance = users.escrow_balance, total_winnings = users.total_winnings,`;
     await pool.query(`
       INSERT INTO users (id, username, codm_ign, codm_uid, tier, clan, email, phone, password_hash, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, created_at)
       VALUES (
@@ -298,19 +301,17 @@ async function saveUserToDb(user: UserProfile, password?: string) {
         email = EXCLUDED.email,
         phone = EXCLUDED.phone,
         password_hash = COALESCE(EXCLUDED.password_hash, users.password_hash),
-        balance = EXCLUDED.balance,
-        escrow_balance = EXCLUDED.escrow_balance,
-        total_winnings = EXCLUDED.total_winnings,
-        wins = EXCLUDED.wins,
-        losses = EXCLUDED.losses,
-        draws = EXCLUDED.draws,
+        ${balanceUpdateFragment}
+        wins = users.wins,
+        losses = users.losses,
+        draws = users.draws,
         avatar = EXCLUDED.avatar,
-        bank_name = EXCLUDED.bank_name,
-        account_number = EXCLUDED.account_number,
-        account_name = EXCLUDED.account_name,
-        referred_by = EXCLUDED.referred_by,
-        referral_code = EXCLUDED.referral_code,
-        total_referral_earnings = EXCLUDED.total_referral_earnings;
+        bank_name = COALESCE(EXCLUDED.bank_name, users.bank_name),
+        account_number = COALESCE(EXCLUDED.account_number, users.account_number),
+        account_name = COALESCE(EXCLUDED.account_name, users.account_name),
+        referred_by = COALESCE(EXCLUDED.referred_by, users.referred_by),
+        referral_code = COALESCE(EXCLUDED.referral_code, users.referral_code),
+        total_referral_earnings = users.total_referral_earnings;
     `);
   } catch (err) {
     console.error(`Error saving user ${user.id} to DB:`, err);
@@ -496,20 +497,28 @@ async function withdrawPlatformFees(amount: number) {
 // REST API ROUTES
 app.post('/api/admin/withdraw', async (req, res) => {
   const { userId, amount } = req.body;
+  const numAmount = Number(amount);
+  if (!numAmount || numAmount <= 0) {
+    return res.status(400).json({ error: 'Invalid withdrawal amount' });
+  }
+
   const user = await getUserFromDb(userId);
   if (!user || user.role !== 'admin') {
     return res.status(403).json({ error: 'Unauthorized' });
   }
 
-  const success = await withdrawPlatformFees(Number(amount));
+  // Atomically deduct platform fees in SQL to prevent concurrent fee draining
+  const success = await withdrawPlatformFees(numAmount);
   if (success) {
-    // Also add to user's wallet? Or just record the withdrawal?
-    // User said "withdraw from dashboard", let's assume it goes to their wallet.
-    user.balance += Number(amount);
-    await saveUserToDb(user);
-    res.json({ success: true });
+    await pool.query(`
+      UPDATE users 
+      SET balance = balance + ${escapeSql(numAmount)} 
+      WHERE id = ${escapeSql(user.id)}
+    `);
+    const refreshed = await getUserFromDb(user.id);
+    res.json({ success: true, balance: refreshed?.balance ?? user.balance });
   } else {
-    res.status(400).json({ error: 'Insufficient funds or withdrawal failed' });
+    res.status(400).json({ error: 'Insufficient platform funds or withdrawal failed' });
   }
 });
 
@@ -751,26 +760,22 @@ app.post('/api/paystack/webhook', async (req, res) => {
       }
 
       if (targetUser && amountNaira > 0) {
-        const alreadyCredited = targetUser.transactions.some(
-          (t) =>
-            t.id === `tx_${data.id}` ||
-            t.id === `tx_${ref}` ||
-            t.description?.includes(ref) ||
-            t.description?.includes(String(data.id))
-        );
+        const txId = `tx_${data.id || ref}`;
+        const descNote = `Wallet top-up via Paystack Webhook [Ref: ${ref}]`;
+        const insRes = await pool.query(`
+          INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
+          VALUES (${escapeSql(txId)}, ${escapeSql(targetUser.id)}, 'DEPOSIT', ${escapeSql(amountNaira)}, ${escapeSql(descNote)}, ${Date.now()})
+          ON CONFLICT (id) DO NOTHING
+          RETURNING id;
+        `);
 
-        if (!alreadyCredited) {
-          targetUser.balance += amountNaira;
-          const newTx = {
-            id: `tx_${data.id || Date.now()}`,
-            type: 'DEPOSIT' as const,
-            amount: amountNaira,
-            description: `Wallet top-up via Paystack Webhook [Ref: ${ref}]`,
-            timestamp: Date.now(),
-          };
-          targetUser.transactions.unshift(newTx);
-          await saveUserToDb(targetUser);
-          await saveTransactionToDb(targetUser.id, newTx);
+        if (insRes.rows.length > 0) {
+          await pool.query(`
+            UPDATE users 
+            SET balance = balance + ${escapeSql(amountNaira)} 
+            WHERE id = ${escapeSql(targetUser.id)}
+          `);
+          console.log(`✅ [Paystack Webhook] Credited ₦${amountNaira} to user ${targetUser.id}.`);
         }
       }
     }
@@ -910,19 +915,22 @@ app.post('/api/flutterwave/webhook', async (req, res) => {
             )
         `);
 
-        if (checkWebhookTx.rows.length === 0) {
-          targetUser.balance += amount;
-          const newTx = {
-            id: `tx_${flwId}`,
-            type: 'DEPOSIT' as const,
-            amount,
-            description: `Wallet top-up via Flutterwave [Ref: ${txRef}]`,
-            timestamp: Date.now(),
-          };
-          targetUser.transactions.unshift(newTx);
-          await saveUserToDb(targetUser);
-          await saveTransactionToDb(targetUser.id, newTx);
-          console.log(`✅ [Flutterwave Webhook] Credited ₦${amount} to user ${targetUser.id} (${targetUser.codmIgn}). New balance: ₦${targetUser.balance}`);
+        const txId = `tx_${flwId}`;
+        const descNote = `Wallet top-up via Flutterwave [Ref: ${txRef}]`;
+        const insRes = await pool.query(`
+          INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
+          VALUES (${escapeSql(txId)}, ${escapeSql(targetUser.id)}, 'DEPOSIT', ${escapeSql(amount)}, ${escapeSql(descNote)}, ${Date.now()})
+          ON CONFLICT (id) DO NOTHING
+          RETURNING id;
+        `);
+
+        if (insRes.rows.length > 0) {
+          await pool.query(`
+            UPDATE users 
+            SET balance = balance + ${escapeSql(amount)} 
+            WHERE id = ${escapeSql(targetUser.id)}
+          `);
+          console.log(`✅ [Flutterwave Webhook] Credited ₦${amount} to user ${targetUser.id}.`);
         } else {
           console.log(`ℹ️ [Flutterwave Webhook] Transaction ${flwId} (${txRef}) was already credited previously.`);
         }
@@ -1067,26 +1075,42 @@ app.post('/api/flutterwave/verify-bank-transfer', async (req, res) => {
         });
       }
 
-      // Credit user in DB
-      user.balance += amount;
+      const txId = `tx_${flwId}`;
+      const descNote = `Wallet top-up via Direct Bank Transfer [Ref: ${txRef}]`;
+      const insRes = await pool.query(`
+        INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
+        VALUES (${escapeSql(txId)}, ${escapeSql(user.id)}, 'DEPOSIT', ${escapeSql(amount)}, ${escapeSql(descNote)}, ${Date.now()})
+        ON CONFLICT (id) DO NOTHING
+        RETURNING id;
+      `);
+
+      let newBal = user.balance;
+      if (insRes.rows.length > 0) {
+        const balRes = await pool.query(`
+          UPDATE users 
+          SET balance = balance + ${escapeSql(amount)} 
+          WHERE id = ${escapeSql(user.id)}
+          RETURNING balance;
+        `);
+        newBal = parseFloat(balRes.rows[0].balance);
+        console.log(`✅ [Direct Bank Transfer] Credited ₦${amount} to user ${user.id} (${user.codmIgn}). New balance: ₦${newBal}`);
+      } else {
+        const freshUser = await getUserFromDb(user.id);
+        newBal = freshUser?.balance ?? user.balance;
+      }
+
       const tx = {
-        id: `tx_${flwId}`,
+        id: txId,
         type: 'DEPOSIT' as const,
         amount,
-        description: `Wallet top-up via Direct Bank Transfer [Ref: ${txRef}]`,
+        description: descNote,
         timestamp: Date.now(),
       };
-      user.transactions.unshift(tx);
-
-      await saveUserToDb(user);
-      await saveTransactionToDb(user.id, tx);
-
-      console.log(`✅ [Direct Bank Transfer] Credited ₦${amount} to user ${user.id} (${user.codmIgn}). New balance: ₦${user.balance}`);
 
       return res.json({
         status: 'success',
         verified: true,
-        balance: user.balance,
+        balance: newBal,
         amount,
         transaction: tx,
       });
@@ -1271,29 +1295,35 @@ app.post('/api/users', async (req, res) => {
   }
 });
 
-// Update User Profile directly in database
+// Update User Profile directly in database - atomic update of profile fields only (never touches balance or ledger)
 app.patch('/api/users/:id', async (req, res) => {
-  const user = await getUserFromDb(req.params.id);
+  const userId = req.params.id;
+  const user = await getUserFromDb(userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   const { username, codmIgn, codmUid, email, phone, avatar, tier, clan, bankName, accountNumber, accountName } = req.body;
-  if (username !== undefined) user.username = username;
-  if (codmIgn !== undefined) user.codmIgn = codmIgn;
-  if (codmUid !== undefined) user.codmUid = codmUid;
-  if (email !== undefined) user.email = email;
-  if (phone !== undefined) user.phone = phone;
-  if (avatar !== undefined) user.avatar = avatar;
-  if (tier !== undefined) user.tier = tier;
-  if (clan !== undefined) user.clan = clan;
-  if (bankName !== undefined) user.bankName = bankName;
-  if (accountNumber !== undefined) user.accountNumber = accountNumber;
-  if (accountName !== undefined) user.accountName = accountName;
 
-  await saveUserToDb(user);
-  res.json(user);
+  await pool.query(`
+    UPDATE users SET
+      username = COALESCE(${username !== undefined ? escapeSql(username) : 'NULL'}, username),
+      codm_ign = COALESCE(${codmIgn !== undefined ? escapeSql(codmIgn) : 'NULL'}, codm_ign),
+      codm_uid = COALESCE(${codmUid !== undefined ? escapeSql(codmUid) : 'NULL'}, codm_uid),
+      email = COALESCE(${email !== undefined ? escapeSql(email) : 'NULL'}, email),
+      phone = COALESCE(${phone !== undefined ? escapeSql(phone) : 'NULL'}, phone),
+      avatar = COALESCE(${avatar !== undefined ? escapeSql(avatar) : 'NULL'}, avatar),
+      tier = COALESCE(${tier !== undefined ? escapeSql(tier) : 'NULL'}, tier),
+      clan = COALESCE(${clan !== undefined ? escapeSql(clan) : 'NULL'}, clan),
+      bank_name = COALESCE(${bankName !== undefined ? escapeSql(bankName) : 'NULL'}, bank_name),
+      account_number = COALESCE(${accountNumber !== undefined ? escapeSql(accountNumber) : 'NULL'}, account_number),
+      account_name = COALESCE(${accountName !== undefined ? escapeSql(accountName) : 'NULL'}, account_name)
+    WHERE id = ${escapeSql(userId)}
+  `);
+
+  const updatedUser = await getUserFromDb(userId);
+  res.json(updatedUser || user);
 });
 
-// Wallet deposit directly into database with strict idempotency protection
+// Wallet deposit directly into database with strict idempotency and race condition protection
 app.post('/api/users/:id/deposit', async (req, res) => {
   const user = await getUserFromDb(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
@@ -1307,25 +1337,35 @@ app.post('/api/users/:id/deposit', async (req, res) => {
   const refStr = reference ? String(reference).trim() : '';
   const txIdStr = transactionId ? String(transactionId).trim() : '';
 
-  // IDEMPOTENCY CHECK:
-  // Prevent double crediting if this transaction was already processed by Webhook or client callback
-  const alreadyCredited = user.transactions.some((t) => {
-    if (refStr && (t.id === `tx_${refStr}` || t.description?.includes(refStr))) return true;
-    if (txIdStr && (t.id === `tx_${txIdStr}` || t.description?.includes(txIdStr))) return true;
-    return false;
-  });
-
-  if (alreadyCredited) {
-    console.log(`ℹ️ [Deposit API] Transaction with ref '${refStr || txIdStr}' already credited for user ${user.id}. Skipping duplicate.`);
-    return res.json({ success: true, balance: user.balance, alreadyCredited: true });
-  }
-
-  const finalTxId = txIdStr ? `tx_${txIdStr}` : (refStr ? `tx_${refStr}` : `tx_${Date.now()}`);
+  const finalTxId = txIdStr ? `tx_${txIdStr}` : (refStr ? `tx_${refStr}` : `tx_${Date.now()}_${Math.floor(Math.random() * 1000)}`);
   const descNote = refStr
     ? `Wallet top-up via ${method} [Ref: ${refStr}]`
     : (txIdStr ? `Wallet top-up via ${method} [ID: ${txIdStr}]` : `Wallet top-up via ${method}`);
 
-  user.balance += numAmount;
+  // Atomic race condition guard: The primary key constraint on transactions table ensures
+  // ONLY ONE concurrent request can successfully insert the deposit record!
+  const insertTxRes = await pool.query(`
+    INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
+    VALUES (${escapeSql(finalTxId)}, ${escapeSql(user.id)}, 'DEPOSIT', ${escapeSql(numAmount)}, ${escapeSql(descNote)}, ${Date.now()})
+    ON CONFLICT (id) DO NOTHING
+    RETURNING id;
+  `);
+
+  if (insertTxRes.rows.length === 0) {
+    console.log(`🛡️ [Race Condition Prevented] Deposit with id '${finalTxId}' already inserted. Skipping balance credit.`);
+    const freshUser = await getUserFromDb(user.id);
+    return res.json({ success: true, balance: freshUser?.balance ?? user.balance, alreadyCredited: true });
+  }
+
+  // Atomically increment user balance in database
+  const balRes = await pool.query(`
+    UPDATE users 
+    SET balance = balance + ${escapeSql(numAmount)} 
+    WHERE id = ${escapeSql(user.id)} 
+    RETURNING balance;
+  `);
+  const newBalance = parseFloat(balRes.rows[0].balance);
+
   const tx = {
     id: finalTxId,
     type: 'DEPOSIT' as const,
@@ -1333,13 +1373,9 @@ app.post('/api/users/:id/deposit', async (req, res) => {
     description: descNote,
     timestamp: Date.now(),
   };
-  user.transactions.unshift(tx);
 
-  await saveUserToDb(user);
-  await saveTransactionToDb(user.id, tx);
-
-  console.log(`✅ [Deposit API] Credited ₦${numAmount} to user ${user.id} (${user.codmIgn}). New balance: ₦${user.balance}`);
-  res.json({ success: true, balance: user.balance, transaction: tx });
+  console.log(`✅ [Deposit API] Credited ₦${numAmount} to user ${user.id} (${user.codmIgn}). New balance: ₦${newBalance}`);
+  res.json({ success: true, balance: newBalance, transaction: tx });
 });
 
 // Fetch Nigerian Banks list from Paystack
@@ -1597,20 +1633,83 @@ app.post('/api/admin/test-cashout', async (req, res) => {
   }
 });
 
-// Wallet withdrawal with Flutterwave & Paystack Transfers API & database update
+// Active withdrawal lock set per user ID to block concurrent race-condition attacks
+const activeWithdrawalLocks = new Set<string>();
+
+// Wallet withdrawal with Flutterwave & Paystack Transfers API & atomic database update
 app.post('/api/users/:id/withdraw', async (req, res) => {
-  const user = await getUserFromDb(req.params.id);
-  if (!user) return res.status(404).json({ error: 'User not found' });
+  const userId = req.params.id;
+
+  // 1. Race condition guard: In-flight user lock
+  if (activeWithdrawalLocks.has(userId)) {
+    return res.status(429).json({ error: 'A withdrawal is currently in progress for this account. Please wait a moment.' });
+  }
 
   const { amount, bankName = '', accountNumber = '', accountName = '', bankCode = '', gateway = 'flutterwave' } = req.body;
   const numAmount = Number(amount);
   if (!numAmount || numAmount <= 0) {
     return res.status(400).json({ error: 'Invalid withdrawal amount' });
   }
-  if (numAmount > user.balance) {
-    return res.status(400).json({ error: 'Insufficient available balance' });
+
+  activeWithdrawalLocks.add(userId);
+  const client = await pool.connect();
+  let user: UserProfile | null = null;
+  let newBalance = 0;
+  const txId = `tx_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+
+  try {
+    await client.query('BEGIN');
+
+    // 2. Race condition guard: Row-level lock (FOR UPDATE)
+    const userLockRes = await client.query(`SELECT * FROM users WHERE id = ${escapeSql(userId)} FOR UPDATE`);
+    if (userLockRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const userRow = userLockRes.rows[0];
+    const currentBalance = parseFloat(userRow.balance || 0);
+
+    if (numAmount > currentBalance) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: `Insufficient available balance. You have ₦${currentBalance.toLocaleString()} available.` });
+    }
+
+    // 3. Atomic deduction and bank info update in PostgreSQL
+    const deductRes = await client.query(`
+      UPDATE users 
+      SET balance = balance - ${escapeSql(numAmount)},
+          bank_name = COALESCE(${escapeSql(bankName || null)}, bank_name),
+          account_number = COALESCE(${escapeSql(accountNumber || null)}, account_number),
+          account_name = COALESCE(${escapeSql(accountName || null)}, account_name)
+      WHERE id = ${escapeSql(userId)} AND balance >= ${escapeSql(numAmount)}
+      RETURNING balance;
+    `);
+
+    if (deductRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Insufficient available balance' });
+    }
+
+    newBalance = parseFloat(deductRes.rows[0].balance);
+
+    const initialDesc = `Withdrawal request of ₦${numAmount.toLocaleString()} to ${bankName} (${accountNumber} - ${accountName})`;
+    await client.query(`
+      INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
+      VALUES (${escapeSql(txId)}, ${escapeSql(userId)}, 'WITHDRAWAL', ${escapeSql(numAmount)}, ${escapeSql(initialDesc)}, ${Date.now()})
+    `);
+
+    await client.query('COMMIT');
+    user = await getUserFromDb(userId);
+  } catch (dbErr: any) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    console.error('Database withdrawal error:', dbErr);
+    return res.status(500).json({ error: dbErr.message || 'Database error processing withdrawal' });
+  } finally {
+    client.release();
+    activeWithdrawalLocks.delete(userId);
   }
 
+  // 4. Now initiate external payout gateway transfer
   const flwCode = getFlutterwaveBankCode(bankName, bankCode);
   const paystackCode = getPaystackBankCode(bankName, bankCode);
 
@@ -1619,7 +1718,6 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
   let transferResult: any = null;
   let providerUsed: 'flutterwave' | 'paystack' | 'manual' = 'manual';
 
-  // 1. Try Flutterwave first if preferred or configured
   const flwConfigured = flwSecret && !flwSecret.startsWith('FLWSECK_TEST-xxxx');
   const paystackConfigured = paystackSecret && !paystackSecret.startsWith('sk_test_xxxx');
 
@@ -1636,15 +1734,14 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
           account_bank: flwCode,
           account_number: accountNumber.trim(),
           amount: numAmount,
-          narration: `CODM Cashout for ${user.codmIgn}`,
+          narration: `CODM Cashout for ${user?.codmIgn || userId}`,
           currency: 'NGN',
           reference: `FLW_TRF_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-          beneficiary_name: accountName || user.codmIgn,
+          beneficiary_name: accountName || user?.codmIgn || 'Gladiator',
         }),
       });
 
       const flwData = await flwTransferRes.json();
-      console.log('✅ Flutterwave Transfer API Response:', flwData);
       console.log('✅ Flutterwave Transfer API Response:', flwData);
 
       if (flwData.status === 'success' || flwData.status === 'successful') {
@@ -1675,12 +1772,10 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
     }
   }
 
-  // 2. Fallback to Paystack if requested or if Flutterwave wasn't executed
+  // Fallback to Paystack if requested or if Flutterwave wasn't executed
   if (!transferResult && paystackConfigured && accountNumber) {
     try {
       console.log(`🚀 Initiating Paystack Transfer of ₦${numAmount} to ${accountNumber} (${bankName})...`);
-
-      // Step 1: Create Paystack Transfer Recipient
       const recipientRes = await fetch('https://api.paystack.co/transferrecipient', {
         method: 'POST',
         headers: {
@@ -1689,7 +1784,7 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
         },
         body: JSON.stringify({
           type: 'nuban',
-          name: accountName || user.codmIgn,
+          name: accountName || user?.codmIgn || 'Gladiator',
           account_number: accountNumber.trim(),
           bank_code: paystackCode || '058',
           currency: 'NGN',
@@ -1697,11 +1792,8 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
       });
 
       const recipientJson = await recipientRes.json();
-
       if (recipientJson.status && recipientJson.data?.recipient_code) {
         const recipientCode = recipientJson.data.recipient_code;
-
-        // Step 2: Initiate Paystack Bank Transfer
         const transferRes = await fetch('https://api.paystack.co/transfer', {
           method: 'POST',
           headers: {
@@ -1712,7 +1804,7 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
             source: 'balance',
             amount: Math.round(numAmount * 100), // in kobo
             recipient: recipientCode,
-            reason: `CODM Winnings Cashout for ${user.codmIgn}`,
+            reason: `CODM Winnings Cashout for ${user?.codmIgn || userId}`,
           }),
         });
 
@@ -1754,35 +1846,6 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
     }
   }
 
-  // Deduct user wallet balance safely and atomically in PostgreSQL database
-  const deductRes = await pool.query(`
-    UPDATE users 
-    SET balance = GREATEST(0, balance - ${escapeSql(numAmount)})
-    WHERE id = ${escapeSql(user.id)} AND balance >= ${escapeSql(numAmount)}
-    RETURNING balance;
-  `);
-
-  if (deductRes.rows.length === 0) {
-    return res.status(400).json({ error: 'Insufficient available balance' });
-  }
-
-  const newBalance = parseFloat(deductRes.rows[0].balance);
-  user.balance = newBalance;
-
-  // Persist updated bank details if provided
-  if (bankName || accountNumber) {
-    user.bankName = bankName || user.bankName;
-    user.accountNumber = accountNumber || user.accountNumber;
-    user.accountName = accountName || user.accountName;
-    await pool.query(`
-      UPDATE users 
-      SET bank_name = COALESCE(${escapeSql(bankName || null)}, bank_name),
-          account_number = COALESCE(${escapeSql(accountNumber || null)}, account_number),
-          account_name = COALESCE(${escapeSql(accountName || null)}, account_name)
-      WHERE id = ${escapeSql(user.id)}
-    `);
-  }
-
   const isAutomatedSuccess = transferResult?.status === true;
   const isManual = transferResult?.isManualFallback === true || !transferResult;
 
@@ -1795,14 +1858,20 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
     descNote = `⏳ Pending Manual Payout to ${bankName} (${accountNumber} - ${accountName}) [${reason}]`;
   }
 
+  // Update description with definitive settlement reference
+  await pool.query(`
+    UPDATE transactions 
+    SET description = ${escapeSql(descNote)} 
+    WHERE id = ${escapeSql(txId)}
+  `);
+
   const tx = {
-    id: `tx_${Date.now()}`,
+    id: txId,
     type: 'WITHDRAWAL' as const,
     amount: numAmount,
     description: descNote,
     timestamp: Date.now(),
   };
-  await saveTransactionToDb(user.id, tx);
 
   res.json({
     success: true,
@@ -1820,13 +1889,13 @@ app.post('/api/users/:id/clean-history', async (req, res) => {
     const user = await getUserFromDb(userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    const { clearAll = false } = req.body || {};
+    const { clearAll = false, syncBalance = true } = req.body || {};
 
     if (clearAll) {
-      // Clear all past transactions for a fresh clean history slate
+      // Clear all past transactions for a clean history slate
       await pool.query(`DELETE FROM transactions WHERE user_id = ${escapeSql(userId)}`);
     } else {
-      // Deduplicate messy double-credited deposits and duplicate withdrawal logs
+      // 1. Deduplicate messy double-credited deposits and duplicate withdrawal logs
       const txRes = await pool.query(
         `SELECT * FROM transactions WHERE user_id = ${escapeSql(userId)} ORDER BY timestamp ASC`
       );
@@ -1854,6 +1923,29 @@ app.post('/api/users/:id/clean-history', async (req, res) => {
       for (const delId of txsToDelete) {
         await pool.query(`DELETE FROM transactions WHERE id = ${escapeSql(delId)}`);
       }
+    }
+
+    // 2. Reconcile user balance with clean transaction ledger
+    if (syncBalance) {
+      const remainingTxRes = await pool.query(
+        `SELECT type, amount FROM transactions WHERE user_id = ${escapeSql(userId)}`
+      );
+      let calculatedCredits = 0;
+      let calculatedDebits = 0;
+      for (const r of remainingTxRes.rows) {
+        const amt = parseFloat(r.amount) || 0;
+        if (['DEPOSIT', 'MATCH_WIN_PAYOUT', 'REFERRAL_EARNING', 'ESCROW_REFUND'].includes(r.type)) {
+          calculatedCredits += amt;
+        } else if (['WITHDRAWAL', 'ESCROW_LOCK'].includes(r.type)) {
+          calculatedDebits += amt;
+        }
+      }
+      const reconciledBalance = Math.max(0, calculatedCredits - calculatedDebits);
+      await pool.query(`
+        UPDATE users 
+        SET balance = ${escapeSql(reconciledBalance)}
+        WHERE id = ${escapeSql(userId)}
+      `);
     }
 
     const refreshedUser = await getUserFromDb(userId);
@@ -1954,230 +2046,326 @@ app.post('/api/matches', async (req, res) => {
   res.json(newMatch);
 });
 
-// Opponent accepts challenge and sends stake into escrow directly in database
+// Opponent accepts challenge and sends stake into escrow directly in database with strict race-condition locking
 app.post('/api/matches/:id/opponent-stake', async (req, res) => {
-  const match = await getMatchFromDb(req.params.id);
-  if (!match) return res.status(404).json({ error: 'Match not found' });
-
-  if (match.status !== 'PENDING_OPPONENT_STAKE') {
-    return res.status(400).json({ error: 'This match challenge is no longer open for joining.' });
-  }
-
+  const matchId = req.params.id;
   const { opponentId, paymentMethod = 'bank_transfer' } = req.body;
-  const opponent = await getUserFromDb(opponentId);
-  if (!opponent) return res.status(404).json({ error: 'Opponent not found' });
 
-  if (opponent.id === match.creator.id) {
-    return res.status(400).json({ error: 'You cannot accept your own challenge. Share the link with an opponent!' });
-  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  if (paymentMethod === 'wallet_balance') {
-    if (opponent.balance < match.stakeAmount) {
-      return res.status(400).json({ error: `Insufficient balance (₦${opponent.balance.toLocaleString()}).` });
+    // 1. Lock match row with FOR UPDATE to prevent two opponents from joining or creator from cancelling concurrently
+    const matchRes = await client.query(`SELECT * FROM matches WHERE id = ${escapeSql(matchId)} FOR UPDATE`);
+    if (matchRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Match not found' });
     }
-    opponent.balance -= match.stakeAmount;
-    opponent.escrowBalance += match.stakeAmount;
-  } else {
-    opponent.escrowBalance += match.stakeAmount;
+
+    const matchRow = matchRes.rows[0];
+    if (matchRow.status !== 'PENDING_OPPONENT_STAKE') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'This match challenge has already been accepted by another player or is no longer open.' });
+    }
+
+    if (matchRow.creator_id === opponentId) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'You cannot accept your own challenge. Share the link with an opponent!' });
+    }
+
+    const stakeAmount = parseFloat(matchRow.stake_amount);
+
+    // 2. Lock opponent user row
+    const oppRes = await client.query(`SELECT * FROM users WHERE id = ${escapeSql(opponentId)} FOR UPDATE`);
+    if (oppRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Opponent not found' });
+    }
+    const oppRow = oppRes.rows[0];
+
+    if (paymentMethod === 'wallet_balance') {
+      const currentBal = parseFloat(oppRow.balance || 0);
+      if (currentBal < stakeAmount) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: `Insufficient balance (₦${currentBal.toLocaleString()}).` });
+      }
+      await client.query(`
+        UPDATE users 
+        SET balance = balance - ${escapeSql(stakeAmount)},
+            escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
+        WHERE id = ${escapeSql(opponentId)}
+      `);
+    } else {
+      await client.query(`
+        UPDATE users 
+        SET escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
+        WHERE id = ${escapeSql(opponentId)}
+      `);
+    }
+
+    const opponentData = {
+      id: oppRow.id,
+      username: oppRow.username,
+      codmIgn: oppRow.codm_ign,
+      codmUid: oppRow.codm_uid,
+      avatar: oppRow.avatar,
+      staked: true,
+    };
+
+    const newChatMsg = {
+      id: `msg_${Date.now()}`,
+      senderId: 'SYSTEM',
+      senderName: 'CODM Referee Bot',
+      text: `⚔️ Challenge accepted! ${oppRow.codm_ign} has sent ₦${stakeAmount.toLocaleString()} into escrow. Host ${matchRow.creator_data?.codmIgn || 'Host'}, please send your matching ₦${stakeAmount.toLocaleString()} stake to generate your CODM in-game room number!`,
+      timestamp: Date.now(),
+    };
+
+    const chatMessages = Array.isArray(matchRow.chat_messages) ? matchRow.chat_messages : [];
+    chatMessages.push(newChatMsg);
+
+    await client.query(`
+      UPDATE matches 
+      SET status = 'OPPONENT_STAKED_AWAITING_CREATOR',
+          opponent_id = ${escapeSql(oppRow.id)},
+          opponent_data = ${escapeSql(opponentData)},
+          chat_messages = ${escapeSql(chatMessages)}
+      WHERE id = ${escapeSql(matchId)}
+    `);
+
+    const tx = {
+      id: `tx_${Date.now()}`,
+      type: 'ESCROW_LOCK',
+      amount: stakeAmount,
+      description: `₦${stakeAmount.toLocaleString()} stake locked in escrow for challenge #${matchRow.challenge_code}`,
+      timestamp: Date.now(),
+      matchId: matchRow.id,
+    };
+
+    await client.query(`
+      INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+      VALUES (${escapeSql(tx.id)}, ${escapeSql(opponentId)}, ${escapeSql(tx.type)}, ${escapeSql(tx.amount)}, ${escapeSql(tx.description)}, ${escapeSql(tx.matchId)}, ${escapeSql(tx.timestamp)})
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    await client.query('COMMIT');
+    const updatedMatch = await getMatchFromDb(matchId);
+    res.json(updatedMatch);
+  } catch (err: any) {
+    await client.query('ROLLBACK');
+    console.error('Opponent stake race condition error:', err);
+    res.status(500).json({ error: err.message || 'Failed to accept challenge' });
+  } finally {
+    client.release();
   }
-
-  const tx = {
-    id: `tx_${Date.now()}`,
-    type: 'ESCROW_LOCK' as const,
-    amount: match.stakeAmount,
-    description: `₦${match.stakeAmount.toLocaleString()} stake locked in escrow for challenge #${match.challengeCode}`,
-    timestamp: Date.now(),
-    matchId: match.id,
-  };
-  opponent.transactions.unshift(tx);
-
-  match.opponent = {
-    id: opponent.id,
-    username: opponent.username,
-    codmIgn: opponent.codmIgn,
-    codmUid: opponent.codmUid,
-    avatar: opponent.avatar,
-    staked: true,
-  };
-
-  match.status = 'OPPONENT_STAKED_AWAITING_CREATOR';
-
-  match.chatMessages.push({
-    id: `msg_${Date.now()}`,
-    senderId: 'SYSTEM',
-    senderName: 'CODM Referee Bot',
-    text: `⚔️ Challenge accepted! ${opponent.codmIgn} has sent ₦${match.stakeAmount.toLocaleString()} into escrow. Host ${match.creator.codmIgn}, please send your matching ₦${match.stakeAmount.toLocaleString()} stake to generate your CODM in-game room number!`,
-    timestamp: Date.now(),
-  });
-
-  await saveUserToDb(opponent);
-  await saveTransactionToDb(opponent.id, tx);
-  await saveMatchToDb(match);
-  res.json(match);
 });
 
 // Creator sends matching stake after opponent has accepted
+// Creator sends matching stake after opponent has accepted with atomic locking
 app.post('/api/matches/:id/creator-stake', async (req, res) => {
-  const match = await getMatchFromDb(req.params.id);
-  if (!match) return res.status(404).json({ error: 'Match not found' });
-
-  if (match.status !== 'OPPONENT_STAKED_AWAITING_CREATOR') {
-    return res.status(400).json({ error: 'Match is not in waiting for host stake state.' });
-  }
-
+  const matchId = req.params.id;
   const { creatorId, paymentMethod = 'bank_transfer' } = req.body;
-  const creator = await getUserFromDb(creatorId);
-  if (!creator) return res.status(404).json({ error: 'Creator not found' });
 
-  if (creator.id !== match.creator.id) {
-    return res.status(403).json({ error: 'Only the match creator can provide the matching host stake.' });
-  }
-
-  if (paymentMethod === 'wallet_balance') {
-    if (creator.balance < match.stakeAmount) {
-      return res.status(400).json({ error: `Insufficient balance (₦${creator.balance.toLocaleString()}).` });
-    }
-    creator.balance -= match.stakeAmount;
-    creator.escrowBalance += match.stakeAmount;
-  } else {
-    creator.escrowBalance += match.stakeAmount;
-  }
-
-  const tx = {
-    id: `tx_${Date.now()}`,
-    type: 'ESCROW_LOCK' as const,
-    amount: match.stakeAmount,
-    description: `₦${match.stakeAmount.toLocaleString()} matching stake locked in escrow for challenge #${match.challengeCode}`,
-    timestamp: Date.now(),
-    matchId: match.id,
-  };
-  creator.transactions.unshift(tx);
-
-  match.creator.staked = true;
-
-  // Both players have now staked! System generates the official in-game CODM room number!
-  const generatedRoomCode = generateRoomCode(match.map);
-  match.roomCode = generatedRoomCode;
-  match.roomGeneratedAt = Date.now();
-  match.status = 'READY_TO_PLAY';
-
-  match.chatMessages.push({
-    id: `msg_${Date.now()}`,
-    senderId: 'SYSTEM',
-    senderName: 'CODM Referee Bot',
-    text: `🎉 BOTH STAKES CONFIRMED! Total Pot: ₦${match.potAmount.toLocaleString()} secured in automated escrow. 🎯 IN-GAME ROOM NUMBER GENERATED: ${generatedRoomCode}. Both players: open CODM > Multiplayer > Private Match > Join #${generatedRoomCode} and battle!`,
-    timestamp: Date.now(),
-  });
-
-  // Referral System: earn 10% on platform fee for life as soon as they play per bet
+  const client = await pool.connect();
   try {
-    if (creator.referredBy) {
-      const referrer = await getUserByReferralCodeOrIdentifier(creator.referredBy);
-      if (referrer && referrer.id !== creator.id) {
-        const commission = Math.round(match.platformFee * 0.10);
-        if (commission > 0) {
-          referrer.balance += commission;
-          referrer.totalReferralEarnings = (referrer.totalReferralEarnings || 0) + commission;
-          const refTx = {
-            id: `tx_ref_${Date.now()}_c`,
-            type: 'REFERRAL_EARNING' as const,
-            amount: commission,
-            description: `Referral commission (10% of platform fee) from ${creator.codmIgn} playing challenge #${match.challengeCode}`,
-            timestamp: Date.now(),
-            matchId: match.id,
-          };
-          referrer.transactions.unshift(refTx);
-          await saveUserToDb(referrer);
-          await saveTransactionToDb(referrer.id, refTx);
-        }
-      }
+    await client.query('BEGIN');
+
+    // Lock match row to prevent double-staking
+    const matchRes = await client.query(`SELECT * FROM matches WHERE id = ${escapeSql(matchId)} FOR UPDATE`);
+    if (matchRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Match not found' });
     }
 
-    if (match.opponent) {
-      const opponentUser = await getUserFromDb(match.opponent.id);
-      if (opponentUser && opponentUser.referredBy) {
-        const referrer = await getUserByReferralCodeOrIdentifier(opponentUser.referredBy);
-        if (referrer && referrer.id !== opponentUser.id) {
-          const commission = Math.round(match.platformFee * 0.10);
-          if (commission > 0) {
-            referrer.balance += commission;
-            referrer.totalReferralEarnings = (referrer.totalReferralEarnings || 0) + commission;
-            const refTx = {
-              id: `tx_ref_${Date.now()}_o`,
-              type: 'REFERRAL_EARNING' as const,
-              amount: commission,
-              description: `Referral commission (10% of platform fee) from ${opponentUser.codmIgn} playing challenge #${match.challengeCode}`,
-              timestamp: Date.now(),
-              matchId: match.id,
-            };
-            referrer.transactions.unshift(refTx);
-            await saveUserToDb(referrer);
-            await saveTransactionToDb(referrer.id, refTx);
-          }
-        }
-      }
+    const matchRow = matchRes.rows[0];
+    if (matchRow.status !== 'OPPONENT_STAKED_AWAITING_CREATOR') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Match is not in waiting for host stake state.' });
     }
-  } catch (refErr) {
-    console.error('Error processing referral commission:', refErr);
+
+    if (matchRow.creator_id !== creatorId) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'Only the match creator can provide the matching host stake.' });
+    }
+
+    const stakeAmount = parseFloat(matchRow.stake_amount);
+
+    // Lock creator user row
+    const creatorRes = await client.query(`SELECT * FROM users WHERE id = ${escapeSql(creatorId)} FOR UPDATE`);
+    if (creatorRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Creator not found' });
+    }
+    const creatorRow = creatorRes.rows[0];
+
+    if (paymentMethod === 'wallet_balance') {
+      const currentBal = parseFloat(creatorRow.balance || 0);
+      if (currentBal < stakeAmount) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: `Insufficient balance (₦${currentBal.toLocaleString()}).` });
+      }
+      await client.query(`
+        UPDATE users 
+        SET balance = balance - ${escapeSql(stakeAmount)},
+            escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
+        WHERE id = ${escapeSql(creatorId)}
+      `);
+    } else {
+      await client.query(`
+        UPDATE users 
+        SET escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
+        WHERE id = ${escapeSql(creatorId)}
+      `);
+    }
+
+    const creatorData = matchRow.creator_data || {};
+    creatorData.staked = true;
+
+    const generatedRoomCode = generateRoomCode(matchRow.map);
+    const now = Date.now();
+
+    const newChatMsg = {
+      id: `msg_${now}`,
+      senderId: 'SYSTEM',
+      senderName: 'CODM Referee Bot',
+      text: `🎉 BOTH STAKES CONFIRMED! Total Pot: ₦${parseFloat(matchRow.pot_amount).toLocaleString()} secured in automated escrow. 🎯 IN-GAME ROOM NUMBER GENERATED: ${generatedRoomCode}. Both players: open CODM > Multiplayer > Private Match > Join #${generatedRoomCode} and battle!`,
+      timestamp: now,
+    };
+
+    const chatMessages = Array.isArray(matchRow.chat_messages) ? matchRow.chat_messages : [];
+    chatMessages.push(newChatMsg);
+
+    await client.query(`
+      UPDATE matches 
+      SET status = 'READY_TO_PLAY',
+          room_code = ${escapeSql(generatedRoomCode)},
+          room_generated_at = ${now},
+          creator_data = ${escapeSql(creatorData)},
+          chat_messages = ${escapeSql(chatMessages)}
+      WHERE id = ${escapeSql(matchId)}
+    `);
+
+    const tx = {
+      id: `tx_${now}`,
+      type: 'ESCROW_LOCK',
+      amount: stakeAmount,
+      description: `₦${stakeAmount.toLocaleString()} matching stake locked in escrow for challenge #${matchRow.challenge_code}`,
+      timestamp: now,
+      matchId: matchRow.id,
+    };
+
+    await client.query(`
+      INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+      VALUES (${escapeSql(tx.id)}, ${escapeSql(creatorId)}, ${escapeSql(tx.type)}, ${escapeSql(tx.amount)}, ${escapeSql(tx.description)}, ${escapeSql(tx.matchId)}, ${escapeSql(tx.timestamp)})
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    await client.query('COMMIT');
+    const updatedMatch = await getMatchFromDb(matchId);
+    res.json(updatedMatch);
+  } catch (err: any) {
+    await client.query('ROLLBACK');
+    console.error('Creator stake race condition error:', err);
+    res.status(500).json({ error: err.message || 'Failed to submit matching host stake' });
+  } finally {
+    client.release();
   }
-
-  await saveUserToDb(creator);
-  await saveTransactionToDb(creator.id, tx);
-  await saveMatchToDb(match);
-  res.json(match);
 });
 
-// Legacy / Direct Join handler
+// Direct Join handler with atomic locking
 app.post('/api/matches/:id/join', async (req, res) => {
-  const match = await getMatchFromDb(req.params.id);
-  if (!match) return res.status(404).json({ error: 'Match not found' });
-
-  if (match.status !== 'PENDING_OPPONENT_STAKE') {
-    return res.status(400).json({ error: 'This match is no longer open for joining.' });
-  }
-
+  const matchId = req.params.id;
   const { opponentId } = req.body;
-  const opponent = await getUserFromDb(opponentId);
-  if (!opponent) return res.status(404).json({ error: 'Opponent not found' });
 
-  if (opponent.id === match.creator.id) {
-    return res.status(400).json({ error: 'You cannot accept your own challenge. Share the link with an opponent!' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const matchRes = await client.query(`SELECT * FROM matches WHERE id = ${escapeSql(matchId)} FOR UPDATE`);
+    if (matchRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Match not found' });
+    }
+
+    const matchRow = matchRes.rows[0];
+    if (matchRow.status !== 'PENDING_OPPONENT_STAKE') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'This match is no longer open for joining.' });
+    }
+
+    if (matchRow.creator_id === opponentId) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'You cannot accept your own challenge. Share the link with an opponent!' });
+    }
+
+    const stakeAmount = parseFloat(matchRow.stake_amount);
+
+    const oppRes = await client.query(`SELECT * FROM users WHERE id = ${escapeSql(opponentId)} FOR UPDATE`);
+    if (oppRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Opponent not found' });
+    }
+    const oppRow = oppRes.rows[0];
+
+    await client.query(`
+      UPDATE users 
+      SET escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
+      WHERE id = ${escapeSql(opponentId)}
+    `);
+
+    const opponentData = {
+      id: oppRow.id,
+      username: oppRow.username,
+      codmIgn: oppRow.codm_ign,
+      codmUid: oppRow.codm_uid,
+      avatar: oppRow.avatar,
+      staked: true,
+    };
+
+    const newChatMsg = {
+      id: `msg_${Date.now()}`,
+      senderId: 'SYSTEM',
+      senderName: 'CODM Referee Bot',
+      text: `⚔️ Challenge accepted! ${oppRow.codm_ign} has sent ₦${stakeAmount.toLocaleString()} into escrow. Host ${matchRow.creator_data?.codmIgn || 'Host'}, send your matching ₦${stakeAmount.toLocaleString()} stake to generate your CODM in-game room number!`,
+      timestamp: Date.now(),
+    };
+
+    const chatMessages = Array.isArray(matchRow.chat_messages) ? matchRow.chat_messages : [];
+    chatMessages.push(newChatMsg);
+
+    await client.query(`
+      UPDATE matches 
+      SET status = 'OPPONENT_STAKED_AWAITING_CREATOR',
+          opponent_id = ${escapeSql(oppRow.id)},
+          opponent_data = ${escapeSql(opponentData)},
+          chat_messages = ${escapeSql(chatMessages)}
+      WHERE id = ${escapeSql(matchId)}
+    `);
+
+    const tx = {
+      id: `tx_${Date.now()}`,
+      type: 'ESCROW_LOCK',
+      amount: stakeAmount,
+      description: `₦${stakeAmount.toLocaleString()} stake locked in escrow for challenge #${matchRow.challenge_code}`,
+      timestamp: Date.now(),
+      matchId: matchRow.id,
+    };
+
+    await client.query(`
+      INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+      VALUES (${escapeSql(tx.id)}, ${escapeSql(opponentId)}, ${escapeSql(tx.type)}, ${escapeSql(tx.amount)}, ${escapeSql(tx.description)}, ${escapeSql(tx.matchId)}, ${escapeSql(tx.timestamp)})
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    await client.query('COMMIT');
+    const updatedMatch = await getMatchFromDb(matchId);
+    res.json(updatedMatch);
+  } catch (err: any) {
+    await client.query('ROLLBACK');
+    console.error('Join match race condition error:', err);
+    res.status(500).json({ error: err.message || 'Failed to join match' });
+  } finally {
+    client.release();
   }
-
-  opponent.escrowBalance += match.stakeAmount;
-  const tx = {
-    id: `tx_${Date.now()}`,
-    type: 'ESCROW_LOCK' as const,
-    amount: match.stakeAmount,
-    description: `₦${match.stakeAmount.toLocaleString()} stake locked in escrow for challenge #${match.challengeCode}`,
-    timestamp: Date.now(),
-    matchId: match.id,
-  };
-  opponent.transactions.unshift(tx);
-
-  match.opponent = {
-    id: opponent.id,
-    username: opponent.username,
-    codmIgn: opponent.codmIgn,
-    codmUid: opponent.codmUid,
-    avatar: opponent.avatar,
-    staked: true,
-  };
-
-  match.status = 'OPPONENT_STAKED_AWAITING_CREATOR';
-
-  match.chatMessages.push({
-    id: `msg_${Date.now()}`,
-    senderId: 'SYSTEM',
-    senderName: 'CODM Referee Bot',
-    text: `⚔️ Challenge accepted! ${opponent.codmIgn} has sent ₦${match.stakeAmount.toLocaleString()} into escrow. Host ${match.creator.codmIgn}, send your matching ₦${match.stakeAmount.toLocaleString()} stake to generate your CODM in-game room number!`,
-    timestamp: Date.now(),
-  });
-
-  await saveUserToDb(opponent);
-  await saveTransactionToDb(opponent.id, tx);
-  await saveMatchToDb(match);
-  res.json(match);
 });
 
 // Send in-match chat message directly to database
@@ -2207,57 +2395,73 @@ app.post('/api/matches/:id/chat', async (req, res) => {
 });
 
 // Cancel match directly in database
+// Cancel match directly in database with atomic row-level lock and race condition protection
 app.post('/api/matches/:id/cancel', async (req, res) => {
-  const match = await getMatchFromDb(req.params.id);
-  if (!match) return res.status(404).json({ error: 'Match not found' });
+  const matchId = req.params.id;
+  const client = await pool.connect();
 
-  if (match.status !== 'PENDING_OPPONENT_STAKE' && match.status !== 'OPPONENT_STAKED_AWAITING_CREATOR') {
-    return res.status(400).json({ error: 'Cannot cancel match after both players have locked stakes' });
-  }
-
-  // Refund creator if staked
-  if (match.creator.staked) {
-    const creator = await getUserFromDb(match.creator.id);
-    if (creator) {
-      creator.balance += match.stakeAmount;
-      creator.escrowBalance = Math.max(0, creator.escrowBalance - match.stakeAmount);
-      const tx = {
-        id: `tx_${Date.now()}_c`,
-        type: 'ESCROW_REFUND' as const,
-        amount: match.stakeAmount,
-        description: `₦${match.stakeAmount.toLocaleString()} escrow refunded from cancelled challenge #${match.challengeCode}`,
-        timestamp: Date.now(),
-        matchId: match.id,
-      };
-      creator.transactions.unshift(tx);
-      await saveUserToDb(creator);
-      await saveTransactionToDb(creator.id, tx);
+  try {
+    await client.query('BEGIN');
+    const mRes = await client.query(`SELECT * FROM matches WHERE id = ${escapeSql(matchId)} FOR UPDATE`);
+    if (mRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Match not found' });
     }
-  }
 
-  // Refund opponent if staked
-  if (match.opponent?.staked) {
-    const opponent = await getUserFromDb(match.opponent.id);
-    if (opponent) {
-      opponent.balance += match.stakeAmount;
-      opponent.escrowBalance = Math.max(0, opponent.escrowBalance - match.stakeAmount);
-      const tx = {
-        id: `tx_${Date.now()}_o`,
-        type: 'ESCROW_REFUND' as const,
-        amount: match.stakeAmount,
-        description: `₦${match.stakeAmount.toLocaleString()} escrow refunded from cancelled challenge #${match.challengeCode}`,
-        timestamp: Date.now(),
-        matchId: match.id,
-      };
-      opponent.transactions.unshift(tx);
-      await saveUserToDb(opponent);
-      await saveTransactionToDb(opponent.id, tx);
+    const matchRow = mRes.rows[0];
+    if (matchRow.status !== 'PENDING_OPPONENT_STAKE' && matchRow.status !== 'OPPONENT_STAKED_AWAITING_CREATOR') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Cannot cancel match after both players have locked stakes' });
     }
-  }
 
-  match.status = 'CANCELLED';
-  await saveMatchToDb(match);
-  res.json(match);
+    await client.query(`UPDATE matches SET status = 'CANCELLED' WHERE id = ${escapeSql(matchId)}`);
+
+    const creatorData = matchRow.creator_data || {};
+    const opponentData = matchRow.opponent_data || {};
+    const stakeAmount = parseFloat(matchRow.stake_amount);
+
+    // Refund creator if staked
+    if (creatorData.staked) {
+      await client.query(`
+        UPDATE users 
+        SET balance = balance + ${escapeSql(stakeAmount)},
+            escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(stakeAmount)})
+        WHERE id = ${escapeSql(matchRow.creator_id)}
+      `);
+      const txC = `tx_${Date.now()}_c`;
+      await client.query(`
+        INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+        VALUES (${escapeSql(txC)}, ${escapeSql(matchRow.creator_id)}, 'ESCROW_REFUND', ${escapeSql(stakeAmount)}, ${escapeSql(`₦${stakeAmount.toLocaleString()} escrow refunded from cancelled challenge #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${Date.now()})
+        ON CONFLICT (id) DO NOTHING
+      `);
+    }
+
+    // Refund opponent if staked
+    if (opponentData.staked && matchRow.opponent_id) {
+      await client.query(`
+        UPDATE users 
+        SET balance = balance + ${escapeSql(stakeAmount)},
+            escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(stakeAmount)})
+        WHERE id = ${escapeSql(matchRow.opponent_id)}
+      `);
+      const txO = `tx_${Date.now()}_o`;
+      await client.query(`
+        INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+        VALUES (${escapeSql(txO)}, ${escapeSql(matchRow.opponent_id)}, 'ESCROW_REFUND', ${escapeSql(stakeAmount)}, ${escapeSql(`₦${stakeAmount.toLocaleString()} escrow refunded from cancelled challenge #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${Date.now()})
+        ON CONFLICT (id) DO NOTHING
+      `);
+    }
+
+    await client.query('COMMIT');
+    const updatedMatch = await getMatchFromDb(matchId);
+    res.json(updatedMatch);
+  } catch (err: any) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    console.error('Match cancel race error:', err);
+    res.status(500).json({ error: err.message || 'Failed to cancel match' });
+  } finally {
+    client.release();
+  }
 });
 
 // Submit screenshot and match claim directly in database
@@ -2465,40 +2669,52 @@ Respond strictly in valid JSON format:
     match.winnerIgn = winnerObj.codmIgn;
     await updatePlatformFinance(match.platformFee);
 
-    // Settle Escrow
-    const creatorUser = await getUserFromDb(match.creator.id);
-    if (creatorUser) {
-      creatorUser.escrowBalance = Math.max(0, creatorUser.escrowBalance - match.stakeAmount);
-      await saveUserToDb(creatorUser);
+    // Settle Escrow atomically
+    if (match.creator?.id) {
+      await pool.query(`
+        UPDATE users 
+        SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)})
+        WHERE id = ${escapeSql(match.creator.id)}
+      `);
     }
 
-    if (match.opponent) {
-      const oppUser = await getUserFromDb(match.opponent.id);
-      if (oppUser) {
-        oppUser.escrowBalance = Math.max(0, oppUser.escrowBalance - match.stakeAmount);
-        await saveUserToDb(oppUser);
+    if (match.opponent?.id) {
+      await pool.query(`
+        UPDATE users 
+        SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)})
+        WHERE id = ${escapeSql(match.opponent.id)}
+      `);
+    }
+
+    // Winner gets the pot minus platform fee credited to wallet balance atomically
+    if (winnerObj?.id) {
+      const txWId = `tx_${Date.now()}_win`;
+      const descWin = `🏆 Won 1v1 Escrow Match #${match.roomCode} vs ${loserObj.codmIgn}: ₦${match.winnerPayout.toLocaleString()} credited to wallet balance. Ready for instant cashout.`;
+      
+      const insRes = await pool.query(`
+        INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+        VALUES (${escapeSql(txWId)}, ${escapeSql(winnerObj.id)}, 'MATCH_WIN_PAYOUT', ${escapeSql(match.winnerPayout)}, ${escapeSql(descWin)}, ${escapeSql(match.id)}, ${Date.now()})
+        ON CONFLICT (id) DO NOTHING
+        RETURNING id;
+      `);
+
+      if (insRes.rows.length > 0) {
+        await pool.query(`
+          UPDATE users 
+          SET balance = balance + ${escapeSql(match.winnerPayout)},
+              total_winnings = total_winnings + ${escapeSql(match.winnerPayout)},
+              wins = wins + 1
+          WHERE id = ${escapeSql(winnerObj.id)}
+        `);
       }
-    }
 
-    // Winner gets the pot minus platform fee credited to wallet balance
-    if (winnerUser) {
-      winnerUser.balance += match.winnerPayout;
-      winnerUser.totalWinnings += match.winnerPayout;
-      winnerUser.wins += 1;
-
-      const hasBank = winnerUser.bankName && winnerUser.accountNumber;
-      const txW = {
-        id: `tx_${Date.now()}_win`,
-        type: 'MATCH_WIN_PAYOUT' as const,
-        amount: match.winnerPayout,
-        description: `🏆 Won 1v1 Escrow Match #${match.roomCode} vs ${loserObj.codmIgn}: ₦${match.winnerPayout.toLocaleString()} credited to wallet balance.${hasBank ? ` Ready for instant cashout to ${winnerUser.bankName} (${winnerUser.accountNumber}).` : ' Ready for instant cashout.'}`,
-        timestamp: Date.now(),
-        matchId: match.id,
-      };
-      winnerUser.transactions.unshift(txW);
+      if (loserObj?.id) {
+        await pool.query(`
+          UPDATE users SET losses = losses + 1 WHERE id = ${escapeSql(loserObj.id)}
+        `);
+      }
 
       match.resolutionNotes = `Match resolved! Winner is ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} credited to winner's wallet. Ready for instant cashout!`;
-
       match.chatMessages.push({
         id: `msg_${Date.now()}_settle`,
         senderId: 'SYSTEM',
@@ -2506,14 +2722,6 @@ Respond strictly in valid JSON format:
         text: `🏆 MATCH CONCLUDED! Winner: ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} winning payout has been added to their wallet balance and is ready for instant cashout!`,
         timestamp: Date.now(),
       });
-
-      await saveUserToDb(winnerUser);
-      await saveTransactionToDb(winnerUser.id, txW);
-
-      if (loserUser) {
-        loserUser.losses += 1;
-        await saveUserToDb(loserUser);
-      }
     }
   } else if (resolveWinner === 'dispute') {
     match.status = 'DISPUTED';
@@ -2552,41 +2760,48 @@ app.post('/api/matches/:id/admin-resolve', async (req, res) => {
   const winnerUser = await getUserFromDb(winnerObj.id);
   const loserUser = await getUserFromDb(loserObj.id);
 
-  // Settle Escrow
-  const creatorUser = await getUserFromDb(match.creator.id);
-  if (creatorUser) {
-    creatorUser.escrowBalance = Math.max(0, creatorUser.escrowBalance - match.stakeAmount);
-    await saveUserToDb(creatorUser);
+  // Settle Escrow atomically
+  if (match.creator?.id) {
+    await pool.query(`
+      UPDATE users 
+      SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)})
+      WHERE id = ${escapeSql(match.creator.id)}
+    `);
   }
 
-  if (match.opponent) {
-    const oppUser = await getUserFromDb(match.opponent.id);
-    if (oppUser) {
-      oppUser.escrowBalance = Math.max(0, oppUser.escrowBalance - match.stakeAmount);
-      await saveUserToDb(oppUser);
+  if (match.opponent?.id) {
+    await pool.query(`
+      UPDATE users 
+      SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)})
+      WHERE id = ${escapeSql(match.opponent.id)}
+    `);
+  }
+
+  if (winnerObj?.id) {
+    const txId = `tx_${Date.now()}_win`;
+    const descNote = `🏆 Admin resolved 1v1 match #${match.roomCode} win in favor of ${winnerObj.codmIgn}`;
+    const insRes = await pool.query(`
+      INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+      VALUES (${escapeSql(txId)}, ${escapeSql(winnerObj.id)}, 'MATCH_WIN_PAYOUT', ${escapeSql(match.winnerPayout)}, ${escapeSql(descNote)}, ${escapeSql(match.id)}, ${Date.now()})
+      ON CONFLICT (id) DO NOTHING
+      RETURNING id;
+    `);
+
+    if (insRes.rows.length > 0) {
+      await pool.query(`
+        UPDATE users 
+        SET balance = balance + ${escapeSql(match.winnerPayout)},
+            total_winnings = total_winnings + ${escapeSql(match.winnerPayout)},
+            wins = wins + 1
+        WHERE id = ${escapeSql(winnerObj.id)}
+      `);
     }
-  }
 
-  if (winnerUser) {
-    winnerUser.balance += match.winnerPayout;
-    winnerUser.totalWinnings += match.winnerPayout;
-    winnerUser.wins += 1;
-    const tx = {
-      id: `tx_${Date.now()}_win`,
-      type: 'MATCH_WIN_PAYOUT' as const,
-      amount: match.winnerPayout,
-      description: `🏆 Admin resolved 1v1 match #${match.roomCode} win in favor of ${winnerObj.codmIgn}`,
-      timestamp: Date.now(),
-      matchId: match.id,
-    };
-    winnerUser.transactions.unshift(tx);
-    await saveUserToDb(winnerUser);
-    await saveTransactionToDb(winnerUser.id, tx);
-  }
-
-  if (loserUser) {
-    loserUser.losses += 1;
-    await saveUserToDb(loserUser);
+    if (loserObj?.id) {
+      await pool.query(`
+        UPDATE users SET losses = losses + 1 WHERE id = ${escapeSql(loserObj.id)}
+      `);
+    }
   }
 
   match.status = 'SETTLED';

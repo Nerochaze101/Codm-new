@@ -313,11 +313,14 @@ function MainApp() {
   ) => {
     try {
       const res = await withdrawWallet(currentUser.id, amount, bankDetails);
-      // Immediately deduct balance from state for instant responsiveness
+      // Immediately deduct balance and update bank details in local state
       if (res && res.balance !== undefined) {
         setCurrentUser(prev => ({
           ...prev,
           balance: res.balance,
+          bankName: bankDetails.bankName || prev.bankName,
+          accountNumber: bankDetails.accountNumber || prev.accountNumber,
+          accountName: bankDetails.accountName || prev.accountName,
           transactions: res.transaction ? [res.transaction, ...(prev.transactions || [])] : prev.transactions,
         }));
       }
@@ -325,10 +328,8 @@ function MainApp() {
       if (updatedUser) {
         setCurrentUser(updatedUser);
       }
-      const provName = res.providerUsed === 'flutterwave' ? 'Flutterwave' : res.providerUsed === 'paystack' ? 'Paystack' : 'Manual Payout';
-      alert(`Successfully processed cashout of ₦${amount.toLocaleString()} via ${provName} to ${bankDetails.bankName} (${bankDetails.accountNumber})! New balance: ₦${(res.balance ?? updatedUser?.balance ?? 0).toLocaleString()}`);
     } catch (err: any) {
-      alert(err.message || 'Cash out failed');
+      throw err;
     }
   };
 
@@ -338,9 +339,9 @@ function MainApp() {
       if (refreshed) {
         setCurrentUser(refreshed);
       }
-      alert(clearAll ? 'Transaction history has been cleanly cleared.' : 'Transaction history cleaned and duplicate records removed successfully!');
     } catch (err: any) {
-      alert(err.message || 'Failed to clean history');
+      console.error('Failed to clean history:', err);
+      throw err;
     }
   };
 

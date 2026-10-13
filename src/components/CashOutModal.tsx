@@ -154,21 +154,13 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
 
   // Step 2: User explicitly confirms the withdrawal
   const handleFinalSubmit = async () => {
+    if (isSubmitting) return;
     setError(null);
     setSuccessMsg(null);
     setIsSubmitting(true);
 
     try {
-      // Save bank details to user profile first
-      if (onSaveBankInfo) {
-        await onSaveBankInfo({
-          bankName,
-          accountNumber: accountNumber.trim(),
-          accountName: accountName.trim(),
-        });
-      }
-
-      // Execute cashout
+      // Execute cashout directly with bank details included atomically
       const bankCode = gateway === 'flutterwave' ? selectedBankObj.flwCode : selectedBankObj.paystackCode;
       await onConfirmCashOut(amountToWithdraw, {
         bankName,
