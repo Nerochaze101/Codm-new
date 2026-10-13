@@ -308,9 +308,12 @@ async function saveUserToDb(user: UserProfile, password?: string) {
         account_number = EXCLUDED.account_number,
         account_name = EXCLUDED.account_name,
         referred_by = EXCLUDED.referred_by,
+        referral_code = EXCLUDED.referral_code,
+        total_referral_earnings = EXCLUDED.total_referral_earnings;
     `);
   } catch (err) {
     console.error(`Error saving user ${user.id} to DB:`, err);
+    throw err;
   }
 }
 
@@ -336,6 +339,7 @@ async function saveTransactionToDb(userId: string, tx: any) {
     `);
   } catch (err) {
     console.error(`Error saving transaction ${tx.id} to DB:`, err);
+    throw err;
   }
 }
 
@@ -452,9 +456,11 @@ async function saveMatchToDb(match: any) {
         resolution_notes = EXCLUDED.resolution_notes,
         chat_messages = EXCLUDED.chat_messages,
         room_generated_at = EXCLUDED.room_generated_at,
+        settled_at = EXCLUDED.settled_at;
     `);
   } catch (err) {
     console.error(`Error saving match ${match.id} to DB:`, err);
+    throw err;
   }
 }
 
@@ -1183,12 +1189,16 @@ app.post('/api/auth/register', async (req, res) => {
     ] : [],
   };
 
-  await saveUserToDb(newUser, password);
-  if (newUser.transactions.length > 0) {
-    await saveTransactionToDb(newUser.id, newUser.transactions[0]);
+  try {
+    await saveUserToDb(newUser, password);
+    if (newUser.transactions.length > 0) {
+      await saveTransactionToDb(newUser.id, newUser.transactions[0]);
+    }
+    res.status(201).json(newUser);
+  } catch (err: any) {
+    console.error('Registration database error:', err);
+    res.status(500).json({ error: 'Failed to create user account in database' });
   }
-
-  res.status(201).json(newUser);
 });
 
 // Login with Email or CODM IGN and Password
@@ -1248,11 +1258,16 @@ app.post('/api/users', async (req, res) => {
     ] : [],
   };
 
-  await saveUserToDb(newUser, password);
-  if (newUser.transactions.length > 0) {
-    await saveTransactionToDb(newUser.id, newUser.transactions[0]);
+  try {
+    await saveUserToDb(newUser, password);
+    if (newUser.transactions.length > 0) {
+      await saveTransactionToDb(newUser.id, newUser.transactions[0]);
+    }
+    res.status(201).json(newUser);
+  } catch (err: any) {
+    console.error('User creation database error:', err);
+    res.status(500).json({ error: 'Failed to create user account in database' });
   }
-  res.json(newUser);
 });
 
 // Update User Profile directly in database
