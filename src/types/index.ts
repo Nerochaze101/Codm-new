@@ -30,6 +30,7 @@ export interface UserProfile {
   referralCode?: string;
   totalReferralEarnings?: number;
   referralCount?: number;
+  role?: string;
   transactions: Transaction[];
 }
 

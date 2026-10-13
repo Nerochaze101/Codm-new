@@ -2,6 +2,7 @@ import React from 'react';
 import { UserProfile } from '../types';
 import { Swords, Plus, Target, LogOut, Clock, User, Trophy, BookOpen, ShieldCheck } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
+import { useSound } from '../hooks/useSound';
 
 export interface NavbarProps {
   currentUser: UserProfile;
@@ -20,6 +21,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenFundWallet,
   onSignOut,
 }) => {
+  const playTabSound = useSound();
   return (
     <header className="sticky top-0 z-40 w-full border-b border-neutral-800/80 bg-neutral-950/95 backdrop-blur-md">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -50,7 +52,10 @@ export const Navbar: React.FC<NavbarProps> = ({
         {/* Zone 2: Separate Tab Navigation Links */}
         <nav className="hidden md:flex items-center gap-5 lg:gap-6 text-sm font-medium">
           <button
-            onClick={() => onNavigate('arena')}
+            onClick={() => {
+              playTabSound();
+              onNavigate('arena');
+            }}
             className={`transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
               currentTab === 'arena' ? 'text-amber-400 font-bold' : 'text-neutral-400 hover:text-neutral-200'
             }`}
@@ -60,7 +65,10 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
 
           <button
-            onClick={() => onNavigate('rules')}
+            onClick={() => {
+              playTabSound();
+              onNavigate('rules');
+            }}
             className={`transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
               currentTab === 'rules' ? 'text-amber-400 font-bold' : 'text-neutral-400 hover:text-neutral-200'
             }`}
@@ -70,7 +78,10 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
 
           <button
-            onClick={() => onNavigate('history')}
+            onClick={() => {
+              playTabSound();
+              onNavigate('history');
+            }}
             className={`transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
               currentTab === 'history' ? 'text-amber-400 font-bold' : 'text-neutral-400 hover:text-neutral-200'
             }`}
@@ -80,7 +91,10 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
 
           <button
-            onClick={() => onNavigate('profile')}
+            onClick={() => {
+              playTabSound();
+              onNavigate('profile');
+            }}
             className={`transition-colors whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
               currentTab === 'profile' ? 'text-amber-400 font-bold' : 'text-neutral-400 hover:text-neutral-200'
             }`}

@@ -52,6 +52,7 @@ export interface UserProfile {
   referredBy?: string;
   referralCode?: string;
   totalReferralEarnings?: number;
+  role?: string;
   transactions: Array<{
     id: string;
     type: 'DEPOSIT' | 'ESCROW_LOCK' | 'ESCROW_REFUND' | 'MATCH_WIN_PAYOUT' | 'WITHDRAWAL' | 'REFERRAL_EARNING';

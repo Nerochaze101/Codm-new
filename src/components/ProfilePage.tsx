@@ -3,9 +3,11 @@ import { UserProfile, Match } from '../types';
 import {
   User, Trophy, Award, TrendingUp, ShieldCheck, Swords,
   Edit3, Check, Copy, ArrowRight, Shield, Zap, Flame, Clock,
-  Calendar, CheckCircle2, AlertCircle, Camera, Crosshair, Users, LogOut, BookOpen
+  Calendar, CheckCircle2, AlertCircle, Camera, Crosshair, Users, LogOut, BookOpen,
+  Volume2, VolumeX
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
+import { useSoundSettings, playShotgunSound } from '../hooks/useSound';
 
 interface ProfilePageProps {
   currentUser: UserProfile;
@@ -59,6 +61,8 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
   const [selectedAvatar, setSelectedAvatar] = useState(currentUser.avatar);
   const [copiedUid, setCopiedUid] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const { soundEnabled, toggleSound } = useSoundSettings();
+  const [soundTestPlayed, setSoundTestPlayed] = useState(false);
 
   const winRate =
     currentUser.wins + currentUser.losses > 0
@@ -404,7 +408,96 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
       </div>
 
       {/* ------------------------------------------------------------- */}
-      {/* 4. DEDICATED SEPARATE TAB LINKS                               */}
+      {/* 4. GLOBAL TACTICAL SOUND SETTINGS                             */}
+      {/* ------------------------------------------------------------- */}
+      <div className="p-5 sm:p-6 rounded-3xl bg-neutral-900/90 border border-neutral-800 shadow-xl relative overflow-hidden">
+        {/* Ambient glow */}
+        <div className={`absolute top-0 right-0 w-64 h-64 rounded-full blur-3xl pointer-events-none transition-all duration-500 ${
+          soundEnabled ? 'bg-amber-500/10' : 'bg-neutral-800/10'
+        }`} />
+
+        <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-5">
+          <div className="flex items-start sm:items-center gap-4">
+            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 border transition-all duration-300 ${
+              soundEnabled
+                ? 'bg-amber-500/15 border-amber-500/40 text-amber-400 shadow-lg shadow-amber-500/10'
+                : 'bg-neutral-800/80 border-neutral-700 text-neutral-500'
+            }`}>
+              {soundEnabled ? (
+                <Volume2 className="w-6 h-6 stroke-[2.2]" />
+              ) : (
+                <VolumeX className="w-6 h-6 stroke-[2.2]" />
+              )}
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <h3 className="font-heading font-black text-base sm:text-lg text-white uppercase tracking-wide">
+                  Shotgun Fire Sound Effects
+                </h3>
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider flex items-center gap-1.5 border transition-all ${
+                  soundEnabled
+                    ? 'bg-amber-500/20 border-amber-500/40 text-amber-400 shadow-[0_0_10px_rgba(245,158,11,0.2)]'
+                    : 'bg-neutral-800 border-neutral-700 text-neutral-400'
+                }`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${
+                    soundEnabled ? 'bg-amber-400 animate-pulse' : 'bg-neutral-500'
+                  }`} />
+                  {soundEnabled ? 'ENABLED' : 'MUTED'}
+                </span>
+              </div>
+              <p className="text-xs text-neutral-400 max-w-md leading-relaxed">
+                Plays an authentic 12-gauge shotgun blast effect when tapping navigation tabs and entering combat arenas.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 pt-1 sm:pt-0 shrink-0">
+            {/* Test Fire Button */}
+            <button
+              type="button"
+              onClick={() => {
+                playShotgunSound();
+                setSoundTestPlayed(true);
+                setTimeout(() => setSoundTestPlayed(false), 1000);
+              }}
+              disabled={!soundEnabled}
+              title={soundEnabled ? "Preview shotgun blast sound" : "Enable sound to test fire"}
+              className={`px-3.5 py-2.5 rounded-xl text-xs font-bold font-mono uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer border ${
+                soundEnabled
+                  ? 'bg-neutral-800 hover:bg-neutral-700 border-neutral-700 text-amber-400 hover:border-amber-500/50 active:scale-95'
+                  : 'bg-neutral-900/50 border-neutral-800 text-neutral-600 cursor-not-allowed opacity-50'
+              }`}
+            >
+              <Crosshair className={`w-3.5 h-3.5 ${soundTestPlayed ? 'animate-spin text-amber-400' : ''}`} />
+              <span>{soundTestPlayed ? 'BLAST FIRED!' : 'TEST FIRE'}</span>
+            </button>
+
+            {/* Tactical Toggle Switch */}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={soundEnabled}
+              onClick={toggleSound}
+              className={`relative inline-flex h-8 w-14 shrink-0 cursor-pointer rounded-full border-2 transition-colors duration-300 ease-in-out focus:outline-none focus:ring-2 focus:ring-amber-500/50 ${
+                soundEnabled
+                  ? 'bg-amber-500 border-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.35)]'
+                  : 'bg-neutral-800 border-neutral-700'
+              }`}
+            >
+              <span className="sr-only">Toggle shotgun sound effects</span>
+              <span
+                className={`pointer-events-none inline-block h-6 w-6 transform rounded-full shadow-md ring-0 transition duration-300 ease-in-out mt-0.5 ${
+                  soundEnabled ? 'translate-x-6 bg-neutral-950' : 'translate-x-0.5 bg-neutral-400'
+                }`}
+              />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* ------------------------------------------------------------- */}
+      {/* 5. DEDICATED SEPARATE TAB LINKS                               */}
       {/* ------------------------------------------------------------- */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div
