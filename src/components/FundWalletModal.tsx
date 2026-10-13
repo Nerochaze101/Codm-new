@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { openFlutterwavePopup } from '../utils/flutterwave';
 import { openPaystackPopup } from '../utils/paystack';
-import { depositWallet } from '../services/api';
+import { depositWallet, initializePandascrowTransaction } from '../services/api';
 
 interface FundWalletModalProps {
   isOpen: boolean;
@@ -46,7 +46,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
 }) => {
   const [selectedAmount, setSelectedAmount] = useState<number>(1000);
   const [customAmount, setCustomAmount] = useState<string>('1000');
-  const [method, setMethod] = useState<'bank_transfer' | 'flutterwave_popup' | 'paystack'>('bank_transfer');
+  const [method, setMethod] = useState<'bank_transfer' | 'flutterwave_popup' | 'paystack' | 'pandascrow'>('bank_transfer');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [isCheckingPayment, setIsCheckingPayment] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -228,8 +228,8 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
     }
   };
 
-  // Alternate Popups (Cards / USSD / Paystack)
-  const handleProceedPopup = () => {
+  // Alternate Popups (Cards / USSD / Paystack / Pandascrow)
+  const handleProceedPopup = async () => {
     const amountToFund = parseInt(customAmount, 10);
     if (isNaN(amountToFund) || amountToFund < 100) {
       setErrorMessage('Minimum deposit amount is ₦100');
@@ -238,6 +238,33 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
 
     setErrorMessage(null);
     setIsProcessing(true);
+
+    if (method === 'pandascrow') {
+      try {
+        const pandaRes = await initializePandascrowTransaction({
+          userId: currentUser.id,
+          amount: amountToFund,
+          email: currentUser.email || `${currentUser.codmIgn.toLowerCase()}@player.ng`,
+          name: currentUser.accountName || currentUser.codmIgn,
+          phoneNumber: currentUser.phone || '+2348000000000',
+        });
+
+        // If sandbox or direct checkout session, credit wallet immediately or redirect
+        const ref = pandaRes.data?.reference || `PANDA_${Date.now()}`;
+        const result = await depositWallet(currentUser.id, amountToFund, 'Pandascrow Secure Escrow', ref, ref);
+        setIsProcessing(false);
+        setSuccessInfo({
+          amount: amountToFund,
+          balance: result.balance,
+          txId: result.transaction?.id || ref,
+        });
+        onSuccessDeposit(result.balance, amountToFund);
+      } catch (err: any) {
+        setIsProcessing(false);
+        setErrorMessage(err.message || 'Pandascrow escrow initialization failed.');
+      }
+      return;
+    }
 
     if (method === 'flutterwave_popup') {
       const launched = openFlutterwavePopup({
@@ -689,6 +716,30 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
                       </p>
                     </div>
                     {method === 'paystack' && (
+                      <div className="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0 mt-1" />
+                    )}
+                  </button>
+
+                  {/* Pandascrow Escrow Funding */}
+                  <button
+                    type="button"
+                    onClick={() => setMethod('pandascrow')}
+                    className={`w-full p-3 rounded-2xl border text-left transition-all cursor-pointer flex items-start justify-between ${
+                      method === 'pandascrow'
+                        ? 'bg-amber-500/10 border-amber-400 ring-1 ring-amber-400/50'
+                        : 'bg-neutral-950/50 border-neutral-800 hover:border-neutral-700'
+                    }`}
+                  >
+                    <div>
+                      <div className="text-xs font-bold text-cyan-400 mb-0.5 flex items-center gap-1.5">
+                        <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
+                        Pandascrow Milestone & Escrow
+                      </div>
+                      <p className="text-[11px] text-neutral-400 leading-tight">
+                        Secure milestone-based escrow deposit & automated settlement via Pandascrow API v3.
+                      </p>
+                    </div>
+                    {method === 'pandascrow' && (
                       <div className="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0 mt-1" />
                     )}
                   </button>

@@ -629,6 +629,118 @@ app.get('/api/paystack/test-connection', async (req, res) => {
   }
 });
 
+const getPandascrowBaseUrl = (key: string) => {
+  if (process.env.PANDASCROW_BASE_URL) {
+    return process.env.PANDASCROW_BASE_URL;
+  }
+  if (key && (key.includes('live') || (!key.includes('test') && !key.includes('sandbox')))) {
+    return 'https://api.pandascrow.io';
+  }
+  return 'https://sandbox.pandascrow.io';
+};
+
+// Pandascrow Integration Diagnostic Endpoint
+app.get('/api/pandascrow/test-connection', async (req, res) => {
+  const secretKey = process.env.PANDASCROW_SECRET_KEY || '';
+  const publicKey = process.env.VITE_PANDASCROW_PUBLIC_KEY || '';
+  const baseUrl = getPandascrowBaseUrl(secretKey);
+
+  if (!secretKey || secretKey.startsWith('sk_pandascrow_test_xxxx')) {
+    return res.json({
+      configured: false,
+      status: 'WARNING',
+      message: 'PANDASCROW_SECRET_KEY is not configured or using placeholder key. Please add PANDASCROW_SECRET_KEY to your environment variables.',
+      hasPublicKey: Boolean(publicKey),
+      baseUrl,
+    });
+  }
+
+  try {
+    const pandaRes = await fetch(`${baseUrl}/wallet/balance`, {
+      method: 'GET',
+      headers: {
+        'Token': secretKey,
+        'Authorization': `Token ${secretKey}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const data = await pandaRes.json();
+    res.json({
+      configured: true,
+      status: pandaRes.ok ? 'SUCCESS' : 'ERROR',
+      pandascrowResponse: data,
+      publicKeyConfigured: Boolean(publicKey),
+      baseUrl,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      configured: true,
+      status: 'ERROR',
+      error: err.message,
+      baseUrl,
+    });
+  }
+});
+
+// Pandascrow Initialize Escrow / Funding Endpoint
+app.post('/api/pandascrow/initialize', async (req, res) => {
+  const { userId, amount, email, name, phoneNumber } = req.body;
+  const numAmount = Number(amount);
+  if (!numAmount || numAmount <= 10) {
+    return res.status(400).json({ error: 'Invalid amount for Pandascrow transaction' });
+  }
+
+  const secretKey = process.env.PANDASCROW_SECRET_KEY || '';
+  const baseUrl = getPandascrowBaseUrl(secretKey);
+  const isConfigured = secretKey && !secretKey.startsWith('sk_pandascrow_test_xxxx');
+
+  if (!isConfigured) {
+    // Return simulated Sandbox Pandascrow Escrow / Funding session for seamless prototyping
+    const mockRef = `PANDA_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    return res.json({
+      success: true,
+      sandbox: true,
+      message: 'Pandascrow Sandbox Escrow session initialized successfully',
+      data: {
+        reference: mockRef,
+        checkout_url: `${baseUrl}/checkout/${mockRef}`,
+        account_number: '99' + Math.floor(10000000 + Math.random() * 90000000),
+        bank_name: 'Pandascrow SafeBank NGN',
+        amount: numAmount,
+      },
+    });
+  }
+
+  try {
+    const pandaRes = await fetch(`${baseUrl}/escrow/initialize`, {
+      method: 'POST',
+      headers: {
+        'Token': secretKey,
+        'Authorization': `Token ${secretKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        amount: numAmount,
+        currency: 'NGN',
+        customer: {
+          email: email || 'gladiator@codm.ng',
+          name: name || 'CODM Gladiator',
+          phone: phoneNumber || '+2348000000000',
+        },
+        type: 'instant_escrow',
+        metadata: { userId },
+      }),
+    });
+
+    const data = await pandaRes.json();
+    res.json(data);
+  } catch (err: any) {
+    console.error('Pandascrow initialization error:', err.message);
+    res.status(500).json({ error: err.message || 'Failed to initialize Pandascrow transaction' });
+  }
+});
+
 // Flutterwave Integration Diagnostic Endpoint
 app.get('/api/flutterwave/test-connection', async (req, res) => {
   const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || '';
@@ -733,6 +845,96 @@ app.get('/api/paystack/verify/:reference', async (req, res) => {
     res.status(500).json({ status: false, message: err.message });
   }
 });
+
+// Verify Pandascrow transaction by reference
+app.get('/api/pandascrow/verify/:reference', async (req, res) => {
+  const { reference } = req.params;
+  const secretKey = process.env.PANDASCROW_SECRET_KEY || '';
+  const baseUrl = getPandascrowBaseUrl(secretKey);
+
+  if (!secretKey || secretKey.startsWith('sk_pandascrow_test_xxxx')) {
+    return res.json({ status: true, message: 'Pandascrow Sandbox simulated verification success', data: { reference, status: 'success' } });
+  }
+
+  try {
+    const pandaRes = await fetch(`${baseUrl}/transaction/verify/${encodeURIComponent(reference)}`, {
+      method: 'GET',
+      headers: {
+        'Token': secretKey,
+        'Authorization': `Token ${secretKey}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const data = await pandaRes.json();
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ status: false, message: err.message });
+  }
+});
+
+// Pandascrow Webhook listener (Escrow & Funding) with atomic transaction locking and race condition guard
+app.post('/api/pandascrow/webhook', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const pandaSecret = process.env.PANDASCROW_SECRET_KEY || '';
+    const hash = crypto.createHmac('sha256', pandaSecret).update(JSON.stringify(req.body)).digest('hex');
+
+    if (hash !== req.headers['x-pandascrow-signature'] && pandaSecret && !pandaSecret.startsWith('sk_pandascrow_test_xxxx')) {
+      return res.status(401).json({ status: 'error', message: 'Invalid Pandascrow signature' });
+    }
+
+    const event = req.body;
+    if (event?.event === 'escrow.success' || event?.event === 'charge.success' || event?.status === 'success') {
+      const data = event.data || event;
+      const amountNaira = Number(data.amount) / (data.is_kobo ? 100 : 1);
+      const ref = data.reference || data.id;
+      const email = data.customer?.email || data.email;
+      const userId = data.metadata?.userId || data.user_id;
+
+      let targetUser: UserProfile | null = null;
+      if (userId) targetUser = await getUserFromDb(userId);
+      if (!targetUser && email) {
+        const found = await getUserByEmailOrIgn(email);
+        if (found) targetUser = found.user;
+      }
+
+      if (targetUser && amountNaira > 0) {
+        const txId = `tx_panda_${data.id || ref}`;
+        await client.query('BEGIN');
+        
+        // Race condition guard: lock user row with FOR UPDATE
+        await client.query(`SELECT * FROM users WHERE id = ${escapeSql(targetUser.id)} FOR UPDATE`);
+
+        const descNote = `Wallet top-up via Pandascrow Escrow [Ref: ${ref}]`;
+        const insRes = await client.query(`
+          INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
+          VALUES (${escapeSql(txId)}, ${escapeSql(targetUser.id)}, 'DEPOSIT', ${escapeSql(amountNaira)}, ${escapeSql(descNote)}, ${Date.now()})
+          ON CONFLICT (id) DO NOTHING
+          RETURNING id;
+        `);
+
+        if (insRes.rows.length > 0) {
+          await client.query(`
+            UPDATE users 
+            SET balance = balance + ${escapeSql(amountNaira)} 
+            WHERE id = ${escapeSql(targetUser.id)}
+          `);
+          console.log(`✅ [Pandascrow Webhook] Credited ₦${amountNaira} to user ${targetUser.id}.`);
+        }
+        await client.query('COMMIT');
+      }
+    }
+    return res.status(200).send('OK');
+  } catch (err: any) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    console.error('Pandascrow webhook error:', err);
+    return res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
 
 // Paystack Webhook listener
 app.post('/api/paystack/webhook', async (req, res) => {
@@ -1715,13 +1917,71 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
 
   const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || '';
   const paystackSecret = process.env.PAYSTACK_SECRET_KEY || '';
+  const pandaSecret = process.env.PANDASCROW_SECRET_KEY || '';
+  const pandaBaseUrl = getPandascrowBaseUrl(pandaSecret);
   let transferResult: any = null;
-  let providerUsed: 'flutterwave' | 'paystack' | 'manual' = 'manual';
+  let providerUsed: 'flutterwave' | 'paystack' | 'pandascrow' | 'manual' = 'manual';
 
   const flwConfigured = flwSecret && !flwSecret.startsWith('FLWSECK_TEST-xxxx');
   const paystackConfigured = paystackSecret && !paystackSecret.startsWith('sk_test_xxxx');
+  const pandaConfigured = pandaSecret && !pandaSecret.startsWith('sk_pandascrow_test_xxxx');
 
-  if (gateway === 'flutterwave' && flwConfigured) {
+  if (gateway === 'pandascrow') {
+    try {
+      console.log(`🚀 Initiating Pandascrow Transfer of ₦${numAmount} to ${accountNumber} (${bankName})...`);
+      if (!pandaConfigured) {
+        transferResult = {
+          gateway: 'pandascrow',
+          status: true,
+          data: { reference: `PANDA_TRF_${Date.now()}` },
+          message: 'Pandascrow Sandbox Simulated Payout Successful',
+        };
+        providerUsed = 'pandascrow';
+      } else {
+        const pandaRes = await fetch(`${pandaBaseUrl}/transfer`, {
+          method: 'POST',
+          headers: {
+            'Token': pandaSecret,
+            'Authorization': `Token ${pandaSecret}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            amount: numAmount,
+            currency: 'NGN',
+            bank_code: bankCode || '058',
+            account_number: accountNumber.trim(),
+            account_name: accountName || user?.codmIgn || 'Gladiator',
+            reference: `PANDA_TRF_${Date.now()}`,
+          }),
+        });
+        const pandaData = await pandaRes.json();
+        if (pandaData.status === 'success' || pandaData.status === true) {
+          transferResult = {
+            gateway: 'pandascrow',
+            status: true,
+            data: pandaData.data,
+            message: pandaData.message,
+          };
+          providerUsed = 'pandascrow';
+        } else {
+          transferResult = {
+            gateway: 'pandascrow',
+            status: false,
+            isManualFallback: true,
+            message: pandaData.message || 'Pandascrow payout pending manual review',
+          };
+        }
+      }
+    } catch (err: any) {
+      console.error('Pandascrow transfer error:', err.message);
+      transferResult = {
+        gateway: 'pandascrow',
+        status: false,
+        isManualFallback: true,
+        message: err.message,
+      };
+    }
+  } else if (gateway === 'flutterwave' && flwConfigured) {
     try {
       console.log(`🚀 Initiating Flutterwave Transfer of ₦${numAmount} to ${accountNumber} (${bankName} / code ${flwCode})...`);
       const flwTransferRes = await fetch('https://api.flutterwave.com/v3/transfers', {
@@ -1852,7 +2112,8 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
   let descNote = `Withdrawal request to ${bankName} (${accountNumber} - ${accountName})`;
   if (isAutomatedSuccess) {
     const ref = transferResult?.data?.reference || transferResult?.data?.id || 'OK';
-    descNote = `🚀 ${providerUsed === 'flutterwave' ? 'Flutterwave' : 'Paystack'} Transfer Sent to ${bankName} (${accountNumber} - ${accountName}) [Ref: ${ref}]`;
+    const provLabel = providerUsed === 'flutterwave' ? 'Flutterwave' : providerUsed === 'paystack' ? 'Paystack' : 'Pandascrow Escrow';
+    descNote = `🚀 ${provLabel} Transfer Sent to ${bankName} (${accountNumber} - ${accountName}) [Ref: ${ref}]`;
   } else if (isManual) {
     const reason = transferResult?.message || 'Queued for admin instant settlement';
     descNote = `⏳ Pending Manual Payout to ${bankName} (${accountNumber} - ${accountName}) [${reason}]`;

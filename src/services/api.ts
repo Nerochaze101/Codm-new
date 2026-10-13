@@ -101,6 +101,30 @@ export async function withdrawWallet(
   return await res.json();
 }
 
+export async function testPandascrowConnection() {
+  const res = await fetch('/api/pandascrow/test-connection');
+  return await res.json();
+}
+
+export async function initializePandascrowTransaction(data: {
+  userId: string;
+  amount: number;
+  email?: string;
+  name?: string;
+  phoneNumber?: string;
+}) {
+  const res = await fetch('/api/pandascrow/initialize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to initialize Pandascrow transaction');
+  }
+  return await res.json();
+}
+
 export async function testFlutterwaveConnection() {
   const res = await fetch('/api/flutterwave/test-connection');
   return await res.json();
