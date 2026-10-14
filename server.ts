@@ -659,8 +659,7 @@ app.get('/api/pandascrow/test-connection', async (req, res) => {
     const pandaRes = await fetch(`${baseUrl}/wallet/balance`, {
       method: 'GET',
       headers: {
-        'Token': secretKey,
-        'Authorization': `Token ${secretKey}`,
+        'Token': publicKey || secretKey,
         'Content-Type': 'application/json',
       },
     });
@@ -716,8 +715,7 @@ app.post('/api/pandascrow/initialize', async (req, res) => {
     const pandaRes = await fetch(`${baseUrl}/escrow/initialize`, {
       method: 'POST',
       headers: {
-        'Token': secretKey,
-        'Authorization': `Token ${secretKey}`,
+        'Token': publicKey || secretKey,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -850,6 +848,7 @@ app.get('/api/paystack/verify/:reference', async (req, res) => {
 app.get('/api/pandascrow/verify/:reference', async (req, res) => {
   const { reference } = req.params;
   const secretKey = process.env.PANDASCROW_SECRET_KEY || '';
+  const publicKey = process.env.VITE_PANDASCROW_PUBLIC_KEY || '';
   const baseUrl = getPandascrowBaseUrl(secretKey);
 
   if (!secretKey || secretKey.startsWith('sk_pandascrow_test_xxxx')) {
@@ -860,8 +859,7 @@ app.get('/api/pandascrow/verify/:reference', async (req, res) => {
     const pandaRes = await fetch(`${baseUrl}/transaction/verify/${encodeURIComponent(reference)}`, {
       method: 'GET',
       headers: {
-        'Token': secretKey,
-        'Authorization': `Token ${secretKey}`,
+        'Token': publicKey || secretKey,
         'Content-Type': 'application/json',
       },
     });
