@@ -1416,6 +1416,7 @@ Narration/Remark: ${wd.remark}`;
                       <th className="py-2 px-3">Name / Host</th>
                       <th className="py-2 px-3">Value / Target</th>
                       <th className="py-2 px-3">Priority</th>
+                      <th className="py-2 px-3">TTL</th>
                       <th className="py-2 px-3">Purpose</th>
                     </tr>
                   </thead>
@@ -1425,6 +1426,7 @@ Narration/Remark: ${wd.remark}`;
                       <td className="py-2.5 px-3">@ (or detailr.online)</td>
                       <td className="py-2.5 px-3 text-white">mail.hostinger.com</td>
                       <td className="py-2.5 px-3 text-amber-400 font-bold">10</td>
+                      <td className="py-2.5 px-3 text-cyan-300 font-mono">14400 (4 Hours)</td>
                       <td className="py-2.5 px-3 text-neutral-400">Routes incoming mail to Hostinger server</td>
                     </tr>
                     <tr>
@@ -1432,6 +1434,7 @@ Narration/Remark: ${wd.remark}`;
                       <td className="py-2.5 px-3">@</td>
                       <td className="py-2.5 px-3 text-neutral-200">v=spf1 include:_spf.mail.hostinger.com ~all</td>
                       <td className="py-2.5 px-3">—</td>
+                      <td className="py-2.5 px-3 text-cyan-300 font-mono">14400 (4 Hours)</td>
                       <td className="py-2.5 px-3 text-neutral-400">Authorizes Hostinger to send/receive mail</td>
                     </tr>
                     <tr>
@@ -1439,6 +1442,7 @@ Narration/Remark: ${wd.remark}`;
                       <td className="py-2.5 px-3">hostinger._domainkey</td>
                       <td className="py-2.5 px-3 text-neutral-200">v=DKIM1; k=rsa; p=MIIBIjANBg... (from Hostinger Email)</td>
                       <td className="py-2.5 px-3">—</td>
+                      <td className="py-2.5 px-3 text-cyan-300 font-mono">14400 (4 Hours)</td>
                       <td className="py-2.5 px-3 text-neutral-400">Email signature verification</td>
                     </tr>
                   </tbody>
