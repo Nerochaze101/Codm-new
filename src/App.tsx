@@ -251,6 +251,10 @@ function MainApp() {
     password: string;
     codmIgn: string;
     codmUid: string;
+    phone: string;
+    bankName: string;
+    accountNumber: string;
+    accountName: string;
     initialDeposit: number;
   }) => {
     const user = await signUpUser(data);

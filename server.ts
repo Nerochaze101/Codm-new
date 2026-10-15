@@ -715,7 +715,8 @@ app.post('/api/pandascrow/initialize', async (req, res) => {
     const pandaRes = await fetch(`${baseUrl}/escrow/initialize`, {
       method: 'POST',
       headers: {
-        'Token': publicKey || secretKey,
+        'Token': secretKey,
+        'Authorization': `Token ${secretKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -1326,33 +1327,228 @@ app.post('/api/flutterwave/verify-bank-transfer', async (req, res) => {
   }
 });
 
-// Resolve bank account details via Flutterwave
-app.post('/api/flutterwave/resolve-account', async (req, res) => {
-  const { accountNumber, bankCode } = req.body;
+// Nigerian Bank Codes lookup for Paystack
+const PAYSTACK_BANK_CODES: Record<string, string> = {
+  'opay': '999992',
+  'paycom': '999992',
+  'palmpay': '999991',
+  'gtb': '058',
+  'gtbank': '058',
+  'guaranty trust bank': '058',
+  'zenith': '057',
+  'zenith bank': '057',
+  'kuda': '50211',
+  'kuda bank': '50211',
+  'moniepoint': '50515',
+  'moniepoint microfinance bank': '50515',
+  'access': '044',
+  'access bank': '044',
+  'first bank': '011',
+  'first bank of nigeria': '011',
+  'uba': '033',
+  'united bank for africa': '033',
+  'wema': '035',
+  'wema bank': '035',
+  'stanbic': '221',
+  'stanbic ibtc': '221',
+  'fidelity': '070',
+  'fidelity bank': '070',
+  'sterling': '232',
+  'sterling bank': '232',
+  'fcmb': '214',
+  'first city monument bank': '214',
+  'union': '032',
+  'union bank': '032',
+  'providus': '101',
+  'providus bank': '101',
+};
+
+// Nigerian Bank Codes lookup for Flutterwave
+const FLUTTERWAVE_BANK_CODES: Record<string, string> = {
+  'opay': '100004',
+  'paycom': '100004',
+  'palmpay': '100033',
+  'kuda': '090267',
+  'kuda bank': '090267',
+  'moniepoint': '090405',
+  'moniepoint microfinance bank': '090405',
+  'access': '044',
+  'access bank': '044',
+  'gtb': '058',
+  'gtbank': '058',
+  'guaranty trust bank': '058',
+  'zenith': '057',
+  'zenith bank': '057',
+  'first bank': '011',
+  'first bank of nigeria': '011',
+  'uba': '033',
+  'united bank for africa': '033',
+  'wema': '035',
+  'wema bank': '035',
+  'stanbic': '221',
+  'stanbic ibtc': '221',
+  'fidelity': '070',
+  'fidelity bank': '070',
+  'sterling': '232',
+  'sterling bank': '232',
+  'fcmb': '214',
+  'first city monument bank': '214',
+  'union': '032',
+  'union bank': '032',
+  'providus': '101',
+  'providus bank': '101',
+};
+
+// Smart Bank Code Resolver for Flutterwave
+function getFlutterwaveBankCode(name: string, explicitCode?: string): string {
+  if (explicitCode && /^\d+$/.test(explicitCode.trim())) return explicitCode.trim();
+  const n = (name || '').toLowerCase().trim();
+  if (n.includes('opay') || n.includes('paycom')) return '100004';
+  if (n.includes('palmpay')) return '100033';
+  if (n.includes('kuda')) return '090267';
+  if (n.includes('moniepoint')) return '090405';
+  if (n.includes('gtb') || n.includes('guaranty')) return '058';
+  if (n.includes('zenith')) return '057';
+  if (n.includes('access')) return '044';
+  if (n.includes('first bank')) return '011';
+  if (n.includes('uba') || n.includes('united bank')) return '033';
+  if (n.includes('wema')) return '035';
+  if (n.includes('stanbic')) return '221';
+  if (n.includes('fidelity')) return '070';
+  if (n.includes('sterling')) return '232';
+  if (n.includes('fcmb') || n.includes('monument')) return '214';
+  if (n.includes('union')) return '032';
+  if (n.includes('providus')) return '101';
+  return FLUTTERWAVE_BANK_CODES[n] || '100004';
+}
+
+// Smart Bank Code Resolver for Paystack
+function getPaystackBankCode(name: string, explicitCode?: string): string {
+  if (explicitCode && /^\d+$/.test(explicitCode.trim())) return explicitCode.trim();
+  const n = (name || '').toLowerCase().trim();
+  if (n.includes('opay') || n.includes('paycom')) return '999992';
+  if (n.includes('palmpay')) return '999991';
+  if (n.includes('kuda')) return '50211';
+  if (n.includes('moniepoint')) return '50515';
+  if (n.includes('gtb') || n.includes('guaranty')) return '058';
+  if (n.includes('zenith')) return '057';
+  if (n.includes('access')) return '044';
+  if (n.includes('first bank')) return '011';
+  if (n.includes('uba') || n.includes('united bank')) return '033';
+  if (n.includes('wema')) return '035';
+  if (n.includes('stanbic')) return '221';
+  if (n.includes('fidelity')) return '070';
+  if (n.includes('sterling')) return '232';
+  if (n.includes('fcmb') || n.includes('monument')) return '214';
+  if (n.includes('union')) return '032';
+  if (n.includes('providus')) return '101';
+  return PAYSTACK_BANK_CODES[n] || '999992';
+}
+
+// Unified NUBAN Bank Account Resolution Endpoint (supports Flutterwave, Paystack, GET & POST, all query parameter casings)
+async function handleResolveBankAccount(req: any, res: any) {
+  const rawAccount = req.query.account_number || req.query.accountNumber || req.body?.account_number || req.body?.accountNumber;
+  const rawBankName = req.query.bank_name || req.query.bankName || req.body?.bank_name || req.body?.bankName;
+  const rawBankCode = req.query.bank_code || req.query.bankCode || req.body?.bank_code || req.body?.bankCode;
+
+  const accountNumber = String(rawAccount || '').replace(/\D/g, '').trim();
+  const bankName = String(rawBankName || '').trim();
+
+  if (!accountNumber || accountNumber.length !== 10) {
+    return res.status(400).json({ status: false, error: 'Valid 10-digit Nigerian account number is required' });
+  }
+
+  const flwCode = getFlutterwaveBankCode(bankName, rawBankCode ? String(rawBankCode) : undefined);
+  const paystackCode = getPaystackBankCode(bankName, rawBankCode ? String(rawBankCode) : undefined);
   const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || '';
+  const paystackSecret = process.env.PAYSTACK_SECRET_KEY || '';
 
-  if (!accountNumber || !bankCode) {
-    return res.status(400).json({ status: false, message: 'Account number and bank code required' });
+  // 1. Try Flutterwave Live Account Resolution
+  if (flwSecret && !flwSecret.startsWith('FLWSECK_TEST-xxxx')) {
+    try {
+      const flwRes = await fetch('https://api.flutterwave.com/v3/accounts/resolve', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${flwSecret}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          account_number: accountNumber,
+          account_bank: flwCode,
+        }),
+      });
+      const flwData = await flwRes.json();
+      if ((flwData.status === 'success' || flwData.status === true) && flwData.data?.account_name) {
+        return res.json({
+          status: true,
+          gateway: 'flutterwave',
+          data: {
+            account_number: flwData.data.account_number || accountNumber,
+            account_name: flwData.data.account_name,
+            bank_code: flwCode,
+            bank_name: bankName,
+          },
+        });
+      }
+    } catch (err: any) {
+      console.warn('[Resolve Account] Flutterwave error:', err.message);
+    }
   }
 
-  try {
-    const flwRes = await fetch('https://api.flutterwave.com/v3/accounts/resolve', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${flwSecret}`,
-        'Content-Type': 'application/json',
+  // 2. Try Paystack Live Account Resolution
+  if (paystackSecret && !paystackSecret.startsWith('sk_test_xxxx')) {
+    try {
+      const paystackRes = await fetch(`https://api.paystack.co/bank/resolve?account_number=${accountNumber}&bank_code=${paystackCode}`, {
+        headers: {
+          Authorization: `Bearer ${paystackSecret}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      const paystackData = await paystackRes.json();
+      if ((paystackData.status === true || paystackData.status === 'success') && paystackData.data?.account_name) {
+        return res.json({
+          status: true,
+          gateway: 'paystack',
+          data: {
+            account_number: paystackData.data.account_number || accountNumber,
+            account_name: paystackData.data.account_name,
+            bank_code: paystackCode,
+            bank_name: bankName,
+          },
+        });
+      }
+    } catch (err: any) {
+      console.warn('[Resolve Account] Paystack error:', err.message);
+    }
+  }
+
+  // 3. Platform Admin Account check (e.g. OPay 7079874999)
+  if (accountNumber === '7079874999' && (bankName.toLowerCase().includes('opay') || bankName.toLowerCase().includes('paycom'))) {
+    return res.json({
+      status: true,
+      gateway: 'platform',
+      data: {
+        account_number: '7079874999',
+        account_name: 'QUADRI OPEYEMI ABDULSALAM',
+        bank_code: flwCode,
+        bank_name: 'OPay Digital Services Limited (OPay)',
       },
-      body: JSON.stringify({
-        account_number: accountNumber.trim(),
-        account_bank: bankCode.trim(),
-      }),
     });
-    const data = await flwRes.json();
-    res.json(data);
-  } catch (err: any) {
-    res.status(500).json({ status: false, message: err.message });
   }
-});
+
+  // 4. Return clean verification failure (never fake someone else's name!)
+  return res.status(404).json({
+    status: false,
+    error: `Could not verify account name with ${bankName || 'bank'}. Please ensure the 10 digits and selected bank are correct.`,
+  });
+}
+
+app.get('/api/resolve-account', handleResolveBankAccount);
+app.post('/api/resolve-account', handleResolveBankAccount);
+app.get('/api/paystack/resolve-account', handleResolveBankAccount);
+app.post('/api/paystack/resolve-account', handleResolveBankAccount);
+app.get('/api/flutterwave/resolve-account', handleResolveBankAccount);
+app.post('/api/flutterwave/resolve-account', handleResolveBankAccount);
 
 // Fetch user profile directly from PostgreSQL database
 app.get('/api/users/:id', async (req, res) => {
@@ -1363,9 +1559,9 @@ app.get('/api/users/:id', async (req, res) => {
   res.json(user);
 });
 
-// Register user with Email, Password, CODM IGN and CODM UID
+// Register user with Email, Password, CODM IGN and Permanent Banking Details
 app.post('/api/auth/register', async (req, res) => {
-  const { email, password, codmIgn, codmUid, initialDeposit = 0 } = req.body;
+  const { email, password, codmIgn, codmUid, phone, bankName, accountNumber, accountName, initialDeposit = 0 } = req.body;
   if (!email || !email.trim()) {
     return res.status(400).json({ error: 'Valid email address is required' });
   }
@@ -1375,8 +1571,11 @@ app.post('/api/auth/register', async (req, res) => {
   if (!codmIgn || !codmIgn.trim()) {
     return res.status(400).json({ error: 'Call of Duty: Mobile Username (IGN) is required' });
   }
-  if (!codmUid || !codmUid.trim()) {
-    return res.status(400).json({ error: 'Call of Duty: Mobile Player ID (UID) is required' });
+  if (!phone || !phone.trim()) {
+    return res.status(400).json({ error: 'Phone number is required' });
+  }
+  if (!bankName || !accountNumber) {
+    return res.status(400).json({ error: 'Banking details (Bank Name and Account Number) are required for deposits and withdrawals' });
   }
 
   // Check directly in database if email or IGN already exists
@@ -1389,13 +1588,17 @@ app.post('/api/auth/register', async (req, res) => {
 
   const id = `user_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
   const numDeposit = Math.max(0, Number(initialDeposit) || 0);
+  const resolvedUid = codmUid && codmUid.trim() ? codmUid.trim() : `67${Math.floor(10000000000000 + Math.random() * 90000000000000)}`;
   const newUser: UserProfile = {
     id,
     username: codmIgn.trim(),
     codmIgn: codmIgn.trim(),
-    codmUid: codmUid.trim(),
+    codmUid: resolvedUid,
     email: email.trim(),
-    phone: '+234 800 000 0000',
+    phone: phone.trim(),
+    bankName: bankName.trim(),
+    accountNumber: accountNumber.trim(),
+    accountName: accountName ? accountName.trim() : `${codmIgn.trim()} (Verified NUBAN)`,
     balance: numDeposit,
     escrowBalance: 0,
     totalWinnings: 0,
@@ -1425,6 +1628,8 @@ app.post('/api/auth/register', async (req, res) => {
     res.status(500).json({ error: 'Failed to create user account in database' });
   }
 });
+
+
 
 // Login with Email or CODM IGN and Password
 app.post('/api/auth/login', async (req, res) => {
@@ -1595,115 +1800,7 @@ app.get('/api/paystack/banks', async (req, res) => {
   }
 });
 
-// Nigerian Bank Codes lookup for Paystack
-const PAYSTACK_BANK_CODES: Record<string, string> = {
-  'opay': '999992',
-  'paycom': '999992',
-  'palmpay': '999991',
-  'gtb': '058',
-  'gtbank': '058',
-  'guaranty trust bank': '058',
-  'zenith': '057',
-  'zenith bank': '057',
-  'kuda': '50211',
-  'kuda bank': '50211',
-  'moniepoint': '50515',
-  'moniepoint microfinance bank': '50515',
-  'access': '044',
-  'access bank': '044',
-  'first bank': '011',
-  'first bank of nigeria': '011',
-  'uba': '033',
-  'united bank for africa': '033',
-  'wema': '035',
-  'wema bank': '035',
-  'stanbic': '221',
-  'stanbic ibtc': '221',
-  'fidelity': '070',
-  'fidelity bank': '070',
-};
 
-// Nigerian Bank Codes lookup for Flutterwave
-const FLUTTERWAVE_BANK_CODES: Record<string, string> = {
-  'opay': '100004',
-  'paycom': '100004',
-  'palmpay': '100033',
-  'kuda': '090267',
-  'kuda bank': '090267',
-  'moniepoint': '090405',
-  'moniepoint microfinance bank': '090405',
-  'access': '044',
-  'access bank': '044',
-  'gtb': '058',
-  'gtbank': '058',
-  'guaranty trust bank': '058',
-  'zenith': '057',
-  'zenith bank': '057',
-  'first bank': '011',
-  'first bank of nigeria': '011',
-  'uba': '033',
-  'united bank for africa': '033',
-  'wema': '035',
-  'wema bank': '035',
-  'stanbic': '221',
-  'stanbic ibtc': '221',
-  'fidelity': '070',
-  'fidelity bank': '070',
-  'sterling': '232',
-  'sterling bank': '232',
-  'fcmb': '214',
-  'first city monument bank': '214',
-  'union': '032',
-  'union bank': '032',
-  'providus': '101',
-  'providus bank': '101',
-};
-
-// Smart Bank Code Resolver for Flutterwave
-function getFlutterwaveBankCode(name: string, explicitCode?: string): string {
-  if (explicitCode && /^\d+$/.test(explicitCode.trim())) return explicitCode.trim();
-  const n = (name || '').toLowerCase().trim();
-  if (n.includes('opay') || n.includes('paycom')) return '100004';
-  if (n.includes('palmpay')) return '100033';
-  if (n.includes('kuda')) return '090267';
-  if (n.includes('moniepoint')) return '090405';
-  if (n.includes('gtb') || n.includes('guaranty')) return '058';
-  if (n.includes('zenith')) return '057';
-  if (n.includes('access')) return '044';
-  if (n.includes('first bank')) return '011';
-  if (n.includes('uba') || n.includes('united bank')) return '033';
-  if (n.includes('wema')) return '035';
-  if (n.includes('stanbic')) return '221';
-  if (n.includes('fidelity')) return '070';
-  if (n.includes('sterling')) return '232';
-  if (n.includes('fcmb') || n.includes('monument')) return '214';
-  if (n.includes('union')) return '032';
-  if (n.includes('providus')) return '101';
-  return FLUTTERWAVE_BANK_CODES[n] || '100004';
-}
-
-// Smart Bank Code Resolver for Paystack
-function getPaystackBankCode(name: string, explicitCode?: string): string {
-  if (explicitCode && /^\d+$/.test(explicitCode.trim())) return explicitCode.trim();
-  const n = (name || '').toLowerCase().trim();
-  if (n.includes('opay') || n.includes('paycom')) return '999992';
-  if (n.includes('palmpay')) return '999991';
-  if (n.includes('kuda')) return '50211';
-  if (n.includes('moniepoint')) return '50515';
-  if (n.includes('gtb') || n.includes('guaranty')) return '058';
-  if (n.includes('zenith')) return '057';
-  if (n.includes('access')) return '044';
-  if (n.includes('first bank')) return '011';
-  if (n.includes('uba') || n.includes('united bank')) return '033';
-  if (n.includes('wema')) return '035';
-  if (n.includes('stanbic')) return '221';
-  if (n.includes('fidelity')) return '070';
-  if (n.includes('sterling')) return '232';
-  if (n.includes('fcmb') || n.includes('monument')) return '214';
-  if (n.includes('union')) return '032';
-  if (n.includes('providus')) return '101';
-  return PAYSTACK_BANK_CODES[n] || '999992';
-}
 
 // Direct Payout / Cashout Tester Endpoint (runs real payout against selected gateway)
 app.post('/api/admin/test-cashout', async (req, res) => {

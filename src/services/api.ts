@@ -13,6 +13,10 @@ export async function signUpUser(data: {
   password?: string;
   codmIgn: string;
   codmUid: string;
+  phone?: string;
+  bankName?: string;
+  accountNumber?: string;
+  accountName?: string;
   initialDeposit?: number;
 }): Promise<UserProfile> {
   const res = await fetch('/api/auth/register', {
