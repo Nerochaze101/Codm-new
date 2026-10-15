@@ -1431,8 +1431,18 @@ Narration/Remark: ${wd.remark}`;
                 <p className="text-xs text-neutral-300">
                   Paste this endpoint URL into your Hostinger Agentic Mail or inbound forwarding settings so that any email sent to <strong className="text-cyan-400 font-mono">codstake@detailr.online</strong> is automatically posted and received here in your Admin Dashboard:
                 </p>
-                <div className="p-2.5 bg-neutral-950 border border-neutral-800 rounded-lg font-mono text-[11px] text-cyan-300 select-all truncate">
-                  {window.location.origin}/api/inbound-mail
+                <div className="flex flex-col sm:flex-row items-center gap-2">
+                  <div className="flex-1 p-2.5 bg-neutral-950 border border-neutral-800 rounded-lg font-mono text-[11px] text-cyan-300 select-all truncate w-full">
+                    {window.location.origin}/api/inbound-mail
+                  </div>
+                  <button
+                    onClick={handleSimulateMail}
+                    disabled={isSimulatingMail}
+                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black text-xs uppercase tracking-wider rounded-lg transition shrink-0 cursor-pointer flex items-center gap-1.5 shadow"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    {isSimulatingMail ? 'Testing...' : '🧪 Test & Verify Inbound'}
+                  </button>
                 </div>
               </div>
 
