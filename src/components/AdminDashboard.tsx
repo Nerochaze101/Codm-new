@@ -87,6 +87,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
   const [isSendingMail, setIsSendingMail] = useState(false);
   const [isSimulatingMail, setIsSimulatingMail] = useState(false);
   const [mailMsg, setMailMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [copiedDnsKey, setCopiedDnsKey] = useState<string | null>(null);
+
+  const handleCopyDns = (text: string, key: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedDnsKey(key);
+    setTimeout(() => setCopiedDnsKey(null), 2000);
+  };
 
   // Assign unmatched alert dialog
   const [assignAlertModal, setAssignAlertModal] = useState<{
@@ -1403,50 +1410,183 @@ Narration/Remark: ${wd.remark}`;
               </div>
             </div>
 
-            {/* Hostinger DNS Records Table */}
-            <div className="bg-neutral-950/80 rounded-2xl p-4 border border-neutral-800 space-y-3">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-cyan-400 font-mono">
-                Required DNS Records in Hostinger DNS Manager:
-              </h4>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs font-mono">
-                  <thead>
-                    <tr className="text-neutral-500 border-b border-neutral-800 uppercase text-[10px]">
-                      <th className="py-2 px-3">Type</th>
-                      <th className="py-2 px-3">Name / Host</th>
-                      <th className="py-2 px-3">Value / Target</th>
-                      <th className="py-2 px-3">Priority</th>
-                      <th className="py-2 px-3">TTL</th>
-                      <th className="py-2 px-3">Purpose</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-neutral-900 text-neutral-300">
-                    <tr>
-                      <td className="py-2.5 px-3 font-bold text-cyan-400">MX</td>
-                      <td className="py-2.5 px-3">@ (or detailr.online)</td>
-                      <td className="py-2.5 px-3 text-white">mail.hostinger.com</td>
-                      <td className="py-2.5 px-3 text-amber-400 font-bold">10</td>
-                      <td className="py-2.5 px-3 text-cyan-300 font-mono">14400 (4 Hours)</td>
-                      <td className="py-2.5 px-3 text-neutral-400">Routes incoming mail to Hostinger server</td>
-                    </tr>
-                    <tr>
-                      <td className="py-2.5 px-3 font-bold text-cyan-400">TXT (SPF)</td>
-                      <td className="py-2.5 px-3">@</td>
-                      <td className="py-2.5 px-3 text-neutral-200">v=spf1 include:_spf.mail.hostinger.com ~all</td>
-                      <td className="py-2.5 px-3">—</td>
-                      <td className="py-2.5 px-3 text-cyan-300 font-mono">14400 (4 Hours)</td>
-                      <td className="py-2.5 px-3 text-neutral-400">Authorizes Hostinger to send/receive mail</td>
-                    </tr>
-                    <tr>
-                      <td className="py-2.5 px-3 font-bold text-cyan-400">TXT (DKIM)</td>
-                      <td className="py-2.5 px-3">hostinger._domainkey</td>
-                      <td className="py-2.5 px-3 text-neutral-200">v=DKIM1; k=rsa; p=MIIBIjANBg... (from Hostinger Email)</td>
-                      <td className="py-2.5 px-3">—</td>
-                      <td className="py-2.5 px-3 text-cyan-300 font-mono">14400 (4 Hours)</td>
-                      <td className="py-2.5 px-3 text-neutral-400">Email signature verification</td>
-                    </tr>
-                  </tbody>
-                </table>
+            {/* Hostinger & Resend DNS Records Complete Guide */}
+            <div className="bg-neutral-950/80 rounded-2xl p-5 border border-cyan-500/20 space-y-5">
+              {/* Inbound Webhook URL Card (Resend / Hostinger style) */}
+              <div className="bg-gradient-to-r from-cyan-950/60 to-neutral-900 border border-cyan-500/40 rounded-xl p-4 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping"></span>
+                    <h4 className="text-xs font-black text-cyan-300 uppercase tracking-wider font-heading">
+                      Inbound Mail Webhook URL (Like Resend Platform)
+                    </h4>
+                  </div>
+                  <button
+                    onClick={() => handleCopyDns(`${window.location.origin}/api/inbound-mail`, 'webhook_url')}
+                    className="text-[11px] bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-bold px-3 py-1.5 rounded-lg font-mono transition flex items-center gap-1.5 cursor-pointer shadow"
+                  >
+                    {copiedDnsKey === 'webhook_url' ? '✅ Copied Webhook URL!' : '📋 Copy Webhook URL'}
+                  </button>
+                </div>
+                <p className="text-xs text-neutral-300">
+                  Paste this endpoint URL into your Hostinger Agentic Mail or inbound forwarding settings so that any email sent to <strong className="text-cyan-400 font-mono">codstake@detailr.online</strong> is automatically posted and received here in your Admin Dashboard:
+                </p>
+                <div className="p-2.5 bg-neutral-950 border border-neutral-800 rounded-lg font-mono text-[11px] text-cyan-300 select-all truncate">
+                  {window.location.origin}/api/inbound-mail
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-2">
+                <div>
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-cyan-400 font-mono">
+                    Complete DNS Records for detailr.online (Hostinger Mail & Resend):
+                  </h4>
+                  <p className="text-[11px] text-neutral-400 mt-0.5">
+                    Configure these records in your Hostinger hPanel DNS Zone Editor. Set TTL to <code className="text-cyan-300 font-mono">14400 (4 Hours)</code> or <code className="text-cyan-300 font-mono">3600 (1 Hour)</code>.
+                  </p>
+                </div>
+                <span className="text-[10px] bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2.5 py-1 rounded-full font-mono whitespace-nowrap">
+                  ⚠️ MX routing requires deleting old conflicting MX records first
+                </span>
+              </div>
+
+              {/* Section 1: Hostinger Mail MX & TXT */}
+              <div className="space-y-3">
+                <div className="text-[11px] font-bold text-white uppercase tracking-wider font-heading flex items-center gap-2 text-cyan-300">
+                  <span>📬 1. Hostinger Mail MX & SPF Records (For Receiving Mail at codstake@detailr.online)</span>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {/* MX Record 1 */}
+                  <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-3.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-400 font-bold">MX Record (Primary)</span>
+                      <button
+                        onClick={() => handleCopyDns('mx1.hostinger.com', 'mx1')}
+                        className="text-[10px] bg-neutral-800 hover:bg-neutral-700 text-cyan-300 px-2 py-1 rounded font-mono transition flex items-center gap-1 cursor-pointer"
+                      >
+                        {copiedDnsKey === 'mx1' ? '✅ Copied!' : '📋 Copy Target'}
+                      </button>
+                    </div>
+                    <div className="text-xs space-y-1 font-mono text-neutral-300">
+                      <div><span className="text-neutral-500">Type:</span> <strong className="text-white">MX</strong></div>
+                      <div><span className="text-neutral-500">Host/Name:</span> <strong className="text-white">@</strong></div>
+                      <div><span className="text-neutral-500">Target/Value:</span> <strong className="text-cyan-400 select-all">mx1.hostinger.com</strong></div>
+                      <div><span className="text-neutral-500">Priority:</span> <strong className="text-amber-400">5</strong> | <span className="text-neutral-500">TTL:</span> <strong className="text-neutral-200">14400</strong></div>
+                    </div>
+                  </div>
+
+                  {/* MX Record 2 */}
+                  <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-3.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-400 font-bold">MX Record (Secondary)</span>
+                      <button
+                        onClick={() => handleCopyDns('mx2.hostinger.com', 'mx2')}
+                        className="text-[10px] bg-neutral-800 hover:bg-neutral-700 text-cyan-300 px-2 py-1 rounded font-mono transition flex items-center gap-1 cursor-pointer"
+                      >
+                        {copiedDnsKey === 'mx2' ? '✅ Copied!' : '📋 Copy Target'}
+                      </button>
+                    </div>
+                    <div className="text-xs space-y-1 font-mono text-neutral-300">
+                      <div><span className="text-neutral-500">Type:</span> <strong className="text-white">MX</strong></div>
+                      <div><span className="text-neutral-500">Host/Name:</span> <strong className="text-white">@</strong></div>
+                      <div><span className="text-neutral-500">Target/Value:</span> <strong className="text-cyan-400 select-all">mx2.hostinger.com</strong></div>
+                      <div><span className="text-neutral-500">Priority:</span> <strong className="text-amber-400">10</strong> | <span className="text-neutral-500">TTL:</span> <strong className="text-neutral-200">14400</strong></div>
+                    </div>
+                  </div>
+
+                  {/* SPF Record */}
+                  <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-3.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-400 font-bold">TXT Record (SPF)</span>
+                      <button
+                        onClick={() => handleCopyDns('v=spf1 include:_spf.mail.hostinger.com ~all', 'spf')}
+                        className="text-[10px] bg-neutral-800 hover:bg-neutral-700 text-cyan-300 px-2 py-1 rounded font-mono transition flex items-center gap-1 cursor-pointer"
+                      >
+                        {copiedDnsKey === 'spf' ? '✅ Copied!' : '📋 Copy Value'}
+                      </button>
+                    </div>
+                    <div className="text-xs space-y-1 font-mono text-neutral-300">
+                      <div><span className="text-neutral-500">Host/Name:</span> <strong className="text-white">@</strong></div>
+                      <div><span className="text-neutral-500">Value:</span> <strong className="text-neutral-200 select-all text-[11px] block truncate">v=spf1 include:_spf.mail.hostinger.com ~all</strong></div>
+                      <div><span className="text-neutral-500">TTL:</span> <strong className="text-neutral-200">14400</strong></div>
+                    </div>
+                  </div>
+
+                  {/* DKIM Record */}
+                  <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-3.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-400 font-bold">TXT Record (DKIM)</span>
+                      <button
+                        onClick={() => handleCopyDns('default._domainkey', 'dkim_name')}
+                        className="text-[10px] bg-neutral-800 hover:bg-neutral-700 text-cyan-300 px-2 py-1 rounded font-mono transition flex items-center gap-1 cursor-pointer"
+                      >
+                        {copiedDnsKey === 'dkim_name' ? '✅ Copied Name!' : '📋 Copy Name'}
+                      </button>
+                    </div>
+                    <div className="text-xs space-y-1 font-mono text-neutral-300">
+                      <div><span className="text-neutral-500">Host/Name:</span> <strong className="text-cyan-300 select-all">default._domainkey</strong> <span className="text-[10px] text-neutral-400">(or hostinger._domainkey)</span></div>
+                      <div><span className="text-neutral-500">Value:</span> <span className="text-neutral-400 text-[10px]">Check Hostinger hPanel Email Settings for your exact key</span></div>
+                      <div><span className="text-neutral-500">TTL:</span> <strong className="text-neutral-200">14400</strong></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Section 2: Resend DNS Records (Old/Transactional Info) */}
+              <div className="space-y-3 pt-3 border-t border-neutral-900">
+                <div className="text-[11px] font-bold text-white uppercase tracking-wider font-heading flex items-center gap-2 text-emerald-400">
+                  <span>⚡ 2. Resend Domain DNS Records (For Sending Platform Notifications / Verification)</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {/* Resend DKIM */}
+                  <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-3.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">Resend TXT (DKIM)</span>
+                      <button
+                        onClick={() => handleCopyDns('resend._domainkey', 'resend_name')}
+                        className="text-[10px] bg-neutral-800 hover:bg-neutral-700 text-emerald-300 px-2 py-1 rounded font-mono transition flex items-center gap-1 cursor-pointer"
+                      >
+                        {copiedDnsKey === 'resend_name' ? '✅ Copied Name!' : '📋 Copy Name'}
+                      </button>
+                    </div>
+                    <div className="text-xs space-y-1 font-mono text-neutral-300">
+                      <div><span className="text-neutral-500">Host/Name:</span> <strong className="text-emerald-400 select-all">resend._domainkey</strong></div>
+                      <div><span className="text-neutral-500">Value:</span> <span className="text-neutral-400 text-[10px]">From your Resend Dashboard</span></div>
+                      <div><span className="text-neutral-500">TTL:</span> <strong className="text-neutral-200">14400</strong></div>
+                    </div>
+                  </div>
+
+                  {/* Resend Bounces/Send */}
+                  <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-3.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">Resend MX / CNAME</span>
+                      <button
+                        onClick={() => handleCopyDns('feedback-smtp.us-east-1.amazonses.com', 'resend_target')}
+                        className="text-[10px] bg-neutral-800 hover:bg-neutral-700 text-emerald-300 px-2 py-1 rounded font-mono transition flex items-center gap-1 cursor-pointer"
+                      >
+                        {copiedDnsKey === 'resend_target' ? '✅ Copied Target!' : '📋 Copy Target'}
+                      </button>
+                    </div>
+                    <div className="text-xs space-y-1 font-mono text-neutral-300">
+                      <div><span className="text-neutral-500">Host/Name:</span> <strong className="text-white">bounces / send</strong></div>
+                      <div><span className="text-neutral-500">Target:</span> <strong className="text-emerald-300 select-all text-[11px]">feedback-smtp.us-east-1.amazonses.com</strong></div>
+                      <div><span className="text-neutral-500">Priority:</span> <strong className="text-amber-400">10</strong> | <span className="text-neutral-500">TTL:</span> <strong className="text-neutral-200">14400</strong></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Troubleshooting Checklist */}
+              <div className="bg-neutral-900/90 rounded-xl p-3.5 border border-neutral-800 space-y-2 text-xs text-neutral-300">
+                <div className="font-bold text-white uppercase text-[11px] font-heading flex items-center gap-1.5">
+                  <span className="text-cyan-400">🛠️</span> Troubleshooting Mail Delivery & DNS:
+                </div>
+                <ul className="list-disc list-inside space-y-1 text-neutral-400">
+                  <li><strong className="text-neutral-200">Delete Conflicting MX Records:</strong> Ensure old parked or default MX records are deleted in Hostinger hPanel DNS Zone Editor.</li>
+                  <li><strong className="text-neutral-200">Exact Target Values:</strong> Copy exact target strings (`mx1.hostinger.com` and `mx2.hostinger.com`) without trailing spaces.</li>
+                  <li><strong className="text-neutral-200">TTL Setting:</strong> Set TTL to <code className="text-cyan-300 font-mono">14400</code> (4 hours) or <code className="text-cyan-300 font-mono">3600</code> (1 hour) as requested.</li>
+                </ul>
               </div>
             </div>
           </div>
