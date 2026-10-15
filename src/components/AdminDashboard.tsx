@@ -45,7 +45,7 @@ interface AdminDashboardProps {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) => {
-  const [activeTab, setActiveTab] = useState<'withdrawals' | 'admins' | 'finance' | 'opay_automation'>('withdrawals');
+  const [activeTab, setActiveTab] = useState<'withdrawals' | 'admins' | 'finance' | 'opay_automation' | 'mailbox'>('withdrawals');
   const [finance, setFinance] = useState<{ total_fees_collected: number; total_fees_withdrawn: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -65,11 +65,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
     accountDetails: { bankName: string; accountNumber: string; accountName: string };
     stats: { totalAlerts: number; autoCredited: number; unmatched: number; totalCreditedAmount: number };
   } | null>(null);
-  const [copiedWebhook, setCopiedWebhook] = useState(false);
-  const [copiedSecret, setCopiedSecret] = useState(false);
   const [testSmsText, setTestSmsText] = useState('');
   const [testSmsResult, setTestSmsResult] = useState<any | null>(null);
   const [isTestingSms, setIsTestingSms] = useState(false);
+
+  // Mailbox state
+  const [mailboxMessages, setMailboxMessages] = useState<any[]>([]);
+  const [mailboxFolder, setMailboxFolder] = useState<'all' | 'inbox' | 'sent'>('inbox');
+  const [selectedMail, setSelectedMail] = useState<any | null>(null);
+  const [composeModal, setComposeModal] = useState<{
+    isOpen: boolean;
+    recipientEmail: string;
+    subject: string;
+    body: string;
+  }>({
+    isOpen: false,
+    recipientEmail: '',
+    subject: '',
+    body: '',
+  });
+  const [isSendingMail, setIsSendingMail] = useState(false);
+  const [isSimulatingMail, setIsSimulatingMail] = useState(false);
+  const [mailMsg, setMailMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Assign unmatched alert dialog
   const [assignAlertModal, setAssignAlertModal] = useState<{
@@ -158,9 +175,70 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
     }
   };
 
+  // Load Mailbox messages
+  const loadMailbox = async () => {
+    try {
+      const res = await fetch(`/api/admin/mailbox?userId=${currentUser.id}&folder=${mailboxFolder}`);
+      if (res.ok) {
+        const data = await res.json();
+        setMailboxMessages(data.messages || []);
+      }
+    } catch (e) {
+      console.error('Error loading mailbox:', e);
+    }
+  };
+
+  const handleSendMail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!composeModal.recipientEmail || !composeModal.subject || !composeModal.body) return;
+    setIsSendingMail(true);
+    setMailMsg(null);
+    try {
+      const res = await fetch('/api/admin/mailbox/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          recipientEmail: composeModal.recipientEmail,
+          subject: composeModal.subject,
+          body: composeModal.body,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to send email');
+      setMailMsg({ type: 'success', text: data.message });
+      setComposeModal({ isOpen: false, recipientEmail: '', subject: '', body: '' });
+      loadMailbox();
+    } catch (err: any) {
+      setMailMsg({ type: 'error', text: err.message });
+    } finally {
+      setIsSendingMail(false);
+    }
+  };
+
+  const handleSimulateMail = async () => {
+    setIsSimulatingMail(true);
+    setMailMsg(null);
+    try {
+      const res = await fetch('/api/admin/mailbox/simulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to simulate email');
+      setMailMsg({ type: 'success', text: data.message });
+      loadMailbox();
+    } catch (err: any) {
+      setMailMsg({ type: 'error', text: err.message });
+    } finally {
+      setIsSimulatingMail(false);
+    }
+  };
+
   const reloadAll = async () => {
     setRefreshing(true);
-    await Promise.all([loadFinance(), loadWithdrawals(), loadUsers(), loadOpayData()]);
+    await Promise.all([loadFinance(), loadWithdrawals(), loadUsers(), loadOpayData(), loadMailbox()]);
     setRefreshing(false);
   };
 
@@ -168,12 +246,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
     const init = async () => {
       setLoading(true);
       if (currentUser.role === 'admin') {
-        await Promise.all([loadFinance(), loadWithdrawals(), loadUsers(), loadOpayData()]);
+        await Promise.all([loadFinance(), loadWithdrawals(), loadUsers(), loadOpayData(), loadMailbox()]);
       }
       setLoading(false);
     };
     init();
-  }, [currentUser.id, currentUser.role, withdrawalFilter, opayAlertFilter]);
+  }, [currentUser.id, currentUser.role, withdrawalFilter, opayAlertFilter, mailboxFolder]);
 
   // Handle Testing SMS Simulator
   const handleRunTestSms = async (sampleText?: string) => {
@@ -495,13 +573,30 @@ Narration/Remark: ${wd.remark}`;
             }`}
           >
             <Smartphone className="w-4 h-4 text-emerald-400" />
-            <span>OPay & MacroDroid Automation</span>
+            <span>OPay SMS Alerts & Deposits</span>
             {opaySettings?.stats?.unmatched ? (
               <span className="ml-1 px-1.5 py-0.5 text-[9px] font-black rounded-full bg-rose-500 text-white animate-pulse">
                 {opaySettings.stats.unmatched} Unmatched
               </span>
             ) : (
               <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block ml-1 animate-pulse" />
+            )}
+          </button>
+
+          <button
+            onClick={() => setActiveTab('mailbox')}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 uppercase tracking-wider transition whitespace-nowrap cursor-pointer ${
+              activeTab === 'mailbox'
+                ? 'bg-amber-400 text-neutral-950 font-black shadow-lg shadow-amber-400/20'
+                : 'bg-neutral-800/80 hover:bg-neutral-800 text-neutral-300 border border-neutral-700/50'
+            }`}
+          >
+            <Mail className="w-4 h-4 text-cyan-400" />
+            <span>Admin Mailbox (codstake@detailr.online)</span>
+            {mailboxMessages.filter(m => !m.isRead).length > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 text-[9px] font-black rounded-full bg-cyan-500 text-neutral-950 animate-pulse">
+                {mailboxMessages.filter(m => !m.isRead).length}
+              </span>
             )}
           </button>
         </div>
@@ -1020,132 +1115,8 @@ Narration/Remark: ${wd.remark}`;
             </div>
           </div>
 
-          {/* Webhook Configuration & Phone Guide Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Column 1: MacroDroid Android Setup Configuration */}
-            <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 space-y-5">
-              <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
-                    <Smartphone className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-black text-white uppercase tracking-wider font-heading">
-                      Android MacroDroid Webhook
-                    </h3>
-                    <p className="text-[11px] text-neutral-400">
-                      Configure your phone to forward OPay credit alerts
-                    </p>
-                  </div>
-                </div>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                  READY
-                </span>
-              </div>
-
-              {/* Webhook URL Box */}
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-mono uppercase text-neutral-400 flex items-center justify-between">
-                  <span>Webhook URL (Paste into MacroDroid HTTP Request)</span>
-                  <span className="text-[10px] text-amber-400">POST METHOD</span>
-                </label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    readOnly
-                    value={opaySettings?.webhookUrl || `${window.location.origin}/api/webhooks/macrodroid-opay`}
-                    className="flex-1 px-3 py-2.5 bg-neutral-950 border border-neutral-800 rounded-xl text-xs font-mono text-emerald-400 select-all outline-none"
-                  />
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(opaySettings?.webhookUrl || `${window.location.origin}/api/webhooks/macrodroid-opay`);
-                      setCopiedWebhook(true);
-                      setTimeout(() => setCopiedWebhook(false), 2000);
-                    }}
-                    className="px-3.5 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 border border-neutral-700 transition cursor-pointer"
-                  >
-                    {copiedWebhook ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                    <span>{copiedWebhook ? 'Copied' : 'Copy'}</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Secret Key Header */}
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-mono uppercase text-neutral-400 flex items-center justify-between">
-                  <span>Secret Key Header (Security Token)</span>
-                  <span className="text-[10px] text-neutral-500">Header: x-webhook-secret</span>
-                </label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    readOnly
-                    value={opaySettings?.secretKey || 'opay_macro_key_2026'}
-                    className="flex-1 px-3 py-2.5 bg-neutral-950 border border-neutral-800 rounded-xl text-xs font-mono text-amber-400 select-all outline-none"
-                  />
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(opaySettings?.secretKey || 'opay_macro_key_2026');
-                      setCopiedSecret(true);
-                      setTimeout(() => setCopiedSecret(false), 2000);
-                    }}
-                    className="px-3.5 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 border border-neutral-700 transition cursor-pointer"
-                  >
-                    {copiedSecret ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                    <span>{copiedSecret ? 'Copied' : 'Copy'}</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Destination Account info */}
-              <div className="p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-1.5 text-xs">
-                <div className="flex justify-between items-center font-mono">
-                  <span className="text-neutral-400">Receiving Bank:</span>
-                  <span className="text-white font-bold">OPay (PayCom)</span>
-                </div>
-                <div className="flex justify-between items-center font-mono">
-                  <span className="text-neutral-400">Account Number:</span>
-                  <span className="text-amber-400 font-bold text-sm">7079874999</span>
-                </div>
-                <div className="flex justify-between items-center font-mono">
-                  <span className="text-neutral-400">Account Name:</span>
-                  <span className="text-white font-bold">QUADRI OPEYEMI ABDULSALAM</span>
-                </div>
-              </div>
-
-              {/* Step-by-Step Guide */}
-              <div className="space-y-2 pt-2">
-                <span className="text-xs font-bold text-neutral-300 uppercase tracking-wider block">
-                  3-Step MacroDroid Configuration on Phone:
-                </span>
-                <div className="space-y-2 text-xs text-neutral-400">
-                  <div className="p-3 bg-neutral-950/60 rounded-xl border border-neutral-800/80 flex gap-3">
-                    <span className="w-5 h-5 rounded-full bg-amber-400/20 text-amber-400 font-bold flex items-center justify-center shrink-0 text-[11px]">1</span>
-                    <div>
-                      <strong className="text-white">Trigger:</strong> Select <code className="text-amber-400 bg-neutral-900 px-1 py-0.5 rounded">SMS Received</code>. Choose incoming SMS and set Sender filter to <code className="text-emerald-400 bg-neutral-900 px-1 py-0.5 rounded">OPay</code>.
-                    </div>
-                  </div>
-                  <div className="p-3 bg-neutral-950/60 rounded-xl border border-neutral-800/80 flex gap-3">
-                    <span className="w-5 h-5 rounded-full bg-amber-400/20 text-amber-400 font-bold flex items-center justify-center shrink-0 text-[11px]">2</span>
-                    <div>
-                      <strong className="text-white">Action:</strong> Select <code className="text-amber-400 bg-neutral-900 px-1 py-0.5 rounded">HTTP Request</code>. Method: <strong className="text-white">POST</strong>. Paste the Webhook URL above. In Request Headers add <code className="text-emerald-400 bg-neutral-900 px-1 py-0.5 rounded">Content-Type: application/json</code> and <code className="text-amber-400 bg-neutral-900 px-1 py-0.5 rounded">x-webhook-secret: opay_macro_key_2026</code>. In Body put:
-                      <pre className="mt-1.5 p-2 bg-neutral-900 rounded-lg text-[10px] font-mono text-neutral-300 overflow-x-auto">
-{`{"message": "[sms_body]", "sender": "[sms_number]"}`}
-                      </pre>
-                    </div>
-                  </div>
-                  <div className="p-3 bg-neutral-950/60 rounded-xl border border-neutral-800/80 flex gap-3">
-                    <span className="w-5 h-5 rounded-full bg-amber-400/20 text-amber-400 font-bold flex items-center justify-center shrink-0 text-[11px]">3</span>
-                    <div>
-                      <strong className="text-white">Battery Optimization:</strong> Go to Android Settings &gt; Apps &gt; MacroDroid &gt; Battery &gt; Set to <strong className="text-emerald-400">Unrestricted</strong> so it runs 24/7 without being stopped by Android.
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Column 2: Interactive SMS Parser & Regex Simulator */}
-            <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 space-y-5">
+          {/* SMS Parser & Simulator Section (Full Width) */}
+          <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 space-y-5">
               <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
                 <div className="flex items-center gap-2.5">
                   <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
@@ -1264,7 +1235,6 @@ Narration/Remark: ${wd.remark}`;
                 </div>
               )}
             </div>
-          </div>
 
           {/* SMS Alerts Table Section */}
           <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 space-y-4">
@@ -1389,6 +1359,316 @@ Narration/Remark: ${wd.remark}`;
                 </table>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 5: ADMIN MAILBOX (codstake@detailr.online) */}
+      {activeTab === 'mailbox' && (
+        <div className="space-y-6 animate-in fade-in duration-200">
+          {/* Hostinger DNS Setup Guide Card */}
+          <div className="bg-gradient-to-r from-neutral-900 via-neutral-900 to-cyan-950/40 border border-cyan-500/30 rounded-3xl p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-1 text-[10px] font-black uppercase bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 rounded-full font-mono">
+                    Hostinger Domain Mail Setup
+                  </span>
+                  <span className="text-xs text-neutral-400 font-mono">codstake@detailr.online</span>
+                </div>
+                <h3 className="text-lg font-black text-white font-heading">
+                  How to Receive Mail on Hostinger for detailr.online
+                </h3>
+                <p className="text-xs text-neutral-300 max-w-2xl">
+                  To receive emails sent to <strong className="text-cyan-400 font-mono">codstake@detailr.online</strong> in this Admin Dashboard, configure your DNS records in Hostinger (where you purchased <span className="text-amber-400">detailr.online</span>).
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setComposeModal({ isOpen: true, recipientEmail: '', subject: '', body: '' })}
+                  className="px-4 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-black text-xs uppercase tracking-wider rounded-xl flex items-center gap-2 transition shadow-lg shadow-cyan-500/20 cursor-pointer"
+                >
+                  <Send className="w-4 h-4" />
+                  Compose Email
+                </button>
+                <button
+                  onClick={handleSimulateMail}
+                  disabled={isSimulatingMail}
+                  className="px-4 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-cyan-300 font-bold text-xs uppercase tracking-wider rounded-xl flex items-center gap-2 transition border border-cyan-500/30 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSimulatingMail ? 'animate-spin' : ''}`} />
+                  Simulate Test Mail
+                </button>
+              </div>
+            </div>
+
+            {/* Hostinger DNS Records Table */}
+            <div className="bg-neutral-950/80 rounded-2xl p-4 border border-neutral-800 space-y-3">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-cyan-400 font-mono">
+                Required DNS Records in Hostinger DNS Manager:
+              </h4>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs font-mono">
+                  <thead>
+                    <tr className="text-neutral-500 border-b border-neutral-800 uppercase text-[10px]">
+                      <th className="py-2 px-3">Type</th>
+                      <th className="py-2 px-3">Name / Host</th>
+                      <th className="py-2 px-3">Value / Target</th>
+                      <th className="py-2 px-3">Priority</th>
+                      <th className="py-2 px-3">Purpose</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-900 text-neutral-300">
+                    <tr>
+                      <td className="py-2.5 px-3 font-bold text-cyan-400">MX</td>
+                      <td className="py-2.5 px-3">@ (or detailr.online)</td>
+                      <td className="py-2.5 px-3 text-white">mail.hostinger.com</td>
+                      <td className="py-2.5 px-3 text-amber-400 font-bold">10</td>
+                      <td className="py-2.5 px-3 text-neutral-400">Routes incoming mail to Hostinger server</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2.5 px-3 font-bold text-cyan-400">TXT (SPF)</td>
+                      <td className="py-2.5 px-3">@</td>
+                      <td className="py-2.5 px-3 text-neutral-200">v=spf1 include:_spf.mail.hostinger.com ~all</td>
+                      <td className="py-2.5 px-3">—</td>
+                      <td className="py-2.5 px-3 text-neutral-400">Authorizes Hostinger to send/receive mail</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2.5 px-3 font-bold text-cyan-400">TXT (DKIM)</td>
+                      <td className="py-2.5 px-3">hostinger._domainkey</td>
+                      <td className="py-2.5 px-3 text-neutral-200">v=DKIM1; k=rsa; p=MIIBIjANBg... (from Hostinger Email)</td>
+                      <td className="py-2.5 px-3">—</td>
+                      <td className="py-2.5 px-3 text-neutral-400">Email signature verification</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          {/* Mailbox Inbox Container */}
+          <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div>
+                <h3 className="text-base font-black text-white uppercase tracking-wider font-heading flex items-center gap-2">
+                  <Mail className="w-5 h-5 text-cyan-400" />
+                  Mailbox: codstake@detailr.online
+                </h3>
+                <p className="text-xs text-neutral-400">
+                  View, read, and reply to all emails received at your domain inbox
+                </p>
+              </div>
+
+              {/* Folder Pills */}
+              <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto">
+                {(['inbox', 'sent', 'all'] as const).map((folder) => (
+                  <button
+                    key={folder}
+                    onClick={() => setMailboxFolder(folder)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase transition whitespace-nowrap cursor-pointer ${
+                      mailboxFolder === folder
+                        ? 'bg-cyan-400 text-neutral-950 font-black'
+                        : 'bg-neutral-950 text-neutral-400 hover:text-white border border-neutral-800'
+                    }`}
+                  >
+                    {folder}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {mailMsg && (
+              <div className={`p-3 rounded-xl text-xs font-bold ${
+                mailMsg.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+              }`}>
+                {mailMsg.text}
+              </div>
+            )}
+
+            {mailboxMessages.length === 0 ? (
+              <div className="text-center py-12 bg-neutral-950/60 rounded-xl border border-neutral-800/80 space-y-3">
+                <Mail className="w-12 h-12 text-neutral-600 mx-auto animate-pulse" />
+                <h4 className="text-sm font-bold text-white uppercase">Your Mailbox is Empty</h4>
+                <p className="text-xs text-neutral-400 max-w-md mx-auto">
+                  No emails found in this folder. Click <span className="text-cyan-400 font-bold">Simulate Test Mail</span> above to test receiving an email instantly!
+                </p>
+              </div>
+            ) : (
+              <div className="divide-y divide-neutral-800/80 bg-neutral-950/50 rounded-xl border border-neutral-800 overflow-hidden">
+                {mailboxMessages.map((mail) => (
+                  <div
+                    key={mail.id}
+                    onClick={() => setSelectedMail(mail)}
+                    className={`p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-neutral-800/50 transition cursor-pointer ${
+                      !mail.isRead ? 'bg-cyan-500/5 font-semibold' : ''
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className={`w-2.5 h-2.5 rounded-full mt-1.5 shrink-0 ${!mail.isRead ? 'bg-cyan-400 animate-pulse' : 'bg-transparent'}`} />
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-white text-xs font-bold">{mail.senderName || mail.senderEmail}</span>
+                          <span className="text-neutral-500 text-[11px] font-mono">&lt;{mail.senderEmail}&gt;</span>
+                          <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold uppercase ${
+                            mail.folder === 'sent' ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' : 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
+                          }`}>
+                            {mail.folder}
+                          </span>
+                        </div>
+                        <div className="text-xs text-neutral-200 font-bold">{mail.subject}</div>
+                        <div className="text-xs text-neutral-400 truncate max-w-xl">{mail.body}</div>
+                      </div>
+                    </div>
+                    <div className="text-[11px] text-neutral-500 font-mono whitespace-nowrap self-end sm:self-center">
+                      {new Date(mail.createdAt).toLocaleString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal: View Mail & Reply */}
+      {selectedMail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-neutral-900 border border-cyan-500/40 rounded-3xl max-w-2xl w-full p-6 shadow-2xl space-y-5 text-white animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+              <div>
+                <span className="text-[10px] font-black uppercase text-cyan-400 font-mono">
+                  {selectedMail.folder === 'sent' ? 'Sent Email' : 'Incoming Inbox Mail'}
+                </span>
+                <h3 className="text-base font-black text-white font-heading">{selectedMail.subject}</h3>
+              </div>
+              <button
+                onClick={() => setSelectedMail(null)}
+                className="p-1 rounded-lg text-neutral-400 hover:text-white"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 bg-neutral-950 rounded-2xl border border-neutral-800 space-y-2 text-xs font-mono">
+              <div className="flex justify-between">
+                <span className="text-neutral-400">From:</span>
+                <span className="text-white font-bold">{selectedMail.senderName} &lt;{selectedMail.senderEmail}&gt;</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-neutral-400">To:</span>
+                <span className="text-cyan-400">{selectedMail.recipientEmail}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-neutral-400">Date:</span>
+                <span className="text-neutral-300">{new Date(selectedMail.createdAt).toLocaleString()}</span>
+              </div>
+            </div>
+
+            <div className="p-4 bg-neutral-950 rounded-2xl border border-neutral-800 text-xs text-neutral-200 font-sans whitespace-pre-line min-h-[120px]">
+              {selectedMail.body}
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => {
+                  const sender = selectedMail.senderEmail;
+                  setSelectedMail(null);
+                  setComposeModal({
+                    isOpen: true,
+                    recipientEmail: sender,
+                    subject: `Re: ${selectedMail.subject}`,
+                    body: `\n\n--- Original Message ---\nFrom: ${selectedMail.senderEmail}\nSubject: ${selectedMail.subject}\n${selectedMail.body}`,
+                  });
+                }}
+                className="px-4 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-black text-xs uppercase tracking-wider rounded-xl flex items-center gap-2 transition cursor-pointer"
+              >
+                <Send className="w-4 h-4" />
+                Reply to Sender
+              </button>
+              <button
+                onClick={() => setSelectedMail(null)}
+                className="px-4 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-bold text-xs uppercase tracking-wider rounded-xl transition cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Compose / Reply Email */}
+      {composeModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-neutral-900 border border-cyan-500/40 rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-5 text-white animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+              <h3 className="text-base font-black uppercase text-white font-heading flex items-center gap-2">
+                <Send className="w-4 h-4 text-cyan-400" />
+                Compose Mail from codstake@detailr.online
+              </h3>
+              <button
+                onClick={() => setComposeModal({ isOpen: false, recipientEmail: '', subject: '', body: '' })}
+                className="p-1 rounded-lg text-neutral-400 hover:text-white"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSendMail} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase text-neutral-300 block">Recipient Email:</label>
+                <input
+                  type="email"
+                  required
+                  placeholder="player@gmail.com"
+                  value={composeModal.recipientEmail}
+                  onChange={(e) => setComposeModal(prev => ({ ...prev, recipientEmail: e.target.value }))}
+                  className="w-full px-3.5 py-2.5 bg-neutral-950 border border-neutral-800 rounded-xl text-white text-xs font-mono outline-none focus:border-cyan-400"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase text-neutral-300 block">Subject:</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Deposit Verification / Support Update"
+                  value={composeModal.subject}
+                  onChange={(e) => setComposeModal(prev => ({ ...prev, subject: e.target.value }))}
+                  className="w-full px-3.5 py-2.5 bg-neutral-950 border border-neutral-800 rounded-xl text-white text-xs font-mono outline-none focus:border-cyan-400"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase text-neutral-300 block">Message Body:</label>
+                <textarea
+                  required
+                  rows={6}
+                  placeholder="Type your reply or support message here..."
+                  value={composeModal.body}
+                  onChange={(e) => setComposeModal(prev => ({ ...prev, body: e.target.value }))}
+                  className="w-full px-3.5 py-2.5 bg-neutral-950 border border-neutral-800 rounded-xl text-white text-xs font-mono outline-none focus:border-cyan-400 resize-none"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setComposeModal({ isOpen: false, recipientEmail: '', subject: '', body: '' })}
+                  className="px-4 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-bold text-xs uppercase tracking-wider rounded-xl transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSendingMail}
+                  className="px-5 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-black text-xs uppercase tracking-wider rounded-xl flex items-center gap-2 transition shadow-lg shadow-cyan-500/20 cursor-pointer"
+                >
+                  <Send className={`w-4 h-4 ${isSendingMail ? 'animate-bounce' : ''}`} />
+                  {isSendingMail ? 'Sending...' : 'Send Email'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

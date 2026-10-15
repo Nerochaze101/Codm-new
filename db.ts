@@ -348,6 +348,18 @@ export async function initDatabase() {
         expires_at BIGINT NOT NULL,
         completed_at BIGINT
       );
+
+      CREATE TABLE IF NOT EXISTS admin_mailbox (
+        id VARCHAR(255) PRIMARY KEY,
+        sender_email VARCHAR(255) NOT NULL,
+        sender_name VARCHAR(255),
+        recipient_email VARCHAR(255) DEFAULT 'codstake@detailr.online',
+        subject VARCHAR(255) NOT NULL,
+        body TEXT NOT NULL,
+        is_read BOOLEAN DEFAULT false,
+        folder VARCHAR(50) DEFAULT 'inbox',
+        created_at BIGINT NOT NULL
+      );
       
       INSERT INTO platform_finance (id, total_fees_collected, total_fees_withdrawn) 
       VALUES ('main', 0, 0) ON CONFLICT (id) DO NOTHING;
