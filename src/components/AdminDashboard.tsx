@@ -1412,37 +1412,32 @@ Narration/Remark: ${wd.remark}`;
 
             {/* Hostinger & Resend DNS Records Complete Guide */}
             <div className="bg-neutral-950/80 rounded-2xl p-5 border border-cyan-500/20 space-y-5">
-              {/* Inbound Webhook URL Card (Resend / Hostinger style) */}
+              {/* Hostinger Webmail Direct Access Card (No Webhook Needed) */}
               <div className="bg-gradient-to-r from-cyan-950/60 to-neutral-900 border border-cyan-500/40 rounded-xl p-4 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping"></span>
+                    <span className="w-2.5 h-2.5 rounded-full bg-cyan-400"></span>
                     <h4 className="text-xs font-black text-cyan-300 uppercase tracking-wider font-heading">
-                      Inbound Mail Webhook URL (Like Resend Platform)
+                      Hostinger Titan Mailbox (Direct Access - No Webhook Needed)
                     </h4>
                   </div>
-                  <button
-                    onClick={() => handleCopyDns('https://codm-new.onrender.com/api/inbound-mail', 'webhook_url')}
-                    className="text-[11px] bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-bold px-3 py-1.5 rounded-lg font-mono transition flex items-center gap-1.5 cursor-pointer shadow"
+                  <a
+                    href="https://mail.hostinger.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[11px] bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-bold px-3 py-1.5 rounded-lg font-mono transition flex items-center gap-1.5 shadow cursor-pointer"
                   >
-                    {copiedDnsKey === 'webhook_url' ? '✅ Copied Webhook URL!' : '📋 Copy Webhook URL'}
-                  </button>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    Open Hostinger Webmail
+                  </a>
                 </div>
                 <p className="text-xs text-neutral-300">
-                  Paste this Render production endpoint URL into your Hostinger Agentic Mail or inbound forwarding settings so that any email sent to <strong className="text-cyan-400 font-mono">codstake@detailr.online</strong> is automatically posted and received here in your Admin Dashboard:
+                  Because your MX records point to Hostinger, all emails sent to <strong className="text-cyan-400 font-mono">codstake@detailr.online</strong> (including from Gmail) arrive directly in your Hostinger Webmail inbox. You don't need any webhook setup!
                 </p>
-                <div className="flex flex-col sm:flex-row items-center gap-2">
-                  <div className="flex-1 p-2.5 bg-neutral-950 border border-neutral-800 rounded-lg font-mono text-[11px] text-cyan-300 select-all truncate w-full">
-                    https://codm-new.onrender.com/api/inbound-mail
-                  </div>
-                  <button
-                    onClick={handleSimulateMail}
-                    disabled={isSimulatingMail}
-                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black text-xs uppercase tracking-wider rounded-lg transition shrink-0 cursor-pointer flex items-center gap-1.5 shadow"
-                  >
-                    <CheckCircle2 className="w-4 h-4" />
-                    {isSimulatingMail ? 'Testing...' : '🧪 Test & Verify Inbound'}
-                  </button>
+                <div className="flex items-center gap-3 pt-1 text-xs text-neutral-400 font-mono">
+                  <span>📬 Webmail Login: <strong className="text-white">mail.hostinger.com</strong></span>
+                  <span>•</span>
+                  <span>Address: <strong className="text-cyan-300">codstake@detailr.online</strong></span>
                 </div>
               </div>
 
@@ -1587,23 +1582,18 @@ Narration/Remark: ${wd.remark}`;
                 </div>
               </div>
 
-              {/* Troubleshooting Checklist */}
+              {/* Troubleshooting / Direct Webmail Guide */}
               <div className="bg-neutral-900/90 rounded-xl p-4 border border-cyan-500/30 space-y-3 text-xs text-neutral-300">
                 <div className="font-bold text-white uppercase text-[11px] font-heading flex items-center gap-1.5 text-cyan-400">
-                  <span>💡</span> Why isn't mail sent from Gmail arriving here yet? (And how to fix it):
+                  <span>📬</span> How Mail Delivery Works Without Webhooks:
                 </div>
                 <div className="space-y-2 text-neutral-300 text-xs">
                   <p>
-                    When you send an email from Gmail to <code className="text-cyan-300 font-mono">codstake@detailr.online</code>, Google checks your domain's MX records. Because your MX records point to Hostinger, <strong className="text-white">Hostinger receives the email in your Hostinger Titan Webmail inbox</strong>.
+                    Because your MX records point to Hostinger, any email sent to <code className="text-cyan-300 font-mono">codstake@detailr.online</code> (from Gmail or any other provider) is delivered directly into your <strong className="text-white">Hostinger Titan Webmail inbox</strong>.
                   </p>
                   <p>
-                    For that email to appear in <strong className="text-white">this Admin Dashboard</strong>, you need to tell Hostinger to forward incoming emails to our Webhook URL:
+                    <strong className="text-cyan-300">No webhook configuration is needed!</strong> You can read, receive, and check your incoming emails directly by logging into <code className="text-cyan-300 font-mono">mail.hostinger.com</code>, while using this Admin Dashboard to compose replies and manage your platform.
                   </p>
-                  <ol className="list-decimal list-inside space-y-1 text-neutral-400 pl-2">
-                    <li>Log in to your <strong className="text-white">Hostinger hPanel</strong> &gt; <strong className="text-white">Emails</strong> &gt; <strong className="text-white">Forwarders</strong> (or Agentic Mail).</li>
-                    <li>Create a forwarder for <strong className="text-cyan-300 font-mono">codstake@detailr.online</strong> to forward incoming messages, OR paste your Inbound Webhook URL into Hostinger's webhook settings.</li>
-                    <li>Alternatively, log in to Hostinger Webmail at <code className="text-cyan-300 font-mono">mail.hostinger.com</code> to view emails received at <code className="text-cyan-300 font-mono">codstake@detailr.online</code>!</li>
-                  </ol>
                 </div>
               </div>
             </div>
