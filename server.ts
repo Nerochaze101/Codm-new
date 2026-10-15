@@ -12,7 +12,27 @@ dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+
+// Dev server must run on port 3000. In Cloud Run environments, PORT=8080 is used by nginx ingress,
+// which proxies incoming traffic to port 3000.
+function resolveServerPort(): number {
+  const portArgIdx = process.argv.indexOf('--port');
+  if (portArgIdx !== -1 && process.argv[portArgIdx + 1]) {
+    const parsed = parseInt(process.argv[portArgIdx + 1], 10);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  if (process.env.APP_PORT) {
+    const parsed = parseInt(process.env.APP_PORT, 10);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  if (process.env.PORT && process.env.PORT !== '8080') {
+    const parsed = parseInt(process.env.PORT, 10);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  return 3000;
+}
+
+const PORT = resolveServerPort();
 
 // Initialize Google GenAI if key available
 let ai: GoogleGenAI | null = null;
@@ -195,6 +215,7 @@ async function getUserFromDb(id: string): Promise<UserProfile | null> {
       referredBy: r.referred_by || undefined,
       referralCode: r.referral_code || r.username?.toLowerCase() || r.codm_ign?.toLowerCase(),
       totalReferralEarnings: parseFloat(r.total_referral_earnings || 0),
+      role: r.role || 'user',
       transactions,
     };
   } catch (err) {
@@ -244,6 +265,7 @@ async function getUserByEmailOrIgn(identifier: string): Promise<{ user: UserProf
       referredBy: r.referred_by || undefined,
       referralCode: r.referral_code || r.username?.toLowerCase() || r.codm_ign?.toLowerCase(),
       totalReferralEarnings: parseFloat(r.total_referral_earnings || 0),
+      role: r.role || 'user',
       transactions,
     };
 
@@ -266,7 +288,7 @@ async function saveUserToDb(user: UserProfile, password?: string, forceBalanceUp
       ? `balance = EXCLUDED.balance, escrow_balance = EXCLUDED.escrow_balance, total_winnings = EXCLUDED.total_winnings,`
       : `balance = users.balance, escrow_balance = users.escrow_balance, total_winnings = users.total_winnings,`;
     await pool.query(`
-      INSERT INTO users (id, username, codm_ign, codm_uid, tier, clan, email, phone, password_hash, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, created_at)
+      INSERT INTO users (id, username, codm_ign, codm_uid, tier, clan, email, phone, password_hash, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, created_at)
       VALUES (
         ${escapeSql(user.id)},
         ${escapeSql(user.username)},
@@ -290,6 +312,7 @@ async function saveUserToDb(user: UserProfile, password?: string, forceBalanceUp
         ${escapeSql(user.referredBy || null)},
         ${escapeSql(user.referralCode || user.username?.toLowerCase() || user.codmIgn?.toLowerCase() || null)},
         ${escapeSql(user.totalReferralEarnings || 0)},
+        ${escapeSql(user.role || 'user')},
         ${Date.now()}
       )
       ON CONFLICT (id) DO UPDATE SET
@@ -301,6 +324,7 @@ async function saveUserToDb(user: UserProfile, password?: string, forceBalanceUp
         email = EXCLUDED.email,
         phone = EXCLUDED.phone,
         password_hash = COALESCE(EXCLUDED.password_hash, users.password_hash),
+        role = COALESCE(users.role, EXCLUDED.role),
         ${balanceUpdateFragment}
         wins = users.wins,
         losses = users.losses,
@@ -530,6 +554,1078 @@ app.get('/api/admin/finance', async (req, res) => {
     }
     const resFin = await pool.query(`SELECT * FROM platform_finance WHERE id = 'main'`);
     res.json(resFin.rows[0]);
+});
+
+// Fetch withdrawal requests for Admin Dashboard
+app.get('/api/admin/withdrawals', async (req, res) => {
+  try {
+    const { userId, status } = req.query;
+    const user = await getUserFromDb(userId as string);
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin role required' });
+    }
+
+    let queryStr = `SELECT * FROM withdrawal_requests`;
+    if (status && status !== 'all') {
+      queryStr += ` WHERE status = ${escapeSql(status as string)}`;
+    }
+    queryStr += ` ORDER BY created_at DESC LIMIT 200`;
+
+    const result = await pool.query(queryStr);
+    const withdrawals = result.rows.map((r) => ({
+      id: r.id,
+      userId: r.user_id,
+      codmIgn: r.codm_ign,
+      email: r.email,
+      phone: r.phone,
+      amount: parseFloat(r.amount),
+      bankName: r.bank_name,
+      accountNumber: r.account_number,
+      accountName: r.account_name,
+      bankCode: r.bank_code,
+      status: r.status,
+      remark: r.remark,
+      createdAt: parseInt(r.created_at, 10),
+      processedAt: r.processed_at ? parseInt(r.processed_at, 10) : undefined,
+      processedBy: r.processed_by || undefined,
+      opayRedirectUrl: r.opay_redirect_url || undefined,
+      rejectionReason: r.rejection_reason || undefined,
+      balanceDeducted: r.balance_deducted === true,
+      webhookReceived: r.webhook_received === true,
+      webhookPayload: r.webhook_payload || undefined,
+    }));
+
+    res.json({ withdrawals });
+  } catch (err: any) {
+    console.error('Error fetching admin withdrawals:', err);
+    res.status(500).json({ error: err.message || 'Failed to fetch withdrawal requests' });
+  }
+});
+
+// Central OPay Payout Webhook Processor
+// Handles webhook callbacks and executes instant atomic balance deduction
+async function processOpayPayoutWebhook(payload: {
+  withdrawalId?: string;
+  reference?: string;
+  amount?: number;
+  accountNumber?: string;
+  adminUserId?: string;
+  channel?: string;
+  webhookData?: any;
+}) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // 1. Locate the withdrawal request with row lock
+    let queryStr = `SELECT * FROM withdrawal_requests WHERE status != 'rejected'`;
+    if (payload.withdrawalId) {
+      queryStr += ` AND id = ${escapeSql(payload.withdrawalId)}`;
+    } else if (payload.reference) {
+      queryStr += ` AND (remark = ${escapeSql(payload.reference)} OR id = ${escapeSql(payload.reference)})`;
+    } else if (payload.accountNumber && payload.amount) {
+      queryStr += ` AND account_number = ${escapeSql(payload.accountNumber)} AND amount = ${escapeSql(payload.amount)} AND status = 'pending'`;
+    } else {
+      throw new Error('Missing withdrawal identification in webhook payload');
+    }
+
+    queryStr += ` ORDER BY created_at DESC LIMIT 1 FOR UPDATE`;
+    const resWd = await client.query(queryStr);
+    if (resWd.rows.length === 0) {
+      await client.query('ROLLBACK');
+      throw new Error('No matching withdrawal request found for webhook settlement');
+    }
+
+    const wd = resWd.rows[0];
+    const amountNum = parseFloat(wd.amount);
+    const userId = wd.user_id;
+    let newBalance: number | null = null;
+    let deductedNow = false;
+
+    // 2. Instant Balance Deduction from User's Account (if not already deducted)
+    if (!wd.balance_deducted) {
+      const userRes = await client.query(`SELECT balance FROM users WHERE id = ${escapeSql(userId)} FOR UPDATE`);
+      if (userRes.rows.length === 0) {
+        await client.query('ROLLBACK');
+        throw new Error('User not found in database');
+      }
+
+      const deductRes = await client.query(`
+        UPDATE users 
+        SET balance = GREATEST(0, balance - ${escapeSql(amountNum)})
+        WHERE id = ${escapeSql(userId)}
+        RETURNING balance;
+      `);
+      if (deductRes.rows.length > 0) {
+        newBalance = parseFloat(deductRes.rows[0].balance);
+        deductedNow = true;
+      }
+    } else {
+      const u = await client.query(`SELECT balance FROM users WHERE id = ${escapeSql(userId)}`);
+      newBalance = u.rows.length > 0 ? parseFloat(u.rows[0].balance) : null;
+    }
+
+    // 3. Mark withdrawal request as approved and webhook confirmed
+    const processedAt = Date.now();
+    const processedBy = payload.adminUserId || wd.processed_by || 'webhook_opay_payout';
+    await client.query(`
+      UPDATE withdrawal_requests 
+      SET status = 'approved',
+          balance_deducted = true,
+          webhook_received = true,
+          webhook_payload = ${escapeSql(JSON.stringify(payload.webhookData || payload))},
+          processed_at = ${processedAt},
+          processed_by = ${escapeSql(processedBy)}
+      WHERE id = ${escapeSql(wd.id)}
+    `);
+
+    // 4. Update ledger transaction to verified settlement
+    const remark = wd.remark || `CODM-OPAY-${String(wd.account_number).slice(-4)}`;
+    const txDesc = `✅ OPay Payout Confirmed (Webhook Settled): ₦${amountNum.toLocaleString()} to ${wd.bank_name} (${wd.account_number} - ${wd.account_name}) [${remark}]`;
+
+    const updateTx = await client.query(`
+      UPDATE transactions 
+      SET description = ${escapeSql(txDesc)},
+          timestamp = ${processedAt}
+      WHERE user_id = ${escapeSql(userId)} 
+        AND amount = ${escapeSql(amountNum)} 
+        AND type = 'WITHDRAWAL' 
+        AND description LIKE '%Pending%'
+      RETURNING id;
+    `);
+
+    if (updateTx.rows.length === 0) {
+      const txId = `tx_opay_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+      await client.query(`
+        INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
+        VALUES (${escapeSql(txId)}, ${escapeSql(userId)}, 'WITHDRAWAL', ${escapeSql(amountNum)}, ${escapeSql(txDesc)}, ${processedAt})
+      `);
+    }
+
+    await client.query('COMMIT');
+
+    return {
+      success: true,
+      withdrawalId: wd.id,
+      userId,
+      amount: amountNum,
+      deductedNow,
+      newBalance,
+      remark,
+      accountNumber: wd.account_number,
+      bankName: wd.bank_name,
+      accountName: wd.account_name,
+      timestamp: processedAt,
+    };
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Dedicated OPay Payout Webhook endpoint for external callbacks or internal triggers
+app.post(['/api/webhooks/opay-payout', '/api/webhooks/opay', '/api/webhooks/withdrawal-payout'], async (req, res) => {
+  try {
+    console.log('⚡ Received OPay Payout Webhook:', req.body);
+    const { withdrawalId, reference, amount, accountNumber, adminUserId, event } = req.body || {};
+
+    const webhookResult = await processOpayPayoutWebhook({
+      withdrawalId,
+      reference,
+      amount: amount ? Number(amount) : undefined,
+      accountNumber,
+      adminUserId,
+      channel: 'opay_webhook_endpoint',
+      webhookData: req.body,
+    });
+
+    console.log('✅ OPay Payout Webhook processed successfully:', webhookResult);
+    res.json({
+      success: true,
+      message: 'OPay Payout webhook processed and user balance deducted instantly',
+      data: webhookResult,
+    });
+  } catch (err: any) {
+    console.error('⚠️ OPay Payout Webhook error:', err);
+    res.status(400).json({ error: err.message || 'Webhook processing failed' });
+  }
+});
+
+// Admin Approve Withdrawal: Triggers OPay Payout Webhook, Deducts Money Instantly, and Redirects to OPay
+app.post('/api/admin/withdrawals/:id/approve', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { adminUserId } = req.body;
+    const adminUser = await getUserFromDb(adminUserId);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    }
+
+    const checkRes = await pool.query(`SELECT * FROM withdrawal_requests WHERE id = ${escapeSql(id)}`);
+    if (checkRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Withdrawal request not found' });
+    }
+
+    const wd = checkRes.rows[0];
+    const amountNum = parseFloat(wd.amount);
+    const accNum = String(wd.account_number).trim();
+    const bankName = String(wd.bank_name).trim();
+    const accName = String(wd.account_name).trim();
+    const bankCode = wd.bank_code || '';
+    const remark = wd.remark || `CODM-${(wd.codm_ign || 'WD').slice(0, 10).toUpperCase()}-${accNum.slice(-4)}`;
+
+    // Build OPay direct URL and deep-links
+    const opayDeepLink = `opay://transfer?account=${accNum}&bank=${encodeURIComponent(bankName)}&bank_code=${bankCode}&amount=${amountNum}&remark=${encodeURIComponent(remark)}`;
+    const androidIntent = `intent://transfer?account=${accNum}&bank=${encodeURIComponent(bankName)}&amount=${amountNum}&remark=${encodeURIComponent(remark)}#Intent;scheme=opay;package=team.opay.pay;end`;
+    const opayWebUrl = `https://www.opayweb.com/?amount=${amountNum}&account=${accNum}&bank=${encodeURIComponent(bankName)}&name=${encodeURIComponent(accName)}&remark=${encodeURIComponent(remark)}`;
+
+    // ⚡ Execute Webhook & Instant User Balance Deduction
+    const webhookResult = await processOpayPayoutWebhook({
+      withdrawalId: id,
+      reference: remark,
+      amount: amountNum,
+      accountNumber: accNum,
+      adminUserId: adminUser.id,
+      channel: 'opay_admin_approval',
+      webhookData: {
+        event: 'payout.approved',
+        adminId: adminUser.id,
+        adminIgn: adminUser.codmIgn,
+        timestamp: Date.now(),
+        opayUrl: opayWebUrl,
+      },
+    });
+
+    // Update opay_redirect_url in record
+    await pool.query(`UPDATE withdrawal_requests SET opay_redirect_url = ${escapeSql(opayWebUrl)} WHERE id = ${escapeSql(id)}`);
+
+    const paymentData = {
+      id: wd.id,
+      amount: amountNum,
+      bankName,
+      accountNumber: accNum,
+      accountName: accName,
+      bankCode,
+      remark,
+      codmIgn: wd.codm_ign,
+      email: wd.email,
+      phone: wd.phone,
+      deductedNow: webhookResult.deductedNow,
+      newBalance: webhookResult.newBalance,
+    };
+
+    res.json({
+      success: true,
+      message: `Withdrawal approved! Webhook delivered & ₦${amountNum.toLocaleString()} deducted instantly from player's balance. Redirecting to OPay...`,
+      webhookSettled: true,
+      deductedNow: webhookResult.deductedNow,
+      newBalance: webhookResult.newBalance,
+      opayDeepLink,
+      androidIntent,
+      opayWebUrl,
+      paymentData,
+    });
+  } catch (err: any) {
+    console.error('Error approving withdrawal with webhook:', err);
+    res.status(500).json({ error: err.message || 'Failed to approve withdrawal and process webhook' });
+  }
+});
+
+// Admin Reject Withdrawal
+app.post('/api/admin/withdrawals/:id/reject', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { adminUserId, reason = 'Bank details mismatch / Invalid request' } = req.body;
+    const adminUser = await getUserFromDb(adminUserId);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    }
+
+    const checkRes = await pool.query(`SELECT * FROM withdrawal_requests WHERE id = ${escapeSql(id)}`);
+    if (checkRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Withdrawal request not found' });
+    }
+
+    const wd = checkRes.rows[0];
+    if (wd.status !== 'pending') {
+      return res.status(400).json({ error: `Withdrawal has already been ${wd.status}` });
+    }
+
+    const amountNum = parseFloat(wd.amount);
+
+    // 1. Mark as rejected
+    await pool.query(`
+      UPDATE withdrawal_requests 
+      SET status = 'rejected',
+          rejection_reason = ${escapeSql(reason)},
+          processed_at = ${Date.now()},
+          processed_by = ${escapeSql(adminUser.id)}
+      WHERE id = ${escapeSql(id)}
+    `);
+
+    // 2. Only refund if the balance was previously deducted!
+    if (wd.balance_deducted === true) {
+      await pool.query(`
+        UPDATE users 
+        SET balance = balance + ${escapeSql(amountNum)}
+        WHERE id = ${escapeSql(wd.user_id)}
+      `);
+
+      const refundTxId = `tx_ref_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+      const refundDesc = `❌ Withdrawal Rejected & Refunded: ₦${amountNum.toLocaleString()} returned to balance [${reason}]`;
+      await pool.query(`
+        INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
+        VALUES (${escapeSql(refundTxId)}, ${escapeSql(wd.user_id)}, 'ESCROW_REFUND', ${escapeSql(amountNum)}, ${escapeSql(refundDesc)}, ${Date.now()})
+      `);
+    } else {
+      // Update pending transaction note to rejected
+      await pool.query(`
+        UPDATE transactions 
+        SET description = ${escapeSql(`❌ Withdrawal Request Cancelled/Rejected: [${reason}]`)}
+        WHERE user_id = ${escapeSql(wd.user_id)} 
+          AND amount = ${escapeSql(amountNum)} 
+          AND type = 'WITHDRAWAL' 
+          AND description LIKE '%Pending%'
+      `);
+    }
+
+    res.json({
+      success: true,
+      message: `Withdrawal request rejected. ${wd.balance_deducted ? `₦${amountNum.toLocaleString()} refunded to player wallet.` : 'Player balance was not charged.'}`,
+    });
+  } catch (err: any) {
+    console.error('Error rejecting withdrawal:', err);
+    res.status(500).json({ error: err.message || 'Failed to reject withdrawal' });
+  }
+});
+
+// Admin Users List for Assigning and Managing Admins
+app.get('/api/admin/users', async (req, res) => {
+  try {
+    const { userId, search } = req.query;
+    const adminUser = await getUserFromDb(userId as string);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    }
+
+    let queryStr = `SELECT id, username, codm_ign, email, phone, role, balance, bank_name, account_number, account_name, created_at FROM users`;
+    if (search && String(search).trim()) {
+      const q = String(search).trim().toLowerCase();
+      queryStr += ` WHERE LOWER(email) LIKE '%${escapeSql(q).replace(/'/g, '')}%' OR LOWER(codm_ign) LIKE '%${escapeSql(q).replace(/'/g, '')}%' OR LOWER(username) LIKE '%${escapeSql(q).replace(/'/g, '')}%'`;
+    }
+    queryStr += ` ORDER BY created_at DESC LIMIT 200`;
+
+    const userRows = await pool.query(queryStr);
+    const users = userRows.rows.map((u) => ({
+      id: u.id,
+      username: u.username || u.codm_ign,
+      codmIgn: u.codm_ign,
+      email: u.email || '',
+      phone: u.phone || '',
+      role: u.role || 'user',
+      balance: parseFloat(u.balance || 0),
+      bankName: u.bank_name,
+      accountNumber: u.account_number,
+      accountName: u.account_name,
+      createdAt: parseInt(u.created_at || '0', 10),
+    }));
+
+    res.json({ users });
+  } catch (err: any) {
+    console.error('Error fetching admin users:', err);
+    res.status(500).json({ error: err.message || 'Failed to fetch users' });
+  }
+});
+
+// Assign Admin Role endpoint
+app.post('/api/admin/assign-role', async (req, res) => {
+  try {
+    const { adminUserId, targetUserId, identifier, role = 'admin' } = req.body;
+    const adminUser = await getUserFromDb(adminUserId);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Only an admin can assign roles' });
+    }
+
+    if (role !== 'admin' && role !== 'user') {
+      return res.status(400).json({ error: "Invalid role. Must be 'admin' or 'user'" });
+    }
+
+    let targetUser: any = null;
+    if (targetUserId) {
+      const r = await pool.query(`SELECT * FROM users WHERE id = ${escapeSql(targetUserId)}`);
+      if (r.rows.length > 0) targetUser = r.rows[0];
+    } else if (identifier && String(identifier).trim()) {
+      const clean = String(identifier).trim().toLowerCase();
+      const r = await pool.query(`SELECT * FROM users WHERE LOWER(email) = LOWER(${escapeSql(clean)}) OR LOWER(codm_ign) = LOWER(${escapeSql(clean)}) OR LOWER(username) = LOWER(${escapeSql(clean)})`);
+      if (r.rows.length > 0) targetUser = r.rows[0];
+    }
+
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found with provided ID, email, or IGN' });
+    }
+
+    await pool.query(`UPDATE users SET role = ${escapeSql(role)} WHERE id = ${escapeSql(targetUser.id)}`);
+
+    const updatedUser = await getUserFromDb(targetUser.id);
+    res.json({
+      success: true,
+      message: `User ${targetUser.codm_ign || targetUser.email} has been assigned the role: ${role.toUpperCase()}`,
+      user: updatedUser,
+    });
+  } catch (err: any) {
+    console.error('Error assigning role:', err);
+    res.status(500).json({ error: err.message || 'Failed to assign role' });
+  }
+});
+
+// Bootstrap / Claim Admin (for owner/creator access)
+app.post('/api/admin/claim-admin', async (req, res) => {
+  try {
+    const { userId, passcode } = req.body;
+    const user = await getUserFromDb(userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const isOwnerEmail = user.email.toLowerCase().includes('loganhayes09') || user.email.toLowerCase().includes('abulsalam') || user.email.toLowerCase() === 'b@gmail.com';
+    const isPasscode = passcode === 'admin123' || passcode === 'OPAY_ADMIN_2025' || passcode === 'codmadmin';
+
+    if (!isOwnerEmail && !isPasscode) {
+      return res.status(403).json({ error: 'Invalid admin authorization credentials' });
+    }
+
+    await pool.query(`UPDATE users SET role = 'admin' WHERE id = ${escapeSql(userId)}`);
+    const refreshed = await getUserFromDb(userId);
+    res.json({
+      success: true,
+      message: `Admin access granted to ${refreshed?.codmIgn || refreshed?.email}`,
+      user: refreshed,
+    });
+  } catch (err: any) {
+    console.error('Error claiming admin:', err);
+    res.status(500).json({ error: err.message || 'Failed to claim admin' });
+  }
+});
+
+// ==========================================
+// 📱 MACRODROID & OPAY AUTOMATED SMS FUNDING ENGINE
+// ==========================================
+
+// Parse OPay Credit Alert SMS (Android SMS sent by OPay and captured via MacroDroid)
+function parseOpaySms(rawText: string): {
+  amount: number | null;
+  reference: string | null;
+  senderName: string | null;
+  narration: string | null;
+  accountNumber: string | null;
+} {
+  if (!rawText) {
+    return { amount: null, reference: null, senderName: null, narration: null, accountNumber: null };
+  }
+
+  const text = rawText.trim();
+
+  // 1. Extract Amount
+  let amount: number | null = null;
+  const amountPatterns = [
+    /(?:credited\s+with|credit\s+of|received|credit:?|amount:?)\s*(?:NGN|₦|N)?\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
+    /(?:NGN|₦)\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
+    /([0-9,]+(?:\.[0-9]{2})?)\s*(?:credited|received|CR)/i,
+  ];
+
+  for (const pat of amountPatterns) {
+    const match = text.match(pat);
+    if (match && match[1]) {
+      const cleanNum = parseFloat(match[1].replace(/,/g, ''));
+      if (!isNaN(cleanNum) && cleanNum > 0) {
+        amount = cleanNum;
+        break;
+      }
+    }
+  }
+
+  // 2. Extract Reference / Session ID
+  let reference: string | null = null;
+  const refPatterns = [
+    /(?:Ref|Reference|Txn\s*ID|Txn|Session\s*ID|Session|ID)[:\s]+([A-Za-z0-9_-]+)/i,
+    /Ref#([A-Za-z0-9_-]+)/i,
+  ];
+  for (const pat of refPatterns) {
+    const match = text.match(pat);
+    if (match && match[1]) {
+      reference = match[1].trim();
+      break;
+    }
+  }
+
+  // 3. Extract Sender Name
+  let senderName: string | null = null;
+  const senderPatterns = [
+    /(?:from|Sender:)\s*([A-Za-z0-9\s/]+?)(?:\s+(?:to|via|Ref|Remark|Desc|Note|Bal|at|\.|\n)|$)/i,
+  ];
+  for (const pat of senderPatterns) {
+    const match = text.match(pat);
+    if (match && match[1]) {
+      const cleaned = match[1].replace(/\s*\/\s*[A-Za-z\s]+$/, '').trim();
+      if (cleaned.length > 1 && !cleaned.toLowerCase().startsWith('opay')) {
+        senderName = cleaned;
+        break;
+      }
+    }
+  }
+
+  // 4. Extract Narration / Remark / Description
+  let narration: string | null = null;
+  const narrPatterns = [
+    /(?:Remark|Desc|Description|Narration|Note|Memo)[:\s]+([^\.\n]+)/i,
+  ];
+  for (const pat of narrPatterns) {
+    const match = text.match(pat);
+    if (match && match[1]) {
+      narration = match[1].trim();
+      break;
+    }
+  }
+
+  // Check if reference code (e.g. OP-1234 or GLAD-123) appears anywhere in SMS text
+  if (!narration) {
+    const codeMatch = text.match(/\b(OP-[0-9]{4,6}|GLAD-[0-9]{3,6}|EZ-[0-9]{4,6}|DEP-[0-9]{4,6})\b/i);
+    if (codeMatch) {
+      narration = codeMatch[1].toUpperCase();
+    }
+  }
+
+  // 5. Account Number if mentioned
+  let accountNumber: string | null = null;
+  const accMatch = text.match(/(?:account|acct|to)\s*\(?([0-9]{10})\)?/i);
+  if (accMatch) {
+    accountNumber = accMatch[1];
+  }
+
+  return { amount, reference, senderName, narration, accountNumber };
+}
+
+// Core Matching and Balance Crediting Engine
+async function matchAndCreditOpayDeposit(smsDetails: {
+  smsBody: string;
+  sender?: string;
+  amount: number;
+  reference?: string | null;
+  senderName?: string | null;
+  narration?: string | null;
+}) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const alertId = `sms_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+    const now = Date.now();
+    const cleanRef = smsDetails.reference || `REF_${now}_${Math.floor(Math.random() * 1000)}`;
+
+    // 1. Idempotency Guard: prevent crediting same SMS twice
+    if (smsDetails.reference) {
+      const existingAlert = await client.query(`
+        SELECT * FROM opay_sms_alerts WHERE reference = ${escapeSql(smsDetails.reference)}
+      `);
+      if (existingAlert.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return {
+          alreadyProcessed: true,
+          alert: existingAlert.rows[0],
+          message: 'SMS Alert with this reference has already been credited',
+        };
+      }
+    }
+
+    let matchedUser: any = null;
+    let matchedDepositReq: any = null;
+
+    // Strategy 1: Match by explicit payment_reference in deposit_requests
+    if (smsDetails.narration) {
+      const cleanNarr = smsDetails.narration.trim();
+      const depByRef = await client.query(`
+        SELECT * FROM deposit_requests 
+        WHERE status = 'pending' 
+          AND (LOWER(payment_reference) = LOWER(${escapeSql(cleanNarr)}) 
+               OR ${escapeSql(cleanNarr)} ILIKE '%' || payment_reference || '%')
+        ORDER BY created_at DESC LIMIT 1 FOR UPDATE
+      `);
+      if (depByRef.rows.length > 0) {
+        matchedDepositReq = depByRef.rows[0];
+        const uRes = await client.query(`SELECT * FROM users WHERE id = ${escapeSql(matchedDepositReq.user_id)} FOR UPDATE`);
+        if (uRes.rows.length > 0) matchedUser = uRes.rows[0];
+      }
+    }
+
+    // Strategy 2: Search entire SMS text for any pending deposit_request payment_reference
+    if (!matchedUser) {
+      const pendingDeps = await client.query(`
+        SELECT * FROM deposit_requests 
+        WHERE status = 'pending' 
+          AND expires_at > ${now - 3600000}
+        ORDER BY created_at DESC LIMIT 20 FOR UPDATE
+      `);
+      for (const dep of pendingDeps.rows) {
+        if (smsDetails.smsBody.toUpperCase().includes(dep.payment_reference.toUpperCase())) {
+          matchedDepositReq = dep;
+          const uRes = await client.query(`SELECT * FROM users WHERE id = ${escapeSql(dep.user_id)} FOR UPDATE`);
+          if (uRes.rows.length > 0) {
+            matchedUser = uRes.rows[0];
+            break;
+          }
+        }
+      }
+    }
+
+    // Strategy 3: Match user by CODM IGN, username, or account_name in the remark / SMS body
+    if (!matchedUser) {
+      const candidateUsers = await client.query(`
+        SELECT * FROM users 
+        WHERE (
+          (codm_ign IS NOT NULL AND LENGTH(codm_ign) >= 3 AND ${escapeSql(smsDetails.smsBody)} ILIKE '%' || codm_ign || '%')
+          OR (username IS NOT NULL AND LENGTH(username) >= 3 AND ${escapeSql(smsDetails.smsBody)} ILIKE '%' || username || '%')
+          OR (${smsDetails.senderName ? `${escapeSql(smsDetails.senderName)} ILIKE '%' || account_name || '%'` : 'false'})
+        )
+        LIMIT 5 FOR UPDATE
+      `);
+      if (candidateUsers.rows.length === 1) {
+        matchedUser = candidateUsers.rows[0];
+        const userDep = await client.query(`
+          SELECT * FROM deposit_requests 
+          WHERE user_id = ${escapeSql(matchedUser.id)} AND status = 'pending'
+          ORDER BY created_at DESC LIMIT 1 FOR UPDATE
+        `);
+        if (userDep.rows.length > 0) {
+          matchedDepositReq = userDep.rows[0];
+        }
+      }
+    }
+
+    // Strategy 4: If amount matches an active pending deposit request created in last 45 minutes
+    if (!matchedUser && smsDetails.amount > 0) {
+      const depByAmount = await client.query(`
+        SELECT * FROM deposit_requests 
+        WHERE status = 'pending' 
+          AND amount = ${escapeSql(smsDetails.amount)}
+          AND expires_at > ${now}
+        ORDER BY created_at DESC LIMIT 1 FOR UPDATE
+      `);
+      if (depByAmount.rows.length === 1) {
+        matchedDepositReq = depByAmount.rows[0];
+        const uRes = await client.query(`SELECT * FROM users WHERE id = ${escapeSql(matchedDepositReq.user_id)} FOR UPDATE`);
+        if (uRes.rows.length > 0) matchedUser = uRes.rows[0];
+      }
+    }
+
+    // IF MATCHED: Instantly Credit the User's Wallet!
+    if (matchedUser) {
+      const amountToCredit = smsDetails.amount;
+      const refCode = matchedDepositReq?.payment_reference || cleanRef;
+
+      // 1. Atomically increment user balance
+      const balRes = await client.query(`
+        UPDATE users 
+        SET balance = balance + ${escapeSql(amountToCredit)} 
+        WHERE id = ${escapeSql(matchedUser.id)} 
+        RETURNING balance;
+      `);
+      const newBalance = parseFloat(balRes.rows[0].balance);
+
+      // 2. Mark deposit request as completed
+      if (matchedDepositReq) {
+        await client.query(`
+          UPDATE deposit_requests 
+          SET status = 'completed', 
+              sms_alert_id = ${escapeSql(alertId)}, 
+              completed_at = ${now}
+          WHERE id = ${escapeSql(matchedDepositReq.id)}
+        `);
+      }
+
+      // 3. Insert transaction
+      const txId = `tx_opay_${now}_${Math.floor(100 + Math.random() * 900)}`;
+      const txDesc = `⚡ Automated OPay Credit (MacroDroid SMS): ₦${amountToCredit.toLocaleString()} credited [Ref: ${cleanRef} | Code: ${refCode}]`;
+      await client.query(`
+        INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
+        VALUES (${escapeSql(txId)}, ${escapeSql(matchedUser.id)}, 'DEPOSIT', ${escapeSql(amountToCredit)}, ${escapeSql(txDesc)}, ${now})
+      `);
+
+      // 4. Save to opay_sms_alerts as auto_credited
+      await client.query(`
+        INSERT INTO opay_sms_alerts (
+          id, sms_body, sender, amount, narration, sender_name, reference, matched_user_id, matched_user_ign, status, created_at, credited_at
+        ) VALUES (
+          ${escapeSql(alertId)},
+          ${escapeSql(smsDetails.smsBody)},
+          ${escapeSql(smsDetails.sender || 'OPay')},
+          ${escapeSql(amountToCredit)},
+          ${escapeSql(smsDetails.narration || refCode)},
+          ${escapeSql(smsDetails.senderName || '')},
+          ${escapeSql(cleanRef)},
+          ${escapeSql(matchedUser.id)},
+          ${escapeSql(matchedUser.codm_ign || matchedUser.username)},
+          'auto_credited',
+          ${now},
+          ${now}
+        )
+      `);
+
+      await client.query('COMMIT');
+
+      return {
+        success: true,
+        matched: true,
+        status: 'auto_credited',
+        alertId,
+        user: {
+          id: matchedUser.id,
+          codmIgn: matchedUser.codm_ign || matchedUser.username,
+          newBalance,
+        },
+        amount: amountToCredit,
+        reference: cleanRef,
+        message: `Successfully credited ₦${amountToCredit.toLocaleString()} to ${matchedUser.codm_ign || matchedUser.username} via automated OPay SMS alert!`,
+      };
+    } else {
+      // UNMATCHED: Store alert for Admin 1-Click Assignment
+      await client.query(`
+        INSERT INTO opay_sms_alerts (
+          id, sms_body, sender, amount, narration, sender_name, reference, status, created_at
+        ) VALUES (
+          ${escapeSql(alertId)},
+          ${escapeSql(smsDetails.smsBody)},
+          ${escapeSql(smsDetails.sender || 'OPay')},
+          ${escapeSql(smsDetails.amount || 0)},
+          ${escapeSql(smsDetails.narration || '')},
+          ${escapeSql(smsDetails.senderName || '')},
+          ${escapeSql(cleanRef)},
+          'unmatched',
+          ${now}
+        )
+      `);
+
+      await client.query('COMMIT');
+
+      return {
+        success: true,
+        matched: false,
+        status: 'unmatched',
+        alertId,
+        amount: smsDetails.amount,
+        reference: cleanRef,
+        message: 'OPay SMS recorded as unmatched. Ready on Admin Dashboard for 1-click player assignment.',
+      };
+    }
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// 1. Create a Pending Deposit Request (User-Facing)
+app.post('/api/deposits/create', async (req, res) => {
+  try {
+    const { userId, amount } = req.body;
+    const user = await getUserFromDb(userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const numAmount = Number(amount);
+    if (!numAmount || numAmount < 100) {
+      return res.status(400).json({ error: 'Minimum deposit amount is ₦100' });
+    }
+
+    const now = Date.now();
+    const expiresAt = now + 30 * 60 * 1000; // 30 minutes
+    const depId = `dep_${now}_${Math.floor(100 + Math.random() * 900)}`;
+    const paymentRef = `OP-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    await pool.query(`
+      INSERT INTO deposit_requests (id, user_id, codm_ign, amount, payment_reference, status, created_at, expires_at)
+      VALUES (
+        ${escapeSql(depId)},
+        ${escapeSql(user.id)},
+        ${escapeSql(user.codmIgn || user.username)},
+        ${escapeSql(numAmount)},
+        ${escapeSql(paymentRef)},
+        'pending',
+        ${now},
+        ${expiresAt}
+      )
+    `);
+
+    res.json({
+      success: true,
+      deposit: {
+        id: depId,
+        userId: user.id,
+        codmIgn: user.codmIgn,
+        amount: numAmount,
+        paymentReference: paymentRef,
+        status: 'pending',
+        createdAt: now,
+        expiresAt,
+      },
+      accountDetails: {
+        bankName: 'OPay Digital Services Limited (OPay)',
+        accountNumber: '7079874999',
+        accountName: 'QUADRI OPEYEMI ABDULSALAM',
+        amount: numAmount,
+        paymentReference: paymentRef,
+        instructions: `Transfer exactly ₦${numAmount.toLocaleString()} to OPay (7079874999). Enter '${paymentRef}' or '${user.codmIgn}' in transfer remark for instant automated crediting.`,
+      },
+    });
+  } catch (err: any) {
+    console.error('Error creating deposit request:', err);
+    res.status(500).json({ error: err.message || 'Failed to create deposit request' });
+  }
+});
+
+// 2. Poll Deposit Status for Live Frontend UI Auto-Credit
+app.get('/api/deposits/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const depRes = await pool.query(`SELECT * FROM deposit_requests WHERE id = ${escapeSql(id)}`);
+    if (depRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Deposit request not found' });
+    }
+
+    const dep = depRes.rows[0];
+    const user = await getUserFromDb(dep.user_id);
+
+    res.json({
+      id: dep.id,
+      status: dep.status,
+      completed: dep.status === 'completed',
+      amount: parseFloat(dep.amount),
+      paymentReference: dep.payment_reference,
+      balance: user?.balance ?? 0,
+      completedAt: dep.completed_at ? parseInt(dep.completed_at, 10) : undefined,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to check deposit status' });
+  }
+});
+
+// 3. MacroDroid Webhook Receiver (Incoming SMS alert from Admin's Android Phone)
+app.post(['/api/webhooks/macrodroid-opay', '/api/webhooks/opay-sms'], async (req, res) => {
+  try {
+    const providedSecret = req.headers['x-webhook-secret'] || req.query.secret || req.body?.secret;
+    const expectedSecret = process.env.MACRODROID_WEBHOOK_SECRET || 'opay_macro_key_2026';
+
+    if (providedSecret && providedSecret !== expectedSecret) {
+      return res.status(401).json({ error: 'Unauthorized webhook request: Invalid secret key' });
+    }
+
+    // Extract SMS message from MacroDroid payload (supports JSON and raw body)
+    const rawBody = typeof req.body === 'string' 
+      ? req.body 
+      : (req.body?.message || req.body?.body || req.body?.sms || req.body?.text || JSON.stringify(req.body));
+    const sender = req.body?.sender || req.body?.phone || req.body?.from || 'OPay';
+
+    console.log('📱 [MacroDroid Webhook] Incoming OPay SMS alert received:', { sender, body: rawBody });
+
+    // Parse the SMS text
+    const parsed = parseOpaySms(rawBody);
+
+    if (!parsed.amount || parsed.amount <= 0) {
+      return res.status(400).json({
+        error: 'Could not extract valid credit amount from SMS text',
+        parsed,
+        rawBody,
+      });
+    }
+
+    const result = await matchAndCreditOpayDeposit({
+      smsBody: rawBody,
+      sender,
+      amount: parsed.amount,
+      reference: parsed.reference,
+      senderName: parsed.senderName,
+      narration: parsed.narration,
+    });
+
+    console.log('⚡ [MacroDroid Webhook] Process result:', result);
+    res.json(result);
+  } catch (err: any) {
+    console.error('⚠️ [MacroDroid Webhook] Error:', err);
+    res.status(500).json({ error: err.message || 'Webhook processing failed' });
+  }
+});
+
+// 4. Admin: Fetch OPay SMS Alerts
+app.get(['/api/admin/opay/alerts', '/api/admin/sms-alerts'], async (req, res) => {
+  try {
+    const { userId, status } = req.query;
+    const adminUser = await getUserFromDb(userId as string);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    }
+
+    let queryStr = `SELECT * FROM opay_sms_alerts`;
+    if (status && status !== 'all') {
+      queryStr += ` WHERE status = ${escapeSql(status as string)}`;
+    }
+    queryStr += ` ORDER BY created_at DESC LIMIT 100`;
+
+    const resAlerts = await pool.query(queryStr);
+    const alerts = resAlerts.rows.map((r) => ({
+      id: r.id,
+      smsBody: r.sms_body,
+      sender: r.sender,
+      amount: parseFloat(r.amount),
+      narration: r.narration,
+      senderName: r.sender_name,
+      reference: r.reference,
+      matchedUserId: r.matched_user_id,
+      matchedUserIgn: r.matched_user_ign,
+      status: r.status,
+      createdAt: parseInt(r.created_at, 10),
+      creditedAt: r.credited_at ? parseInt(r.credited_at, 10) : undefined,
+    }));
+
+    res.json({ alerts });
+  } catch (err: any) {
+    console.error('Error fetching OPay alerts:', err);
+    res.status(500).json({ error: err.message || 'Failed to fetch OPay alerts' });
+  }
+});
+
+// 5. Admin: Manually Assign an Unmatched Alert to a Player
+app.post(['/api/admin/opay/alerts/:id/assign', '/api/admin/sms-alerts/:id/assign'], async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { adminUserId, targetUserId } = req.body;
+    const adminUser = await getUserFromDb(adminUserId);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    }
+
+    const alertRes = await pool.query(`SELECT * FROM opay_sms_alerts WHERE id = ${escapeSql(id)}`);
+    if (alertRes.rows.length === 0) {
+      return res.status(404).json({ error: 'SMS Alert not found' });
+    }
+
+    const alert = alertRes.rows[0];
+    if (alert.status === 'auto_credited' || alert.status === 'manually_credited') {
+      return res.status(400).json({ error: `This alert has already been credited (${alert.status})` });
+    }
+
+    const targetUser = await getUserFromDb(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Target player not found' });
+    }
+
+    const amountNum = parseFloat(alert.amount);
+    const now = Date.now();
+
+    // 1. Credit target player balance
+    await pool.query(`
+      UPDATE users 
+      SET balance = balance + ${escapeSql(amountNum)} 
+      WHERE id = ${escapeSql(targetUser.id)}
+    `);
+
+    // 2. Insert transaction
+    const txId = `tx_manual_${now}_${Math.floor(100 + Math.random() * 900)}`;
+    const txDesc = `🛡️ Manual OPay Credit (Admin Verified): ₦${amountNum.toLocaleString()} credited by Admin (${adminUser.codmIgn}) [Ref: ${alert.reference || alert.id}]`;
+    await pool.query(`
+      INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
+      VALUES (${escapeSql(txId)}, ${escapeSql(targetUser.id)}, 'DEPOSIT', ${escapeSql(amountNum)}, ${escapeSql(txDesc)}, ${now})
+    `);
+
+    // 3. Mark alert as manually_credited
+    await pool.query(`
+      UPDATE opay_sms_alerts 
+      SET status = 'manually_credited',
+          matched_user_id = ${escapeSql(targetUser.id)},
+          matched_user_ign = ${escapeSql(targetUser.codmIgn || targetUser.username)},
+          credited_at = ${now}
+      WHERE id = ${escapeSql(id)}
+    `);
+
+    const updatedUser = await getUserFromDb(targetUser.id);
+    res.json({
+      success: true,
+      message: `Successfully assigned ₦${amountNum.toLocaleString()} to ${targetUser.codmIgn}. New balance: ₦${updatedUser?.balance}`,
+      user: updatedUser,
+    });
+  } catch (err: any) {
+    console.error('Error assigning alert to user:', err);
+    res.status(500).json({ error: err.message || 'Failed to assign alert' });
+  }
+});
+
+// 6. Admin: Test / Simulate SMS Parsing
+app.post(['/api/admin/opay/test-sms', '/api/admin/test-sms-parser'], async (req, res) => {
+  try {
+    const { userId, smsText, shouldCredit = false } = req.body;
+    const adminUser = await getUserFromDb(userId);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    }
+
+    const parsed = parseOpaySms(smsText || '');
+    if (shouldCredit && parsed.amount && parsed.amount > 0) {
+      const matchResult = await matchAndCreditOpayDeposit({
+        smsBody: smsText,
+        sender: 'OPay_Tester',
+        amount: parsed.amount,
+        reference: parsed.reference,
+        senderName: parsed.senderName,
+        narration: parsed.narration,
+      });
+      return res.json({ parsed, execution: matchResult });
+    }
+
+    res.json({ parsed, simulationOnly: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to test SMS' });
+  }
+});
+
+// 7. Admin: MacroDroid Settings & Diagnostics
+app.get('/api/admin/opay/settings', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const adminUser = await getUserFromDb(userId as string);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    }
+
+    const host = req.headers.host || 'localhost:3000';
+    const proto = req.headers['x-forwarded-proto'] || 'http';
+    const webhookUrl = `${proto}://${host}/api/webhooks/macrodroid-opay`;
+    const secretKey = process.env.MACRODROID_WEBHOOK_SECRET || 'opay_macro_key_2026';
+
+    const countRes = await pool.query(`
+      SELECT 
+        COUNT(*) as total,
+        COUNT(CASE WHEN status = 'auto_credited' THEN 1 END) as auto_credited,
+        COUNT(CASE WHEN status = 'unmatched' THEN 1 END) as unmatched,
+        COALESCE(SUM(CASE WHEN status IN ('auto_credited', 'manually_credited') THEN amount ELSE 0 END), 0) as total_credited_amount
+      FROM opay_sms_alerts
+    `);
+
+    res.json({
+      webhookUrl,
+      secretKey,
+      accountDetails: {
+        bankName: 'OPay Digital Services Limited (OPay)',
+        accountNumber: '7079874999',
+        accountName: 'QUADRI OPEYEMI ABDULSALAM',
+      },
+      stats: {
+        totalAlerts: parseInt(countRes.rows[0].total, 10),
+        autoCredited: parseInt(countRes.rows[0].auto_credited, 10),
+        unmatched: parseInt(countRes.rows[0].unmatched, 10),
+        totalCreditedAmount: parseFloat(countRes.rows[0].total_credited_amount),
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to fetch settings' });
+  }
 });
 
 app.get('/api/health', async (req, res) => {
@@ -1966,37 +3062,100 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
     const userRow = userLockRes.rows[0];
     const currentBalance = parseFloat(userRow.balance || 0);
 
-    if (numAmount > currentBalance) {
+    // Check existing pending cashouts that haven't been deducted yet
+    const pendingSumRes = await client.query(`
+      SELECT COALESCE(SUM(amount), 0) as pending_total 
+      FROM withdrawal_requests 
+      WHERE user_id = ${escapeSql(userId)} AND status = 'pending' AND balance_deducted = false
+    `);
+    const pendingTotal = parseFloat(pendingSumRes.rows[0]?.pending_total || 0);
+    const availableForCashout = currentBalance - pendingTotal;
+
+    if (numAmount > availableForCashout) {
       await client.query('ROLLBACK');
-      return res.status(400).json({ error: `Insufficient available balance. You have ₦${currentBalance.toLocaleString()} available.` });
+      return res.status(400).json({
+        error: `Insufficient available balance for cashout. Available: ₦${Math.max(0, availableForCashout).toLocaleString()} (₦${pendingTotal.toLocaleString()} pending admin payout).`,
+      });
     }
 
-    // 3. Atomic deduction and bank info update in PostgreSQL
-    const deductRes = await client.query(`
+    // Update user's bank details if provided
+    await client.query(`
       UPDATE users 
-      SET balance = balance - ${escapeSql(numAmount)},
-          bank_name = COALESCE(${escapeSql(bankName || null)}, bank_name),
+      SET bank_name = COALESCE(${escapeSql(bankName || null)}, bank_name),
           account_number = COALESCE(${escapeSql(accountNumber || null)}, account_number),
           account_name = COALESCE(${escapeSql(accountName || null)}, account_name)
-      WHERE id = ${escapeSql(userId)} AND balance >= ${escapeSql(numAmount)}
-      RETURNING balance;
+      WHERE id = ${escapeSql(userId)}
     `);
 
-    if (deductRes.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'Insufficient available balance' });
-    }
+    const wdId = `wd_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+    const userIgn = userRow.codm_ign || userRow.username || 'Gladiator';
+    const cleanBank = (bankName || userRow.bank_name || '').trim();
+    const cleanAccNum = (accountNumber || userRow.account_number || '').trim();
+    const cleanAccName = (accountName || userRow.account_name || '').trim();
+    const remark = `CODM-${userIgn.slice(0, 10).toUpperCase()}-${cleanAccNum.slice(-4)}`;
+    const pendingDesc = `⏳ Pending Admin Approval: Withdrawal request of ₦${numAmount.toLocaleString()} to ${cleanBank} (${cleanAccNum} - ${cleanAccName})`;
 
-    newBalance = parseFloat(deductRes.rows[0].balance);
-
-    const initialDesc = `Withdrawal request of ₦${numAmount.toLocaleString()} to ${bankName} (${accountNumber} - ${accountName})`;
     await client.query(`
       INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
-      VALUES (${escapeSql(txId)}, ${escapeSql(userId)}, 'WITHDRAWAL', ${escapeSql(numAmount)}, ${escapeSql(initialDesc)}, ${Date.now()})
+      VALUES (${escapeSql(txId)}, ${escapeSql(userId)}, 'WITHDRAWAL', ${escapeSql(numAmount)}, ${escapeSql(pendingDesc)}, ${Date.now()})
+    `);
+
+    await client.query(`
+      INSERT INTO withdrawal_requests (
+        id, user_id, codm_ign, email, phone, amount, bank_name, account_number, account_name, bank_code, status, remark, created_at, balance_deducted, webhook_received
+      ) VALUES (
+        ${escapeSql(wdId)},
+        ${escapeSql(userId)},
+        ${escapeSql(userIgn)},
+        ${escapeSql(userRow.email || '')},
+        ${escapeSql(userRow.phone || '')},
+        ${escapeSql(numAmount)},
+        ${escapeSql(cleanBank)},
+        ${escapeSql(cleanAccNum)},
+        ${escapeSql(cleanAccName)},
+        ${escapeSql(bankCode || '')},
+        'pending',
+        ${escapeSql(remark)},
+        ${Date.now()},
+        false,
+        false
+      )
     `);
 
     await client.query('COMMIT');
     user = await getUserFromDb(userId);
+
+    return res.json({
+      success: true,
+      pending: true,
+      balance: currentBalance,
+      pendingAmount: numAmount,
+      transaction: {
+        id: txId,
+        type: 'WITHDRAWAL',
+        amount: numAmount,
+        description: pendingDesc,
+        timestamp: Date.now(),
+      },
+      withdrawalRequest: {
+        id: wdId,
+        userId,
+        codmIgn: userIgn,
+        email: userRow.email || '',
+        phone: userRow.phone || '',
+        amount: numAmount,
+        bankName: cleanBank,
+        accountNumber: cleanAccNum,
+        accountName: cleanAccName,
+        bankCode: bankCode || '',
+        status: 'pending',
+        remark,
+        balanceDeducted: false,
+        webhookReceived: false,
+        createdAt: Date.now(),
+      },
+      message: 'Withdrawal request submitted! It is now pending admin approval. The funds will be deducted instantly when approved and sent via OPay.',
+    });
   } catch (dbErr: any) {
     try { await client.query('ROLLBACK'); } catch (_) {}
     console.error('Database withdrawal error:', dbErr);
@@ -2005,237 +3164,6 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
     client.release();
     activeWithdrawalLocks.delete(userId);
   }
-
-  // 4. Now initiate external payout gateway transfer
-  const flwCode = getFlutterwaveBankCode(bankName, bankCode);
-  const paystackCode = getPaystackBankCode(bankName, bankCode);
-
-  const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || '';
-  const paystackSecret = process.env.PAYSTACK_SECRET_KEY || '';
-  const pandaSecret = process.env.PANDASCROW_SECRET_KEY || '';
-  const pandaBaseUrl = getPandascrowBaseUrl(pandaSecret);
-  let transferResult: any = null;
-  let providerUsed: 'flutterwave' | 'paystack' | 'pandascrow' | 'manual' = 'manual';
-
-  const flwConfigured = flwSecret && !flwSecret.startsWith('FLWSECK_TEST-xxxx');
-  const paystackConfigured = paystackSecret && !paystackSecret.startsWith('sk_test_xxxx');
-  const pandaConfigured = pandaSecret && !pandaSecret.startsWith('sk_pandascrow_test_xxxx');
-
-  if (gateway === 'pandascrow') {
-    try {
-      console.log(`🚀 Initiating Pandascrow Transfer of ₦${numAmount} to ${accountNumber} (${bankName})...`);
-      if (!pandaConfigured) {
-        transferResult = {
-          gateway: 'pandascrow',
-          status: true,
-          data: { reference: `PANDA_TRF_${Date.now()}` },
-          message: 'Pandascrow Sandbox Simulated Payout Successful',
-        };
-        providerUsed = 'pandascrow';
-      } else {
-        const pandaRes = await fetch(`${pandaBaseUrl}/transfer`, {
-          method: 'POST',
-          headers: {
-            'Token': pandaSecret,
-            'Authorization': `Token ${pandaSecret}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            amount: numAmount,
-            currency: 'NGN',
-            bank_code: bankCode || '058',
-            account_number: accountNumber.trim(),
-            account_name: accountName || user?.codmIgn || 'Gladiator',
-            reference: `PANDA_TRF_${Date.now()}`,
-          }),
-        });
-        const pandaData = await pandaRes.json();
-        if (pandaData.status === 'success' || pandaData.status === true) {
-          transferResult = {
-            gateway: 'pandascrow',
-            status: true,
-            data: pandaData.data,
-            message: pandaData.message,
-          };
-          providerUsed = 'pandascrow';
-        } else {
-          transferResult = {
-            gateway: 'pandascrow',
-            status: false,
-            isManualFallback: true,
-            message: pandaData.message || 'Pandascrow payout pending manual review',
-          };
-        }
-      }
-    } catch (err: any) {
-      console.error('Pandascrow transfer error:', err.message);
-      transferResult = {
-        gateway: 'pandascrow',
-        status: false,
-        isManualFallback: true,
-        message: err.message,
-      };
-    }
-  } else if (gateway === 'flutterwave' && flwConfigured) {
-    try {
-      console.log(`🚀 Initiating Flutterwave Transfer of ₦${numAmount} to ${accountNumber} (${bankName} / code ${flwCode})...`);
-      const flwTransferRes = await fetch('https://api.flutterwave.com/v3/transfers', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${flwSecret}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          account_bank: flwCode,
-          account_number: accountNumber.trim(),
-          amount: numAmount,
-          narration: `CODM Cashout for ${user?.codmIgn || userId}`,
-          currency: 'NGN',
-          reference: `FLW_TRF_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-          beneficiary_name: accountName || user?.codmIgn || 'Gladiator',
-        }),
-      });
-
-      const flwData = await flwTransferRes.json();
-      console.log('✅ Flutterwave Transfer API Response:', flwData);
-
-      if (flwData.status === 'success' || flwData.status === 'successful') {
-        transferResult = {
-          gateway: 'flutterwave',
-          status: true,
-          data: flwData.data,
-          message: flwData.message,
-        };
-        providerUsed = 'flutterwave';
-      } else {
-        console.warn('⚠️ Flutterwave transfer warning:', flwData.message);
-        transferResult = {
-          gateway: 'flutterwave',
-          status: false,
-          isManualFallback: true,
-          message: flwData.message || 'Flutterwave automated transfer response indicated pending/review',
-        };
-      }
-    } catch (err: any) {
-      console.error('Flutterwave transfer error:', err.message);
-      transferResult = {
-        gateway: 'flutterwave',
-        status: false,
-        isManualFallback: true,
-        message: err.message,
-      };
-    }
-  }
-
-  // Fallback to Paystack if requested or if Flutterwave wasn't executed
-  if (!transferResult && paystackConfigured && accountNumber) {
-    try {
-      console.log(`🚀 Initiating Paystack Transfer of ₦${numAmount} to ${accountNumber} (${bankName})...`);
-      const recipientRes = await fetch('https://api.paystack.co/transferrecipient', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${paystackSecret}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          type: 'nuban',
-          name: accountName || user?.codmIgn || 'Gladiator',
-          account_number: accountNumber.trim(),
-          bank_code: paystackCode || '058',
-          currency: 'NGN',
-        }),
-      });
-
-      const recipientJson = await recipientRes.json();
-      if (recipientJson.status && recipientJson.data?.recipient_code) {
-        const recipientCode = recipientJson.data.recipient_code;
-        const transferRes = await fetch('https://api.paystack.co/transfer', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${paystackSecret}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            source: 'balance',
-            amount: Math.round(numAmount * 100), // in kobo
-            recipient: recipientCode,
-            reason: `CODM Winnings Cashout for ${user?.codmIgn || userId}`,
-          }),
-        });
-
-        const paystackData = await transferRes.json();
-        console.log('✅ Paystack Transfer API Response:', paystackData);
-
-        if (paystackData.status) {
-          transferResult = {
-            gateway: 'paystack',
-            status: true,
-            data: paystackData.data,
-            message: paystackData.message,
-          };
-          providerUsed = 'paystack';
-        } else {
-          transferResult = {
-            gateway: 'paystack',
-            status: false,
-            isManualFallback: true,
-            message: paystackData.message || 'Paystack automated payout unavailable',
-          };
-        }
-      } else {
-        transferResult = {
-          gateway: 'paystack',
-          status: false,
-          isManualFallback: true,
-          message: recipientJson.message || 'Could not create recipient',
-        };
-      }
-    } catch (err: any) {
-      console.error('Paystack Transfer Exception:', err.message);
-      transferResult = {
-        gateway: 'paystack',
-        status: false,
-        isManualFallback: true,
-        message: err.message,
-      };
-    }
-  }
-
-  const isAutomatedSuccess = transferResult?.status === true;
-  const isManual = transferResult?.isManualFallback === true || !transferResult;
-
-  let descNote = `Withdrawal request to ${bankName} (${accountNumber} - ${accountName})`;
-  if (isAutomatedSuccess) {
-    const ref = transferResult?.data?.reference || transferResult?.data?.id || 'OK';
-    const provLabel = providerUsed === 'flutterwave' ? 'Flutterwave' : providerUsed === 'paystack' ? 'Paystack' : 'Pandascrow Escrow';
-    descNote = `🚀 ${provLabel} Transfer Sent to ${bankName} (${accountNumber} - ${accountName}) [Ref: ${ref}]`;
-  } else if (isManual) {
-    const reason = transferResult?.message || 'Queued for admin instant settlement';
-    descNote = `⏳ Pending Manual Payout to ${bankName} (${accountNumber} - ${accountName}) [${reason}]`;
-  }
-
-  // Update description with definitive settlement reference
-  await pool.query(`
-    UPDATE transactions 
-    SET description = ${escapeSql(descNote)} 
-    WHERE id = ${escapeSql(txId)}
-  `);
-
-  const tx = {
-    id: txId,
-    type: 'WITHDRAWAL' as const,
-    amount: numAmount,
-    description: descNote,
-    timestamp: Date.now(),
-  };
-
-  res.json({
-    success: true,
-    balance: newBalance,
-    transaction: tx,
-    transferResult,
-    providerUsed,
-  });
 });
 
 // Clean up transaction history & reconcile ledger for a clean profile view
@@ -3189,18 +4117,18 @@ async function startServer() {
     app.use('/public', express.static(publicPath));
   }
 
-  // Check production build
+  // Check production build vs development mode
   const distPath = path.resolve(__dirname, 'dist');
-  const isProduction = process.env.NODE_ENV === 'production' || process.env.RENDER || fs.existsSync(distPath);
+  const isProduction = process.env.NODE_ENV === 'production' && fs.existsSync(distPath);
 
-  if (isProduction && fs.existsSync(distPath)) {
+  if (isProduction) {
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   } else {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: false },
       appType: 'spa',
     });
     app.use(vite.middlewares);

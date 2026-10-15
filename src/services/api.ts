@@ -1,4 +1,4 @@
-import { Match, UserProfile, Transaction } from '../types';
+import { Match, UserProfile, Transaction, WithdrawalRequest, DepositRequest, OpaySmsAlert } from '../types';
 
 export const DEFAULT_USERS: Record<string, UserProfile> = {};
 
@@ -303,4 +303,173 @@ export async function cleanUserHistory(userId: string, clearAll: boolean = false
   const data = await res.json();
   return data.user;
 }
+
+export async function fetchAdminWithdrawals(adminUserId: string, status?: string): Promise<WithdrawalRequest[]> {
+  const url = status && status !== 'all' 
+    ? `/api/admin/withdrawals?userId=${encodeURIComponent(adminUserId)}&status=${encodeURIComponent(status)}`
+    : `/api/admin/withdrawals?userId=${encodeURIComponent(adminUserId)}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to fetch withdrawal requests');
+  }
+  const data = await res.json();
+  return data.withdrawals || [];
+}
+
+export async function approveAdminWithdrawal(adminUserId: string, withdrawalId: string) {
+  const res = await fetch(`/api/admin/withdrawals/${withdrawalId}/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ adminUserId }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to approve withdrawal');
+  }
+  return await res.json();
+}
+
+export async function rejectAdminWithdrawal(adminUserId: string, withdrawalId: string, reason?: string) {
+  const res = await fetch(`/api/admin/withdrawals/${withdrawalId}/reject`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ adminUserId, reason }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to reject withdrawal');
+  }
+  return await res.json();
+}
+
+export async function fetchAdminUsers(adminUserId: string, search?: string) {
+  const url = search 
+    ? `/api/admin/users?userId=${encodeURIComponent(adminUserId)}&search=${encodeURIComponent(search)}`
+    : `/api/admin/users?userId=${encodeURIComponent(adminUserId)}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to fetch users');
+  }
+  const data = await res.json();
+  return data.users || [];
+}
+
+export async function assignUserRole(adminUserId: string, params: { targetUserId?: string; identifier?: string; role: 'admin' | 'user' }) {
+  const res = await fetch('/api/admin/assign-role', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ adminUserId, ...params }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to assign role');
+  }
+  return await res.json();
+}
+
+export async function claimAdminRole(userId: string, passcode?: string) {
+  const res = await fetch('/api/admin/claim-admin', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, passcode }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to claim admin access');
+  }
+  return await res.json();
+}
+
+export async function fetchAdminSmsAlerts(adminUserId: string, status?: string) {
+  const url = status && status !== 'all'
+    ? `/api/admin/sms-alerts?userId=${encodeURIComponent(adminUserId)}&status=${encodeURIComponent(status)}`
+    : `/api/admin/sms-alerts?userId=${encodeURIComponent(adminUserId)}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to fetch SMS alerts');
+  }
+  const data = await res.json();
+  return data.alerts || [];
+}
+
+export async function assignSmsAlertToUser(adminUserId: string, alertId: string, targetUserId: string) {
+  const res = await fetch(`/api/admin/sms-alerts/${alertId}/assign`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ adminUserId, targetUserId }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to assign SMS alert');
+  }
+  return await res.json();
+}
+
+export async function createDepositRequest(userId: string, amount: number): Promise<{
+  deposit: DepositRequest;
+  accountDetails: {
+    bankName: string;
+    accountNumber: string;
+    accountName: string;
+    amount: number;
+    paymentReference: string;
+    instructions: string;
+  };
+}> {
+  const res = await fetch('/api/deposits/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, amount }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to create deposit request');
+  }
+  return await res.json();
+}
+
+export async function checkDepositStatus(depositId: string): Promise<{
+  id: string;
+  status: 'pending' | 'completed' | 'expired';
+  completed: boolean;
+  amount: number;
+  paymentReference: string;
+  balance: number;
+  completedAt?: number;
+}> {
+  const res = await fetch(`/api/deposits/${depositId}/status`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to check deposit status');
+  }
+  return await res.json();
+}
+
+export async function fetchAdminOpaySettings(adminUserId: string): Promise<{
+  webhookUrl: string;
+  secretKey: string;
+  accountDetails: {
+    bankName: string;
+    accountNumber: string;
+    accountName: string;
+  };
+  stats: {
+    totalAlerts: number;
+    autoCredited: number;
+    unmatched: number;
+    totalCreditedAmount: number;
+  };
+}> {
+  const res = await fetch(`/api/admin/opay/settings?userId=${encodeURIComponent(adminUserId)}`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to load OPay settings');
+  }
+  return await res.json();
+}
+
+
 

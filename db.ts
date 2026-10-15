@@ -293,6 +293,61 @@ export async function initDatabase() {
         total_fees_collected NUMERIC DEFAULT 0,
         total_fees_withdrawn NUMERIC DEFAULT 0
       );
+
+      CREATE TABLE IF NOT EXISTS withdrawal_requests (
+        id VARCHAR(255) PRIMARY KEY,
+        user_id VARCHAR(255) NOT NULL,
+        codm_ign VARCHAR(255) NOT NULL,
+        email VARCHAR(255),
+        phone VARCHAR(100),
+        amount NUMERIC NOT NULL,
+        bank_name VARCHAR(255) NOT NULL,
+        account_number VARCHAR(255) NOT NULL,
+        account_name VARCHAR(255) NOT NULL,
+        bank_code VARCHAR(100),
+        status VARCHAR(50) DEFAULT 'pending',
+        remark VARCHAR(255) NOT NULL,
+        created_at BIGINT NOT NULL,
+        processed_at BIGINT,
+        processed_by VARCHAR(255),
+        opay_redirect_url TEXT,
+        rejection_reason TEXT,
+        balance_deducted BOOLEAN DEFAULT false,
+        webhook_received BOOLEAN DEFAULT false,
+        webhook_payload JSONB
+      );
+
+      ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS balance_deducted BOOLEAN DEFAULT false;
+      ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS webhook_received BOOLEAN DEFAULT false;
+      ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS webhook_payload JSONB;
+
+      CREATE TABLE IF NOT EXISTS opay_sms_alerts (
+        id VARCHAR(255) PRIMARY KEY,
+        sms_body TEXT NOT NULL,
+        sender VARCHAR(255),
+        amount NUMERIC NOT NULL,
+        narration VARCHAR(255),
+        sender_name VARCHAR(255),
+        reference VARCHAR(255),
+        matched_user_id VARCHAR(255),
+        matched_user_ign VARCHAR(255),
+        status VARCHAR(50) DEFAULT 'auto_credited',
+        created_at BIGINT NOT NULL,
+        credited_at BIGINT
+      );
+
+      CREATE TABLE IF NOT EXISTS deposit_requests (
+        id VARCHAR(255) PRIMARY KEY,
+        user_id VARCHAR(255) NOT NULL,
+        codm_ign VARCHAR(255) NOT NULL,
+        amount NUMERIC NOT NULL,
+        payment_reference VARCHAR(100) NOT NULL,
+        status VARCHAR(50) DEFAULT 'pending',
+        sms_alert_id VARCHAR(255),
+        created_at BIGINT NOT NULL,
+        expires_at BIGINT NOT NULL,
+        completed_at BIGINT
+      );
       
       INSERT INTO platform_finance (id, total_fees_collected, total_fees_withdrawn) 
       VALUES ('main', 0, 0) ON CONFLICT (id) DO NOTHING;

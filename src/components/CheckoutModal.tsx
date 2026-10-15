@@ -10,7 +10,10 @@ import {
   Loader2,
   Zap,
   Clock,
+  Radio,
+  Smartphone,
 } from 'lucide-react';
+import { createDepositRequest, checkDepositStatus } from '../services/api';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -18,6 +21,7 @@ interface CheckoutModalProps {
   title: string;
   description: string;
   customer: {
+    id?: string;
     name: string;
     email: string;
     phone?: string;
@@ -39,19 +43,48 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 }) => {
   const [countdown, setCountdown] = useState<number>(899); // 15 mins checkout timer
   const [copiedAcc, setCopiedAcc] = useState<boolean>(false);
+  const [copiedRef, setCopiedRef] = useState<boolean>(false);
   const [isVerifying, setIsVerifying] = useState<boolean>(false);
   const [verificationStep, setVerificationStep] = useState<string>('Awaiting payment transfer...');
   const [error, setError] = useState<string | null>(null);
 
+  // Automated OPay SMS deposit tracking
+  const [depositReqId, setDepositReqId] = useState<string | null>(null);
+  const [activePaymentRef, setActivePaymentRef] = useState<string>(reference);
+  const [autoConfirmed, setAutoConfirmed] = useState<boolean>(false);
+
+  // Initialize real deposit request on modal open
   useEffect(() => {
+    let isMounted = true;
     if (isOpen) {
       setCountdown(899);
       setIsVerifying(false);
       setError(null);
+      setAutoConfirmed(false);
       setVerificationStep('Awaiting payment transfer...');
-    }
-  }, [isOpen]);
 
+      // Create pending deposit request in DB if customer ID provided
+      if (customer.id && amount >= 100) {
+        createDepositRequest(customer.id, amount)
+          .then((res) => {
+            if (isMounted && res.deposit) {
+              setDepositReqId(res.deposit.id);
+              setActivePaymentRef(res.deposit.paymentReference);
+            }
+          })
+          .catch((err) => {
+            console.error('Deposit request init error:', err);
+          });
+      }
+    } else {
+      setDepositReqId(null);
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, customer.id, amount]);
+
+  // Countdown timer
   useEffect(() => {
     let timer: NodeJS.Timeout;
     if (isOpen && countdown > 0) {
@@ -59,6 +92,30 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     }
     return () => clearInterval(timer);
   }, [isOpen, countdown]);
+
+  // Live polling for automated OPay SMS verification
+  useEffect(() => {
+    let pollInterval: NodeJS.Timeout;
+    if (isOpen && depositReqId && !autoConfirmed && !isVerifying) {
+      pollInterval = setInterval(async () => {
+        try {
+          const status = await checkDepositStatus(depositReqId);
+          if (status.completed) {
+            setAutoConfirmed(true);
+            setIsVerifying(true);
+            setVerificationStep('⚡ OPay SMS Alert Detected! Crediting wallet balance...');
+            setTimeout(() => {
+              setIsVerifying(false);
+              onSuccess(activePaymentRef);
+            }, 1200);
+          }
+        } catch (e) {
+          // Silent polling error
+        }
+      }, 3500);
+    }
+    return () => clearInterval(pollInterval);
+  }, [isOpen, depositReqId, autoConfirmed, isVerifying, activePaymentRef, onSuccess]);
 
   if (!isOpen) return null;
 
@@ -74,21 +131,27 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     setTimeout(() => setCopiedAcc(false), 2000);
   };
 
+  const handleCopyRef = () => {
+    navigator.clipboard.writeText(activePaymentRef);
+    setCopiedRef(true);
+    setTimeout(() => setCopiedRef(false), 2000);
+  };
+
   const handleSimulateWebhookSuccess = async () => {
     setIsVerifying(true);
     setError(null);
 
-    setVerificationStep('Connecting to OPay & Flutterwave Gateway...');
-    await new Promise((r) => setTimeout(r, 900));
-
-    setVerificationStep('Verifying bank transfer webhook payload...');
-    await new Promise((r) => setTimeout(r, 1100));
-
-    setVerificationStep('Payment confirmed! Crediting wallet & locking escrow...');
+    setVerificationStep('Connecting to OPay & Bank Reconciliation Gateway...');
     await new Promise((r) => setTimeout(r, 800));
 
+    setVerificationStep('Verifying bank transfer webhook payload...');
+    await new Promise((r) => setTimeout(r, 1000));
+
+    setVerificationStep('Payment confirmed! Crediting wallet & locking escrow...');
+    await new Promise((r) => setTimeout(r, 700));
+
     setIsVerifying(false);
-    onSuccess(reference);
+    onSuccess(activePaymentRef);
   };
 
   return (

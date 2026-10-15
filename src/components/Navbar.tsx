@@ -105,8 +105,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   if (currentUser.role === 'admin') {
     navTabs.push({
       id: 'admin',
-      label: 'Admin Dashboard',
-      subtitle: 'Platform Rake & Finance Stats',
+      label: 'Admin Portal',
+      subtitle: 'OPay Payouts & Gladiators',
       icon: ShieldCheck,
       badge: 'ADMIN',
       badgeColor: 'bg-rose-500/20 text-rose-400 border-rose-500/40',

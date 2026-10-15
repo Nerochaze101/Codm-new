@@ -64,6 +64,7 @@ function MainApp() {
   else if (pathname === '/referrals') currentTab = 'referrals';
   else if (pathname === '/wallet') currentTab = 'wallet';
   else if (pathname === '/profile') currentTab = 'profile';
+  else if (pathname === '/admin') currentTab = 'admin';
 
   // Initial Data Fetch & URL Deep Link Check
   useEffect(() => {

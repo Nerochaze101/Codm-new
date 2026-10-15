@@ -170,10 +170,10 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
         gateway,
       });
 
-      setSuccessMsg(`Successfully initiated cash out of ₦${amountToWithdraw.toLocaleString()} via ${gateway === 'flutterwave' ? 'Flutterwave' : 'Paystack'} to ${bankName} (${accountNumber.trim()})!`);
+      setSuccessMsg(`Withdrawal request of ₦${amountToWithdraw.toLocaleString()} submitted successfully! Your request is pending admin approval and instant OPay payout to ${bankName} (${accountNumber.trim()}).`);
       setTimeout(() => {
         onClose();
-      }, 1800);
+      }, 2500);
     } catch (err: any) {
       setError(err.message || 'Cash out failed. Please try again.');
     } finally {

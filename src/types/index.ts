@@ -93,3 +93,54 @@ export interface Match {
   chatMessages: ChatMessage[];
   resolutionNotes?: string;
 }
+
+export interface WithdrawalRequest {
+  id: string;
+  userId: string;
+  codmIgn: string;
+  email: string;
+  phone: string;
+  amount: number;
+  bankName: string;
+  accountNumber: string;
+  accountName: string;
+  bankCode?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  remark: string;
+  createdAt: number;
+  processedAt?: number;
+  processedBy?: string;
+  opayRedirectUrl?: string;
+  rejectionReason?: string;
+  balanceDeducted?: boolean;
+  webhookReceived?: boolean;
+  webhookPayload?: any;
+}
+
+export interface DepositRequest {
+  id: string;
+  userId: string;
+  codmIgn: string;
+  amount: number;
+  paymentReference: string;
+  status: 'pending' | 'completed' | 'expired';
+  smsAlertId?: string;
+  createdAt: number;
+  expiresAt: number;
+  completedAt?: number;
+}
+
+export interface OpaySmsAlert {
+  id: string;
+  smsBody: string;
+  sender?: string;
+  amount: number;
+  narration?: string;
+  senderName?: string;
+  reference?: string;
+  matchedUserId?: string;
+  matchedUserIgn?: string;
+  status: 'auto_credited' | 'manually_credited' | 'unmatched' | 'ignored';
+  createdAt: number;
+  creditedAt?: number;
+}
