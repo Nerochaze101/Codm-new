@@ -73,18 +73,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
   const [mailboxMessages, setMailboxMessages] = useState<any[]>([]);
   const [mailboxFolder, setMailboxFolder] = useState<'all' | 'inbox' | 'sent'>('inbox');
   const [selectedMail, setSelectedMail] = useState<any | null>(null);
-  const [composeModal, setComposeModal] = useState<{
-    isOpen: boolean;
-    recipientEmail: string;
-    subject: string;
-    body: string;
-  }>({
-    isOpen: false,
-    recipientEmail: '',
-    subject: '',
-    body: '',
-  });
-  const [isSendingMail, setIsSendingMail] = useState(false);
   const [isSimulatingMail, setIsSimulatingMail] = useState(false);
   const [mailMsg, setMailMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [copiedDnsKey, setCopiedDnsKey] = useState<string | null>(null);
@@ -195,33 +183,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
     }
   };
 
-  const handleSendMail = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!composeModal.recipientEmail || !composeModal.subject || !composeModal.body) return;
-    setIsSendingMail(true);
-    setMailMsg(null);
-    try {
-      const res = await fetch('/api/admin/mailbox/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: currentUser.id,
-          recipientEmail: composeModal.recipientEmail,
-          subject: composeModal.subject,
-          body: composeModal.body,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to send email');
-      setMailMsg({ type: 'success', text: data.message });
-      setComposeModal({ isOpen: false, recipientEmail: '', subject: '', body: '' });
-      loadMailbox();
-    } catch (err: any) {
-      setMailMsg({ type: 'error', text: err.message });
-    } finally {
-      setIsSendingMail(false);
-    }
-  };
+
 
   const handleSimulateMail = async () => {
     setIsSimulatingMail(true);
@@ -1393,13 +1355,6 @@ Narration/Remark: ${wd.remark}`;
 
               <div className="flex items-center gap-3">
                 <button
-                  onClick={() => setComposeModal({ isOpen: true, recipientEmail: '', subject: '', body: '' })}
-                  className="px-4 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-black text-xs uppercase tracking-wider rounded-xl flex items-center gap-2 transition shadow-lg shadow-cyan-500/20 cursor-pointer"
-                >
-                  <Send className="w-4 h-4" />
-                  Compose Email
-                </button>
-                <button
                   onClick={handleSimulateMail}
                   disabled={isSimulatingMail}
                   className="px-4 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-cyan-300 font-bold text-xs uppercase tracking-wider rounded-xl flex items-center gap-2 transition border border-cyan-500/30 cursor-pointer"
@@ -1723,22 +1678,6 @@ Narration/Remark: ${wd.remark}`;
 
             <div className="flex justify-end gap-3 pt-2">
               <button
-                onClick={() => {
-                  const sender = selectedMail.senderEmail;
-                  setSelectedMail(null);
-                  setComposeModal({
-                    isOpen: true,
-                    recipientEmail: sender,
-                    subject: `Re: ${selectedMail.subject}`,
-                    body: `\n\n--- Original Message ---\nFrom: ${selectedMail.senderEmail}\nSubject: ${selectedMail.subject}\n${selectedMail.body}`,
-                  });
-                }}
-                className="px-4 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-black text-xs uppercase tracking-wider rounded-xl flex items-center gap-2 transition cursor-pointer"
-              >
-                <Send className="w-4 h-4" />
-                Reply to Sender
-              </button>
-              <button
                 onClick={() => setSelectedMail(null)}
                 className="px-4 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-bold text-xs uppercase tracking-wider rounded-xl transition cursor-pointer"
               >
@@ -1749,81 +1688,7 @@ Narration/Remark: ${wd.remark}`;
         </div>
       )}
 
-      {/* Modal: Compose / Reply Email */}
-      {composeModal.isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="bg-neutral-900 border border-cyan-500/40 rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-5 text-white animate-in fade-in zoom-in-95">
-            <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
-              <h3 className="text-base font-black uppercase text-white font-heading flex items-center gap-2">
-                <Send className="w-4 h-4 text-cyan-400" />
-                Compose Mail from codstake@detailr.online
-              </h3>
-              <button
-                onClick={() => setComposeModal({ isOpen: false, recipientEmail: '', subject: '', body: '' })}
-                className="p-1 rounded-lg text-neutral-400 hover:text-white"
-              >
-                <XCircle className="w-5 h-5" />
-              </button>
-            </div>
 
-            <form onSubmit={handleSendMail} className="space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold uppercase text-neutral-300 block">Recipient Email:</label>
-                <input
-                  type="email"
-                  required
-                  placeholder="player@gmail.com"
-                  value={composeModal.recipientEmail}
-                  onChange={(e) => setComposeModal(prev => ({ ...prev, recipientEmail: e.target.value }))}
-                  className="w-full px-3.5 py-2.5 bg-neutral-950 border border-neutral-800 rounded-xl text-white text-xs font-mono outline-none focus:border-cyan-400"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold uppercase text-neutral-300 block">Subject:</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Deposit Verification / Support Update"
-                  value={composeModal.subject}
-                  onChange={(e) => setComposeModal(prev => ({ ...prev, subject: e.target.value }))}
-                  className="w-full px-3.5 py-2.5 bg-neutral-950 border border-neutral-800 rounded-xl text-white text-xs font-mono outline-none focus:border-cyan-400"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold uppercase text-neutral-300 block">Message Body:</label>
-                <textarea
-                  required
-                  rows={6}
-                  placeholder="Type your reply or support message here..."
-                  value={composeModal.body}
-                  onChange={(e) => setComposeModal(prev => ({ ...prev, body: e.target.value }))}
-                  className="w-full px-3.5 py-2.5 bg-neutral-950 border border-neutral-800 rounded-xl text-white text-xs font-mono outline-none focus:border-cyan-400 resize-none"
-                />
-              </div>
-
-              <div className="flex justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setComposeModal({ isOpen: false, recipientEmail: '', subject: '', body: '' })}
-                  className="px-4 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-bold text-xs uppercase tracking-wider rounded-xl transition cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSendingMail}
-                  className="px-5 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-black text-xs uppercase tracking-wider rounded-xl flex items-center gap-2 transition shadow-lg shadow-cyan-500/20 cursor-pointer"
-                >
-                  <Send className={`w-4 h-4 ${isSendingMail ? 'animate-bounce' : ''}`} />
-                  {isSendingMail ? 'Sending...' : 'Send Email'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {/* Modal: Assign Unmatched Alert to Player */}
       {assignAlertModal.isOpen && assignAlertModal.alert && (

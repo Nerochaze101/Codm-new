@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import nodemailer from 'nodemailer';
 import { GoogleGenAI } from '@google/genai';
 import { initDatabase, pool, runDatabaseDiagnostics } from './db.js';
 
@@ -517,6 +518,32 @@ async function withdrawPlatformFees(amount: number) {
     return false;
   }
 }
+
+// Email Inbound Handler for Cloudflare Email Workers
+app.post('/api/inbound-email', express.json({ limit: '5mb' }), async (req, res) => {
+  try {
+    const { from, fromName, subject, text, html } = req.body;
+    console.log('📧 Received email via Inbound Webhook:', subject);
+
+    // Save to admin_mailbox
+    const id = `mail_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+    await pool.query(`
+      INSERT INTO admin_mailbox (id, sender_email, sender_name, subject, body, created_at)
+      VALUES (
+        ${escapeSql(from)},
+        ${escapeSql(fromName || 'Unknown')},
+        ${escapeSql(subject)},
+        ${escapeSql(text || html || '')},
+        ${Date.now()}
+      )
+    `);
+
+    res.status(200).json({ success: true });
+  } catch (err: any) {
+    console.error('⚠️ Error processing inbound email:', err);
+    res.status(500).json({ error: 'Failed to process email' });
+  }
+});
 
 // REST API ROUTES
 app.post('/api/admin/withdraw', async (req, res) => {
@@ -4229,6 +4256,128 @@ app.post('/api/matches/:id/admin-resolve', async (req, res) => {
 
   await saveMatchToDb(match);
   res.json(match);
+});
+
+
+// ==========================================
+// 📧 HOSTINGER ADMIN MAILBOX ENGINE (RECEIVE ONLY)
+// ==========================================
+
+app.get('/api/admin/mailbox', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const user = await getUserFromDb(userId as string);
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    }
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS admin_emails (
+        id VARCHAR(64) PRIMARY KEY,
+        sender_email VARCHAR(255) NOT NULL,
+        sender_name VARCHAR(255),
+        recipient_email VARCHAR(255) NOT NULL,
+        subject TEXT NOT NULL,
+        body TEXT NOT NULL,
+        folder VARCHAR(32) DEFAULT 'inbox',
+        is_read BOOLEAN DEFAULT FALSE,
+        created_at BIGINT NOT NULL
+      );
+    `);
+
+    const resMails = await pool.query(`SELECT * FROM admin_emails ORDER BY created_at DESC LIMIT 200`);
+    const emails = resMails.rows.map((m) => ({
+      id: m.id,
+      senderEmail: m.sender_email,
+      senderName: m.sender_name || m.sender_email,
+      recipientEmail: m.recipient_email,
+      subject: m.subject,
+      body: m.body,
+      folder: m.folder,
+      isRead: m.is_read === true,
+      createdAt: parseInt(m.created_at, 10),
+    }));
+
+    res.json({ emails });
+  } catch (err: any) {
+    console.error('Error fetching admin mailbox:', err);
+    res.status(500).json({ error: err.message || 'Failed to fetch mailbox' });
+  }
+});
+
+app.post('/api/admin/mailbox/simulate', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const user = await getUserFromDb(userId);
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
+    const mailId = `mail_sim_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+    const now = Date.now();
+    const sender = 'player.test@gmail.com';
+    const subj = 'Deposit Support: Payment Confirmation #GLAD-9821';
+    const bodyText = 'Hello Admin,\n\nI just made a deposit of ₦15,000 via OPay transfer. Please credit my account. My username is ProPlayer99.\n\nThanks!';
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS admin_emails (
+        id VARCHAR(64) PRIMARY KEY,
+        sender_email VARCHAR(255) NOT NULL,
+        sender_name VARCHAR(255),
+        recipient_email VARCHAR(255) NOT NULL,
+        subject TEXT NOT NULL,
+        body TEXT NOT NULL,
+        folder VARCHAR(32) DEFAULT 'inbox',
+        is_read BOOLEAN DEFAULT FALSE,
+        created_at BIGINT NOT NULL
+      );
+    `);
+
+    await pool.query(`
+      INSERT INTO admin_emails (id, sender_email, sender_name, recipient_email, subject, body, folder, is_read, created_at)
+      VALUES (${escapeSql(mailId)}, ${escapeSql(sender)}, 'Test Player', 'codstake@detailr.online', ${escapeSql(subj)}, ${escapeSql(bodyText)}, 'inbox', false, ${now})
+    `);
+
+    res.json({ success: true, message: 'Simulated test email received successfully in inbox!' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/inbound-mail', async (req, res) => {
+  try {
+    console.log('📬 Inbound Mail Received:', req.body);
+    const { sender, from, subject, body, text, recipient, to } = req.body || {};
+    const senderEmail = sender || from || 'unknown@domain.com';
+    const subj = subject || 'Incoming Mail';
+    const bodyContent = body || text || JSON.stringify(req.body);
+    const mailId = `mail_in_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+    const now = Date.now();
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS admin_emails (
+        id VARCHAR(64) PRIMARY KEY,
+        sender_email VARCHAR(255) NOT NULL,
+        sender_name VARCHAR(255),
+        recipient_email VARCHAR(255) NOT NULL,
+        subject TEXT NOT NULL,
+        body TEXT NOT NULL,
+        folder VARCHAR(32) DEFAULT 'inbox',
+        is_read BOOLEAN DEFAULT FALSE,
+        created_at BIGINT NOT NULL
+      );
+    `);
+
+    await pool.query(`
+      INSERT INTO admin_emails (id, sender_email, sender_name, recipient_email, subject, body, folder, is_read, created_at)
+      VALUES (${escapeSql(mailId)}, ${escapeSql(senderEmail)}, ${escapeSql(senderEmail)}, 'codstake@detailr.online', ${escapeSql(subj)}, ${escapeSql(bodyContent)}, 'inbox', false, ${now})
+    `);
+
+    res.json({ success: true, message: 'Inbound email received and saved to admin mailbox' });
+  } catch (err: any) {
+    console.error('Error handling inbound mail:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 async function startServer() {
