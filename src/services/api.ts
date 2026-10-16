@@ -382,6 +382,41 @@ export async function claimAdminRole(userId: string, passcode?: string) {
   return await res.json();
 }
 
+export async function fetchAdminFinance(adminUserId: string) {
+  const res = await fetch(`/api/admin/finance?userId=${encodeURIComponent(adminUserId)}`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to load platform finance');
+  }
+  return await res.json();
+}
+
+export async function withdrawPlatformFees(adminUserId: string, amount: number) {
+  const res = await fetch('/api/admin/withdraw', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId: adminUserId, amount }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to withdraw platform fees');
+  }
+  return await res.json();
+}
+
+export async function adjustUserBalance(adminUserId: string, targetUserId: string, amount: number, type: 'credit' | 'debit', reason: string) {
+  const res = await fetch(`/api/admin/users/${targetUserId}/adjust-balance`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ adminUserId, amount, type, reason }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to adjust user balance');
+  }
+  return await res.json();
+}
+
 export async function fetchAdminSmsAlerts(adminUserId: string, status?: string) {
   const url = status && status !== 'all'
     ? `/api/admin/sms-alerts?userId=${encodeURIComponent(adminUserId)}&status=${encodeURIComponent(status)}`

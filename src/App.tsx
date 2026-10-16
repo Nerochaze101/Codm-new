@@ -486,6 +486,14 @@ function MainApp() {
             element={
               <AdminDashboard
                 currentUser={currentUser}
+                onRefreshUser={async () => {
+                  try {
+                    const updated = await fetchUser(currentUser.id);
+                    setCurrentUser(updated);
+                  } catch (e) {
+                    console.error('Error refreshing admin profile:', e);
+                  }
+                }}
               />
             }
           />

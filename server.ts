@@ -555,7 +555,7 @@ app.post('/api/admin/withdraw', async (req, res) => {
 
   const user = await getUserFromDb(userId);
   if (!user || user.role !== 'admin') {
-    return res.status(403).json({ error: 'Unauthorized' });
+    return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
   }
 
   // Atomically deduct platform fees in SQL to prevent concurrent fee draining
@@ -566,6 +566,24 @@ app.post('/api/admin/withdraw', async (req, res) => {
       SET balance = balance + ${escapeSql(numAmount)} 
       WHERE id = ${escapeSql(user.id)}
     `);
+
+    // Audit log transaction
+    try {
+      await pool.query(`
+        INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
+        VALUES (
+          ${escapeSql(`tx_fee_${Date.now()}`)},
+          ${escapeSql(user.id)},
+          'PLATFORM_FEE_WITHDRAWAL',
+          ${escapeSql(numAmount)},
+          ${escapeSql(`Platform fee withdrawal to admin wallet: ₦${numAmount.toLocaleString()}`)},
+          ${Date.now()}
+        )
+      `);
+    } catch (e) {
+      console.warn('Could not record fee withdrawal transaction:', e);
+    }
+
     const refreshed = await getUserFromDb(user.id);
     res.json({ success: true, balance: refreshed?.balance ?? user.balance });
   } else {
@@ -574,13 +592,89 @@ app.post('/api/admin/withdraw', async (req, res) => {
 });
 
 app.get('/api/admin/finance', async (req, res) => {
+  try {
     const { userId } = req.query;
     const user = await getUserFromDb(userId as string);
     if (!user || user.role !== 'admin') {
-        return res.status(403).json({ error: 'Unauthorized' });
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
     }
-    const resFin = await pool.query(`SELECT * FROM platform_finance WHERE id = 'main'`);
-    res.json(resFin.rows[0]);
+
+    let resFin = await pool.query(`SELECT * FROM platform_finance WHERE id = 'main'`);
+    if (resFin.rows.length === 0) {
+      await pool.query(`INSERT INTO platform_finance (id, total_fees_collected, total_fees_withdrawn) VALUES ('main', 0, 0) ON CONFLICT DO NOTHING`);
+      resFin = await pool.query(`SELECT * FROM platform_finance WHERE id = 'main'`);
+    }
+
+    let finRow = resFin.rows[0] || { total_fees_collected: 0, total_fees_withdrawn: 0 };
+    let totalCollected = parseFloat(finRow.total_fees_collected || 0);
+
+    // Auto-sync from settled matches if platform_finance was empty
+    if (totalCollected === 0) {
+      try {
+        const sumRes = await pool.query(`SELECT COALESCE(SUM(platform_fee), 0) as total FROM matches WHERE status = 'SETTLED'`);
+        const sumVal = parseFloat(sumRes.rows[0]?.total || 0);
+        if (sumVal > 0) {
+          await pool.query(`UPDATE platform_finance SET total_fees_collected = ${escapeSql(sumVal)} WHERE id = 'main'`);
+          totalCollected = sumVal;
+        }
+      } catch (_) {}
+    }
+
+    const totalWithdrawn = parseFloat(finRow.total_fees_withdrawn || 0);
+    const available = Math.max(0, totalCollected - totalWithdrawn);
+
+    // Recent matches that funded the platform fee
+    let recentMatches: any[] = [];
+    try {
+      const matchRes = await pool.query(`
+        SELECT id, challenge_code, game_mode, map, stake_amount, pot_amount, platform_fee, winner_ign, settled_at 
+        FROM matches 
+        WHERE platform_fee > 0 
+        ORDER BY COALESCE(settled_at, created_at) DESC 
+        LIMIT 15
+      `);
+      recentMatches = matchRes.rows.map(m => ({
+        id: m.id,
+        challengeCode: m.challenge_code,
+        gameMode: m.game_mode,
+        map: m.map,
+        stakeAmount: parseFloat(m.stake_amount || 0),
+        potAmount: parseFloat(m.pot_amount || 0),
+        platformFee: parseFloat(m.platform_fee || 0),
+        winnerIgn: m.winner_ign || 'Winner',
+        settledAt: parseInt(m.settled_at || '0', 10),
+      }));
+    } catch (_) {}
+
+    // Recent platform fee withdrawals
+    let recentWithdrawals: any[] = [];
+    try {
+      const txRes = await pool.query(`
+        SELECT id, amount, description, timestamp 
+        FROM transactions 
+        WHERE type = 'PLATFORM_FEE_WITHDRAWAL' 
+        ORDER BY timestamp DESC 
+        LIMIT 15
+      `);
+      recentWithdrawals = txRes.rows.map(tx => ({
+        id: tx.id,
+        amount: parseFloat(tx.amount || 0),
+        description: tx.description,
+        timestamp: parseInt(tx.timestamp || '0', 10),
+      }));
+    } catch (_) {}
+
+    res.json({
+      total_fees_collected: totalCollected,
+      total_fees_withdrawn: totalWithdrawn,
+      available_fees: available,
+      recent_fee_matches: recentMatches,
+      recent_withdrawals: recentWithdrawals,
+    });
+  } catch (err: any) {
+    console.error('Error fetching admin finance:', err);
+    res.status(500).json({ error: err.message || 'Failed to fetch platform finance' });
+  }
 });
 
 // Fetch withdrawal requests for Admin Dashboard
@@ -1004,6 +1098,62 @@ app.post('/api/admin/assign-role', async (req, res) => {
   } catch (err: any) {
     console.error('Error assigning role:', err);
     res.status(500).json({ error: err.message || 'Failed to assign role' });
+  }
+});
+
+// Admin Adjust User Balance
+app.post('/api/admin/users/:id/adjust-balance', async (req, res) => {
+  try {
+    const { adminUserId, amount, type = 'credit', reason = '' } = req.body;
+    const targetUserId = req.params.id;
+    const numAmount = Number(amount);
+    if (!numAmount || numAmount <= 0) {
+      return res.status(400).json({ error: 'Invalid adjustment amount' });
+    }
+
+    const adminUser = await getUserFromDb(adminUserId);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    }
+
+    const targetUser = await getUserFromDb(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Target gladiator not found' });
+    }
+
+    const currentBal = Number(targetUser.balance || 0);
+    const newBal = type === 'debit' ? Math.max(0, currentBal - numAmount) : currentBal + numAmount;
+
+    await pool.query(`
+      UPDATE users 
+      SET balance = ${escapeSql(newBal)} 
+      WHERE id = ${escapeSql(targetUserId)}
+    `);
+
+    // Audit log transaction
+    try {
+      await pool.query(`
+        INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
+        VALUES (
+          ${escapeSql(`tx_adj_${Date.now()}`)},
+          ${escapeSql(targetUserId)},
+          ${escapeSql(type === 'debit' ? 'ADMIN_DEBIT' : 'ADMIN_CREDIT')},
+          ${escapeSql(numAmount)},
+          ${escapeSql(reason || `Admin balance adjustment (${type}): ₦${numAmount.toLocaleString()}`)},
+          ${Date.now()}
+        )
+      `);
+    } catch (_) {}
+
+    const refreshed = await getUserFromDb(targetUserId);
+    res.json({
+      success: true,
+      message: `Successfully adjusted balance for ${targetUser.codmIgn || targetUser.email} to ₦${newBal.toLocaleString()}`,
+      user: refreshed,
+    });
+  } catch (err: any) {
+    console.error('Error adjusting user balance:', err);
+    res.status(500).json({ error: err.message || 'Failed to adjust balance' });
   }
 });
 
