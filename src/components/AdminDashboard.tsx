@@ -27,6 +27,13 @@ import {
   PlusCircle,
   MinusCircle,
   X,
+  Inbox,
+  Key,
+  Copy,
+  ExternalLink,
+  Eye,
+  Trash2,
+  Settings,
 } from 'lucide-react';
 import {
   fetchAdminUsers,
@@ -35,6 +42,16 @@ import {
   fetchAdminFinance,
   withdrawPlatformFees,
   adjustUserBalance,
+  fetchGmailConfig,
+  saveGmailCredentials,
+  testGmailApiConnection,
+  triggerGmailSync,
+  disconnectGmailAccount,
+  fetchAdminMailbox,
+  markAdminEmailRead,
+  deleteAdminEmail,
+  GmailIntegrationStatus,
+  AdminEmailItem,
 } from '../services/api';
 
 interface AdminDashboardProps {
@@ -70,7 +87,7 @@ interface AdminFinanceData {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onRefreshUser }) => {
-  const [activeTab, setActiveTab] = useState<'finance' | 'users'>('finance');
+  const [activeTab, setActiveTab] = useState<'finance' | 'users' | 'gmail'>('finance');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -89,6 +106,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
   const [assignRoleType, setAssignRoleType] = useState<'admin' | 'user'>('admin');
   const [assignMsg, setAssignMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isAssigning, setIsAssigning] = useState(false);
+
+  // Gmail & Mailbox State
+  const [gmailStatus, setGmailStatus] = useState<GmailIntegrationStatus | null>(null);
+  const [emailsList, setEmailsList] = useState<AdminEmailItem[]>([]);
+  const [emailsLoading, setEmailsLoading] = useState(false);
+  const [gmailSyncing, setGmailSyncing] = useState(false);
+  const [gmailSyncMsg, setGmailSyncMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [connectModalOpen, setConnectModalOpen] = useState(false);
+  const [emailViewerModal, setEmailViewerModal] = useState<AdminEmailItem | null>(null);
+  const [emailSearch, setEmailSearch] = useState('');
+  const [emailFilter, setEmailFilter] = useState<'all' | 'unread' | 'alerts'>('all');
+  const [copiedWebhook, setCopiedWebhook] = useState(false);
+  const [showHowToHelp, setShowHowToHelp] = useState(false);
+
+  // Connect Gmail Form state
+  const [gmailForm, setGmailForm] = useState({
+    address: '',
+    password: '',
+    autoSync: true,
+    isSubmitting: false,
+    error: null as string | null,
+    success: null as string | null,
+  });
 
   // User Balance Adjustment Modal
   const [balanceModal, setBalanceModal] = useState<{
@@ -133,9 +173,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     }
   };
 
+  // Load Gmail status and emails
+  const loadGmail = async () => {
+    try {
+      setEmailsLoading(true);
+      const [status, mails] = await Promise.all([
+        fetchGmailConfig(currentUser.id),
+        fetchAdminMailbox(currentUser.id),
+      ]);
+      setGmailStatus(status);
+      setEmailsList(mails);
+    } catch (e) {
+      console.error('Error loading Gmail data:', e);
+    } finally {
+      setEmailsLoading(false);
+    }
+  };
+
   const reloadAll = async () => {
     setRefreshing(true);
-    await Promise.all([loadFinance(), loadUsers()]);
+    await Promise.all([loadFinance(), loadUsers(), loadGmail()]);
     if (onRefreshUser) onRefreshUser();
     setRefreshing(false);
   };
@@ -144,12 +201,121 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     const init = async () => {
       setLoading(true);
       if (currentUser.role === 'admin') {
-        await Promise.all([loadFinance(), loadUsers()]);
+        await Promise.all([loadFinance(), loadUsers(), loadGmail()]);
       }
       setLoading(false);
     };
     init();
   }, [currentUser.id, currentUser.role]);
+
+  // Gmail Actions
+  const handleSyncGmail = async () => {
+    setGmailSyncing(true);
+    setGmailSyncMsg(null);
+    try {
+      const res = await triggerGmailSync(currentUser.id);
+      setGmailSyncMsg({
+        type: 'success',
+        text: res.message || `Fetched ${res.newEmailsCount || 0} new email(s)!`,
+      });
+      await loadGmail();
+    } catch (err: any) {
+      setGmailSyncMsg({ type: 'error', text: err.message || 'Failed to sync Gmail' });
+    } finally {
+      setGmailSyncing(false);
+    }
+  };
+
+  const handleTestGmail = async () => {
+    setGmailSyncing(true);
+    setGmailSyncMsg(null);
+    try {
+      const res = await testGmailApiConnection(currentUser.id);
+      setGmailSyncMsg({ type: 'success', text: res.message || 'Connection test successful!' });
+    } catch (err: any) {
+      setGmailSyncMsg({ type: 'error', text: err.message || 'Test failed' });
+    } finally {
+      setGmailSyncing(false);
+    }
+  };
+
+  const handleConnectGmailSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!gmailForm.address.trim() || !gmailForm.password.trim()) {
+      setGmailForm(prev => ({ ...prev, error: 'Please enter both Gmail address and 16-character App Password' }));
+      return;
+    }
+
+    setGmailForm(prev => ({ ...prev, isSubmitting: true, error: null, success: null }));
+    try {
+      const res = await saveGmailCredentials(
+        currentUser.id,
+        gmailForm.address.trim(),
+        gmailForm.password.trim(),
+        gmailForm.autoSync
+      );
+      setGmailForm(prev => ({
+        ...prev,
+        isSubmitting: false,
+        success: res.message || 'Connected successfully!',
+      }));
+      await loadGmail();
+      setTimeout(() => {
+        setConnectModalOpen(false);
+        setGmailForm({
+          address: '',
+          password: '',
+          autoSync: true,
+          isSubmitting: false,
+          error: null,
+          success: null,
+        });
+      }, 1200);
+    } catch (err: any) {
+      setGmailForm(prev => ({
+        ...prev,
+        isSubmitting: false,
+        error: err.message || 'Connection failed. Check your App Password.',
+      }));
+    }
+  };
+
+  const handleDisconnectGmail = async () => {
+    if (!confirm('Are you sure you want to disconnect this Gmail account? Auto-sync will stop.')) return;
+    try {
+      await disconnectGmailAccount(currentUser.id);
+      await loadGmail();
+      alert('Gmail account disconnected successfully.');
+    } catch (err: any) {
+      alert(err.message || 'Failed to disconnect');
+    }
+  };
+
+  const handleDeleteEmailItem = async (emailId: string) => {
+    if (!confirm('Delete this email from the admin portal?')) return;
+    try {
+      await deleteAdminEmail(currentUser.id, emailId);
+      setEmailsList(prev => prev.filter(m => m.id !== emailId));
+      if (emailViewerModal?.id === emailId) {
+        setEmailViewerModal(null);
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete email');
+    }
+  };
+
+  const handleToggleReadStatus = async (email: AdminEmailItem) => {
+    try {
+      const nextRead = !email.isRead;
+      await markAdminEmailRead(currentUser.id, email.id, nextRead);
+      setEmailsList(prev => prev.map(m => m.id === email.id ? { ...m, isRead: nextRead } : m));
+      if (emailViewerModal?.id === email.id) {
+        setEmailViewerModal(prev => prev ? { ...prev, isRead: nextRead } : null);
+      }
+    } catch (err: any) {
+      console.error('Error toggling email read status:', err);
+    }
+  };
 
   // Handle Withdraw Platform Fees to Admin Account
   const handleExecuteFeeWithdrawal = async (amountToWithdraw?: number) => {
@@ -331,6 +497,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
   const adminsCount = usersList.filter((u) => u.role === 'admin').length;
   const regularUsersCount = usersList.filter((u) => u.role !== 'admin').length;
 
+  const filteredEmails = emailsList.filter((m) => {
+    if (emailFilter === 'unread' && m.isRead) return false;
+    if (emailFilter === 'alerts') {
+      const text = (m.subject + ' ' + m.body).toLowerCase();
+      if (!text.includes('opay') && !text.includes('deposit') && !text.includes('credit') && !text.includes('transfer') && !text.includes('payment')) {
+        return false;
+      }
+    }
+    if (emailSearch.trim()) {
+      const q = emailSearch.toLowerCase();
+      return (
+        m.subject.toLowerCase().includes(q) ||
+        m.senderEmail.toLowerCase().includes(q) ||
+        m.senderName.toLowerCase().includes(q) ||
+        m.body.toLowerCase().includes(q)
+      );
+    }
+    return true;
+  });
+
+  const unreadMailsCount = emailsList.filter((m) => !m.isRead).length;
+
   return (
     <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 space-y-8 text-white">
       {/* Top Header Card */}
@@ -404,6 +592,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
               activeTab === 'users' ? 'bg-neutral-950 text-amber-400' : 'bg-neutral-900 text-neutral-400'
             }`}>
               {usersList.length}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('gmail')}
+            className={`px-5 py-3 rounded-2xl text-xs sm:text-sm font-black flex items-center gap-2.5 uppercase tracking-wider transition cursor-pointer ${
+              activeTab === 'gmail'
+                ? 'bg-amber-400 text-neutral-950 shadow-xl shadow-amber-400/20'
+                : 'bg-neutral-800/90 hover:bg-neutral-800 text-neutral-300 border border-neutral-700/60'
+            }`}
+          >
+            <Mail className="w-4 h-4 sm:w-5 sm:h-5" />
+            <span>Gmail Alerts & Live Inbox</span>
+            {gmailStatus?.configured ? (
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" title="Gmail Connected & Active" />
+            ) : null}
+            <span className={`px-2 py-0.5 text-[11px] rounded-full font-mono font-bold ${
+              activeTab === 'gmail' ? 'bg-neutral-950 text-amber-400' : 'bg-neutral-900 text-neutral-400'
+            }`}>
+              {emailsList.length}
             </span>
           </button>
         </div>
@@ -960,6 +1168,458 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
         </div>
       )}
 
+      {/* ======================================================== */}
+      {/* TAB 3: GMAIL ALERTS & LIVE INBOX                         */}
+      {/* ======================================================== */}
+      {activeTab === 'gmail' && (
+        <div className="space-y-8 animate-in fade-in duration-200">
+          {/* Top Gmail Status & Controls Banner */}
+          <div className="bg-gradient-to-br from-neutral-900 via-neutral-900 to-amber-950/20 border border-neutral-800 rounded-3xl p-6 sm:p-8 shadow-xl">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className={`p-2.5 rounded-2xl border ${
+                    gmailStatus?.configured
+                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400'
+                      : 'bg-amber-500/15 border-amber-500/40 text-amber-400'
+                  }`}>
+                    <Mail className="w-6 h-6" />
+                  </span>
+                  <div>
+                    <h2 className="text-xl sm:text-2xl font-black uppercase tracking-tight text-white font-heading">
+                      Gmail Live Inbox & Alert Stream
+                    </h2>
+                    <p className="text-xs text-neutral-400">
+                      {gmailStatus?.configured ? (
+                        <>Connected to: <strong className="text-emerald-400">{gmailStatus.gmailAddress}</strong> (Render IMAP Sync Active)</>
+                      ) : (
+                        <>No Gmail account connected yet</>
+                      )}
+                    </p>
+                  </div>
+
+                  {gmailStatus?.configured ? (
+                    <span className="px-3 py-1 text-[11px] font-black tracking-wider uppercase bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-full flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      Auto-Sync Active (Every 3m)
+                    </span>
+                  ) : (
+                    <span className="px-3 py-1 text-[11px] font-black tracking-wider uppercase bg-amber-500/10 border border-amber-500/30 text-amber-400 rounded-full flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-amber-400" />
+                      Ready To Connect
+                    </span>
+                  )}
+                </div>
+
+                <p className="text-xs sm:text-sm text-neutral-300 max-w-2xl">
+                  {gmailStatus?.configured
+                    ? 'Emails are fetched directly from your Gmail inbox using secure SSL IMAP. Great for tracking bank alerts, OPay notifications, deposit proofs, and gladiator inquiries without OAuth redirect issues on Render.'
+                    : 'Connect any Gmail address in under 60 seconds with a free Google App Password. Works seamlessly on your Render deployment (https://codm-new.onrender.com) with zero domain verification or OAuth hassle.'
+                  }
+                </p>
+
+                {gmailStatus?.configured && (
+                  <div className="flex flex-wrap items-center gap-4 pt-2 text-[11px] text-neutral-400 font-mono">
+                    <span>
+                      Last Synced:{' '}
+                      <strong className="text-neutral-200">
+                        {gmailStatus.lastSyncedAt
+                          ? new Date(gmailStatus.lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                          : 'Never'}
+                      </strong>
+                    </span>
+                    <span>•</span>
+                    <span>
+                      Total Synced:{' '}
+                      <strong className="text-amber-400">{gmailStatus.totalEmailsSynced} emails</strong>
+                    </span>
+                    {gmailStatus.lastSyncStatus === 'error' && gmailStatus.lastSyncError && (
+                      <span className="text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20">
+                        Sync error: {gmailStatus.lastSyncError}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Action buttons */}
+              <div className="flex flex-wrap items-center gap-3">
+                {gmailStatus?.configured ? (
+                  <>
+                    <button
+                      onClick={handleSyncGmail}
+                      disabled={gmailSyncing}
+                      className="px-4 py-2.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 text-xs font-black rounded-xl uppercase tracking-wider flex items-center gap-2 transition cursor-pointer shadow-lg shadow-amber-400/20 disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-4 h-4 ${gmailSyncing ? 'animate-spin' : ''}`} />
+                      <span>{gmailSyncing ? 'Syncing Gmail...' : 'Sync Gmail Now'}</span>
+                    </button>
+
+                    <button
+                      onClick={handleTestGmail}
+                      disabled={gmailSyncing}
+                      className="px-3.5 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-bold rounded-xl flex items-center gap-1.5 border border-neutral-700 transition cursor-pointer"
+                      title="Test connection to imap.gmail.com"
+                    >
+                      <Key className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Test Connection</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setGmailForm({
+                          address: gmailStatus.gmailAddress || '',
+                          password: '',
+                          autoSync: gmailStatus.autoSync,
+                          isSubmitting: false,
+                          error: null,
+                          success: null,
+                        });
+                        setConnectModalOpen(true);
+                      }}
+                      className="px-3.5 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-bold rounded-xl flex items-center gap-1.5 border border-neutral-700 transition cursor-pointer"
+                      title="Update Gmail credentials"
+                    >
+                      <Settings className="w-3.5 h-3.5 text-neutral-400" />
+                      <span>Settings</span>
+                    </button>
+
+                    <button
+                      onClick={handleDisconnectGmail}
+                      className="px-3.5 py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-bold rounded-xl border border-rose-500/30 transition cursor-pointer"
+                    >
+                      Disconnect
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => setConnectModalOpen(true)}
+                    className="px-6 py-3 bg-amber-400 hover:bg-amber-300 text-neutral-950 text-xs sm:text-sm font-black rounded-xl uppercase tracking-wider flex items-center gap-2 transition cursor-pointer shadow-xl shadow-amber-400/25"
+                  >
+                    <Mail className="w-5 h-5" />
+                    <span>Connect Gmail Account</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Notification alert banner */}
+            {gmailSyncMsg && (
+              <div className={`mt-4 p-3 rounded-xl text-xs font-bold flex items-center justify-between ${
+                gmailSyncMsg.type === 'success'
+                  ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-300'
+                  : 'bg-rose-500/15 border border-rose-500/30 text-rose-300'
+              }`}>
+                <div className="flex items-center gap-2">
+                  {gmailSyncMsg.type === 'success' ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 text-rose-400" />
+                  )}
+                  <span>{gmailSyncMsg.text}</span>
+                </div>
+                <button
+                  onClick={() => setGmailSyncMsg(null)}
+                  className="text-neutral-400 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Render Webhook & Quick Guide Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            {/* Render Inbound Webhook Endpoint Card */}
+            <div className="p-6 bg-neutral-900 border border-neutral-800 rounded-3xl space-y-3 shadow-lg">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black text-amber-400 uppercase tracking-wider flex items-center gap-2">
+                  <Zap className="w-4 h-4" />
+                  Render Inbound Webhook (Alternative)
+                </span>
+                <span className="text-[10px] bg-neutral-800 text-neutral-300 px-2 py-0.5 rounded font-mono">
+                  POST
+                </span>
+              </div>
+              <p className="text-xs text-neutral-400">
+                You can also configure any email forwarder, Zapier, or mail parser to push emails directly to your Render deployment URL:
+              </p>
+              <div className="flex items-center gap-2 bg-neutral-950 p-2.5 rounded-xl border border-neutral-800 font-mono text-xs text-neutral-300">
+                <span className="truncate flex-1 select-all">https://codm-new.onrender.com/api/inbound-mail</span>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText('https://codm-new.onrender.com/api/inbound-mail');
+                    setCopiedWebhook(true);
+                    setTimeout(() => setCopiedWebhook(false), 2000);
+                  }}
+                  className="px-2.5 py-1 bg-neutral-800 hover:bg-neutral-700 text-amber-400 rounded-lg text-[11px] font-bold flex items-center gap-1 transition cursor-pointer"
+                >
+                  {copiedWebhook ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedWebhook ? 'Copied' : 'Copy'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* How to generate Google App Password Card */}
+            <div className="p-6 bg-neutral-900 border border-neutral-800 rounded-3xl space-y-3 shadow-lg">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black text-emerald-400 uppercase tracking-wider flex items-center gap-2">
+                  <Key className="w-4 h-4" />
+                  How To Get Your Free App Password
+                </span>
+                <button
+                  onClick={() => setShowHowToHelp(!showHowToHelp)}
+                  className="text-xs text-amber-400 hover:underline font-bold"
+                >
+                  {showHowToHelp ? 'Hide Guide' : 'View 4 Steps'}
+                </button>
+              </div>
+              <p className="text-xs text-neutral-400">
+                Google provides 16-character App Passwords free forever for any Gmail account with 2-Step Verification enabled.
+              </p>
+              {showHowToHelp ? (
+                <div className="space-y-2 text-xs text-neutral-300 bg-neutral-950 p-3.5 rounded-xl border border-neutral-800">
+                  <div className="flex items-start gap-2">
+                    <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold text-[10px] shrink-0">1</span>
+                    <span>Go to <strong className="text-white">myaccount.google.com/security</strong></span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold text-[10px] shrink-0">2</span>
+                    <span>Ensure <strong className="text-white">2-Step Verification</strong> is ON</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold text-[10px] shrink-0">3</span>
+                    <span>Search or select <strong className="text-white">App Passwords</strong> and create one named "CODM Admin"</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold text-[10px] shrink-0">4</span>
+                    <span>Copy the 16 letters (e.g. <code className="text-amber-400 font-mono">abcd efgh ijkl mnop</code>) and paste into Connect Gmail!</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-xs text-neutral-400">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>No Google Cloud project or OAuth verification required. Works on any VPS or Render deployment.</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Email Inbox List */}
+          <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 sm:p-8 space-y-6 shadow-xl">
+            {/* Search and filter toolbar */}
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <span className="p-2 bg-amber-500/10 rounded-xl text-amber-400">
+                  <Inbox className="w-5 h-5" />
+                </span>
+                <div>
+                  <h3 className="text-lg font-black uppercase text-white font-heading">
+                    Admin Received Mailbox
+                  </h3>
+                  <p className="text-xs text-neutral-400">
+                    Showing {filteredEmails.length} of {emailsList.length} emails
+                  </p>
+                </div>
+              </div>
+
+              {/* Filter pills and search */}
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center bg-neutral-950 border border-neutral-800 rounded-xl p-1">
+                  <button
+                    onClick={() => setEmailFilter('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                      emailFilter === 'all'
+                        ? 'bg-amber-400 text-neutral-950 shadow-sm'
+                        : 'text-neutral-400 hover:text-white'
+                    }`}
+                  >
+                    All ({emailsList.length})
+                  </button>
+                  <button
+                    onClick={() => setEmailFilter('unread')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                      emailFilter === 'unread'
+                        ? 'bg-amber-400 text-neutral-950 shadow-sm'
+                        : 'text-neutral-400 hover:text-white'
+                    }`}
+                  >
+                    Unread ({unreadMailsCount})
+                  </button>
+                  <button
+                    onClick={() => setEmailFilter('alerts')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                      emailFilter === 'alerts'
+                        ? 'bg-amber-400 text-neutral-950 shadow-sm'
+                        : 'text-neutral-400 hover:text-white'
+                    }`}
+                  >
+                    Payment / OPay Alerts
+                  </button>
+                </div>
+
+                {/* Search input */}
+                <div className="relative">
+                  <Search className="w-4 h-4 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={emailSearch}
+                    onChange={(e) => setEmailSearch(e.target.value)}
+                    placeholder="Search emails..."
+                    className="pl-9 pr-4 py-2 bg-neutral-950 border border-neutral-800 rounded-xl text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-amber-400 w-48 sm:w-60"
+                  />
+                  {emailSearch && (
+                    <button
+                      onClick={() => setEmailSearch('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Email Items Table / List */}
+            {emailsLoading ? (
+              <div className="py-12 flex flex-col items-center justify-center space-y-3 text-neutral-400">
+                <RefreshCw className="w-8 h-8 animate-spin text-amber-400" />
+                <p className="text-xs">Loading received emails...</p>
+              </div>
+            ) : filteredEmails.length === 0 ? (
+              <div className="py-14 text-center space-y-4 border border-dashed border-neutral-800 rounded-2xl bg-neutral-950/50 p-8">
+                <div className="w-12 h-12 rounded-2xl bg-neutral-800 flex items-center justify-center mx-auto text-neutral-500">
+                  <Mail className="w-6 h-6" />
+                </div>
+                <div className="space-y-1">
+                  <h4 className="text-sm font-bold text-neutral-300">No emails found</h4>
+                  <p className="text-xs text-neutral-500 max-w-sm mx-auto">
+                    {gmailStatus?.configured
+                      ? 'No messages matched your filter. Click "Sync Gmail Now" to check for newly arrived emails!'
+                      : 'Connect your Gmail account above to start receiving alerts and emails here.'
+                    }
+                  </p>
+                </div>
+                {gmailStatus?.configured && (
+                  <button
+                    onClick={handleSyncGmail}
+                    disabled={gmailSyncing}
+                    className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-amber-400 text-xs font-bold rounded-xl border border-neutral-700 inline-flex items-center gap-2"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${gmailSyncing ? 'animate-spin' : ''}`} />
+                    <span>Sync Gmail Now</span>
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="divide-y divide-neutral-800/80 rounded-2xl overflow-hidden border border-neutral-800 bg-neutral-950/60">
+                {filteredEmails.map((email) => {
+                  const isDepositAlert = (email.subject + ' ' + email.body).toLowerCase().includes('opay') ||
+                    (email.subject + ' ' + email.body).toLowerCase().includes('deposit');
+
+                  return (
+                    <div
+                      key={email.id}
+                      className={`p-4 transition flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer hover:bg-neutral-800/50 ${
+                        !email.isRead ? 'bg-amber-500/[0.04]' : ''
+                      }`}
+                      onClick={() => {
+                        setEmailViewerModal(email);
+                        if (!email.isRead) {
+                          handleToggleReadStatus(email);
+                        }
+                      }}
+                    >
+                      <div className="flex items-start gap-3.5 min-w-0">
+                        {/* Unread dot or initial circle */}
+                        <div className="relative shrink-0 pt-0.5">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm ${
+                            isDepositAlert
+                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                              : 'bg-neutral-800 text-neutral-300 border border-neutral-700'
+                          }`}>
+                            {email.senderName ? email.senderName.charAt(0).toUpperCase() : 'M'}
+                          </div>
+                          {!email.isRead && (
+                            <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-amber-400 border-2 border-neutral-950 animate-pulse" />
+                          )}
+                        </div>
+
+                        {/* Mail content preview */}
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className={`text-xs font-bold ${!email.isRead ? 'text-white' : 'text-neutral-300'}`}>
+                              {email.senderName || email.senderEmail}
+                            </span>
+                            <span className="text-[11px] text-neutral-500 font-mono">
+                              &lt;{email.senderEmail}&gt;
+                            </span>
+                            {isDepositAlert && (
+                              <span className="px-2 py-0.5 text-[10px] font-black uppercase tracking-wider bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-md">
+                                Payment Alert
+                              </span>
+                            )}
+                            {!email.isRead && (
+                              <span className="px-1.5 py-0.2 text-[9px] font-black uppercase tracking-wider bg-amber-400/20 text-amber-300 rounded border border-amber-400/30">
+                                New
+                              </span>
+                            )}
+                          </div>
+
+                          <h4 className={`text-xs sm:text-sm font-semibold truncate ${!email.isRead ? 'text-amber-300 font-bold' : 'text-neutral-200'}`}>
+                            {email.subject}
+                          </h4>
+
+                          <p className="text-xs text-neutral-400 line-clamp-1">
+                            {email.body.replace(/\n+/g, ' ').substring(0, 140)}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Right metadata & quick actions */}
+                      <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center gap-2 shrink-0 pt-2 sm:pt-0" onClick={(e) => e.stopPropagation()}>
+                        <span className="text-[11px] text-neutral-400 font-mono">
+                          {new Date(email.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })} at {new Date(email.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => {
+                              setEmailViewerModal(email);
+                              if (!email.isRead) handleToggleReadStatus(email);
+                            }}
+                            className="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800 transition"
+                            title="Read email"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+
+                          <button
+                            onClick={() => handleToggleReadStatus(email)}
+                            className="p-1.5 rounded-lg text-neutral-400 hover:text-amber-400 hover:bg-neutral-800 transition"
+                            title={email.isRead ? 'Mark as Unread' : 'Mark as Read'}
+                          >
+                            <Check className={`w-4 h-4 ${email.isRead ? 'text-emerald-400' : ''}`} />
+                          </button>
+
+                          <button
+                            onClick={() => handleDeleteEmailItem(email.id)}
+                            className="p-1.5 rounded-lg text-neutral-400 hover:text-rose-400 hover:bg-rose-500/10 transition"
+                            title="Delete email"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Modal: Adjust Gladiator Balance */}
       {balanceModal.isOpen && balanceModal.user && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
@@ -1085,6 +1745,203 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Connect Gmail Account */}
+      {connectModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-neutral-900 border border-amber-500/40 rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl space-y-6 text-white animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-neutral-800 pb-4">
+              <div className="flex items-center gap-3">
+                <span className="p-2.5 bg-amber-500/15 border border-amber-500/30 rounded-2xl text-amber-400">
+                  <Mail className="w-6 h-6" />
+                </span>
+                <div>
+                  <h3 className="text-lg font-black uppercase text-white font-heading">
+                    Connect Any Gmail Account
+                  </h3>
+                  <p className="text-xs text-neutral-400">
+                    Works on Render deployment • Direct IMAP SSL
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setConnectModalOpen(false)}
+                className="p-1.5 rounded-xl text-neutral-400 hover:text-white hover:bg-neutral-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConnectGmailSubmit} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-300 block">
+                  Your Gmail Address:
+                </label>
+                <input
+                  type="email"
+                  value={gmailForm.address}
+                  onChange={(e) => setGmailForm(prev => ({ ...prev, address: e.target.value, error: null }))}
+                  placeholder="e.g. b@gmail.com or onelly103@gmail.com"
+                  className="w-full px-4 py-3 bg-neutral-950 border border-neutral-800 rounded-xl text-xs sm:text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-amber-400 font-mono"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold uppercase tracking-wider text-neutral-300 block">
+                    Google App Password (16 Letters):
+                  </label>
+                  <span className="text-[10px] text-amber-400 font-mono">
+                    Free forever • No OAuth
+                  </span>
+                </div>
+                <input
+                  type="password"
+                  value={gmailForm.password}
+                  onChange={(e) => setGmailForm(prev => ({ ...prev, password: e.target.value, error: null }))}
+                  placeholder="e.g. abcd efgh ijkl mnop"
+                  className="w-full px-4 py-3 bg-neutral-950 border border-neutral-800 rounded-xl text-xs sm:text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-amber-400 font-mono tracking-wider"
+                  required
+                />
+              </div>
+
+              {/* Instructions Callout */}
+              <div className="p-3.5 bg-neutral-950 border border-neutral-800 rounded-2xl text-[11px] text-neutral-400 space-y-1.5">
+                <p className="font-bold text-neutral-300 flex items-center gap-1.5">
+                  <Key className="w-3.5 h-3.5 text-amber-400" />
+                  How to generate your App Password in 60 seconds:
+                </p>
+                <ol className="list-decimal list-inside space-y-1 pl-1 text-neutral-400">
+                  <li>Visit <strong className="text-neutral-200">myaccount.google.com/security</strong></li>
+                  <li>Enable <strong className="text-neutral-200">2-Step Verification</strong></li>
+                  <li>Search <strong className="text-neutral-200">"App Passwords"</strong> and generate a code named "CODM"</li>
+                  <li>Paste the 16 characters above!</li>
+                </ol>
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="autoSyncCheck"
+                  checked={gmailForm.autoSync}
+                  onChange={(e) => setGmailForm(prev => ({ ...prev, autoSync: e.target.checked }))}
+                  className="w-4 h-4 rounded text-amber-400 bg-neutral-950 border-neutral-800 focus:ring-amber-400"
+                />
+                <label htmlFor="autoSyncCheck" className="text-xs text-neutral-300 font-semibold cursor-pointer">
+                  Auto-sync emails in background every 3 minutes
+                </label>
+              </div>
+
+              {gmailForm.error && (
+                <div className="p-3.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-bold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                  <span>{gmailForm.error}</span>
+                </div>
+              )}
+
+              {gmailForm.success && (
+                <div className="p-3.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-bold flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                  <span>{gmailForm.success}</span>
+                </div>
+              )}
+
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setConnectModalOpen(false)}
+                  className="w-1/3 py-3 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-bold rounded-xl text-xs uppercase"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={gmailForm.isSubmitting}
+                  className="w-2/3 py-3 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition cursor-pointer shadow-lg shadow-amber-400/20 disabled:opacity-50"
+                >
+                  {gmailForm.isSubmitting ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Verifying & Connecting...</span>
+                    </>
+                  ) : (
+                    <span>Test & Connect Gmail</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Full Email Viewer */}
+      {emailViewerModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm p-4">
+          <div className="bg-neutral-900 border border-neutral-700 rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl space-y-5 text-white animate-in fade-in zoom-in-95 max-h-[90vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-start justify-between border-b border-neutral-800 pb-4">
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="px-2 py-0.5 text-[10px] font-black uppercase tracking-wider bg-neutral-800 text-neutral-300 rounded font-mono">
+                    {emailViewerModal.folder || 'INBOX'}
+                  </span>
+                  <span className="text-xs text-neutral-400 font-mono">
+                    {new Date(emailViewerModal.createdAt).toLocaleString()}
+                  </span>
+                </div>
+                <h3 className="text-base sm:text-lg font-black text-amber-300 font-heading">
+                  {emailViewerModal.subject}
+                </h3>
+                <div className="text-xs text-neutral-300">
+                  From: <strong className="text-white">{emailViewerModal.senderName}</strong>{' '}
+                  <span className="text-neutral-500 font-mono">&lt;{emailViewerModal.senderEmail}&gt;</span>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setEmailViewerModal(null)}
+                className="p-1.5 rounded-xl text-neutral-400 hover:text-white hover:bg-neutral-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Email Body */}
+            <div className="flex-1 overflow-y-auto bg-neutral-950 p-4 sm:p-6 rounded-2xl border border-neutral-800 font-sans text-xs sm:text-sm text-neutral-200 leading-relaxed whitespace-pre-wrap select-text">
+              {emailViewerModal.body}
+            </div>
+
+            {/* Footer Actions */}
+            <div className="flex items-center justify-between pt-2 border-t border-neutral-800">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleToggleReadStatus(emailViewerModal)}
+                  className="px-3 py-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-bold rounded-xl flex items-center gap-1.5 border border-neutral-700 transition"
+                >
+                  <Check className={`w-3.5 h-3.5 ${emailViewerModal.isRead ? 'text-emerald-400' : ''}`} />
+                  <span>{emailViewerModal.isRead ? 'Mark Unread' : 'Mark Read'}</span>
+                </button>
+
+                <button
+                  onClick={() => handleDeleteEmailItem(emailViewerModal.id)}
+                  className="px-3 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-bold rounded-xl border border-rose-500/30 flex items-center gap-1.5 transition"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete</span>
+                </button>
+              </div>
+
+              <button
+                onClick={() => setEmailViewerModal(null)}
+                className="px-5 py-2 bg-neutral-800 hover:bg-neutral-700 text-white text-xs font-bold rounded-xl transition"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

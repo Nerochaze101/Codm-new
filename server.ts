@@ -8,6 +8,15 @@ import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import { GoogleGenAI } from '@google/genai';
 import { initDatabase, pool, runDatabaseDiagnostics } from './db.js';
+import {
+  initGmailTables,
+  getGmailConfig,
+  saveGmailConfig,
+  disconnectGmailConfig,
+  testGmailConnection,
+  syncGmailEmails,
+  startGmailAutoSyncService,
+} from './gmailService.js';
 
 dotenv.config();
 
@@ -178,13 +187,17 @@ function generateRoomCode(mapName: string): string {
 // DIRECT DATABASE ACCESS FUNCTIONS
 // ==========================================
 
-async function getUserFromDb(id: string): Promise<UserProfile | null> {
+async function getUserFromDb(idOrEmail: string): Promise<UserProfile | null> {
   try {
-    const userRes = await pool.query(`SELECT * FROM users WHERE id = ${escapeSql(id)}`);
+    if (!idOrEmail) return null;
+    const userRes = await pool.query(
+      `SELECT * FROM users WHERE id = $1 OR LOWER(email) = LOWER($1) LIMIT 1`,
+      [idOrEmail]
+    );
     if (userRes.rows.length === 0) return null;
     const r = userRes.rows[0];
 
-    const txRes = await pool.query(`SELECT * FROM transactions WHERE user_id = ${escapeSql(id)} ORDER BY timestamp DESC`);
+    const txRes = await pool.query(`SELECT * FROM transactions WHERE user_id = $1 ORDER BY timestamp DESC`, [r.id]);
     const transactions = txRes.rows.map((t) => ({
       id: t.id,
       type: t.type,
@@ -220,7 +233,7 @@ async function getUserFromDb(id: string): Promise<UserProfile | null> {
       transactions,
     };
   } catch (err) {
-    console.error(`Error loading user ${id} from DB:`, err);
+    console.error(`Error loading user ${idOrEmail} from DB:`, err);
     return null;
   }
 }
@@ -1738,35 +1751,31 @@ app.post(['/api/admin/opay/alerts/:id/assign', '/api/admin/sms-alerts/:id/assign
 // 📧 ADMIN MAILBOX API (`codstake@detailr.online`)
 // ==========================================
 
-// Get Mailbox Messages
+// Get Mailbox Messages (from admin_emails & IMAP sync)
 app.get('/api/admin/mailbox', async (req, res) => {
   try {
-    const { userId, folder } = req.query;
+    const { userId } = req.query;
     const adminUser = await getUserFromDb(userId as string);
     if (!adminUser || adminUser.role !== 'admin') {
       return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
     }
 
-    let queryStr = `SELECT * FROM admin_mailbox`;
-    if (folder && folder !== 'all') {
-      queryStr += ` WHERE folder = ${escapeSql(folder as string)}`;
-    }
-    queryStr += ` ORDER BY created_at DESC LIMIT 100`;
+    await initGmailTables();
 
-    const mRes = await pool.query(queryStr);
-    const messages = mRes.rows.map(r => ({
+    const mRes = await pool.query(`SELECT * FROM admin_emails ORDER BY created_at DESC LIMIT 250`);
+    const emails = mRes.rows.map(r => ({
       id: r.id,
       senderEmail: r.sender_email,
-      senderName: r.sender_name,
+      senderName: r.sender_name || r.sender_email,
       recipientEmail: r.recipient_email,
       subject: r.subject,
       body: r.body,
-      isRead: r.is_read,
-      folder: r.folder,
+      isRead: r.is_read === true,
+      folder: r.folder || 'inbox',
       createdAt: parseInt(r.created_at, 10),
     }));
 
-    res.json({ messages });
+    res.json({ emails, messages: emails });
   } catch (err: any) {
     console.error('Error fetching admin mailbox messages:', err);
     res.status(500).json({ error: err.message || 'Failed to fetch mailbox messages' });
@@ -4410,9 +4419,132 @@ app.post('/api/matches/:id/admin-resolve', async (req, res) => {
 
 
 // ==========================================
-// 📧 HOSTINGER ADMIN MAILBOX ENGINE (RECEIVE ONLY)
+// 📧 GMAIL IMAP SYNC ENGINE & ADMIN MAILBOX
 // ==========================================
 
+// Get current Gmail integration status & config
+app.get('/api/admin/gmail/config', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const user = await getUserFromDb(userId as string);
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    }
+
+    const config = await getGmailConfig();
+    res.json({
+      configured: !!config && !!config.gmailAddress && !!config.appPassword,
+      gmailAddress: config?.gmailAddress || null,
+      autoSync: config?.autoSync ?? true,
+      lastSyncedAt: config?.lastSyncedAt || null,
+      lastSyncStatus: config?.lastSyncStatus || 'idle',
+      lastSyncError: config?.lastSyncError || null,
+      totalEmailsSynced: config?.totalEmailsSynced || 0,
+      hasEnvOverride: !!process.env.GMAIL_USER && !!process.env.GMAIL_APP_PASSWORD,
+    });
+  } catch (err: any) {
+    console.error('Error fetching gmail config:', err);
+    res.status(500).json({ error: err.message || 'Failed to fetch Gmail status' });
+  }
+});
+
+// Save or connect a new Gmail account (with test check)
+app.post('/api/admin/gmail/config', async (req, res) => {
+  try {
+    const { userId, gmailAddress, appPassword, autoSync } = req.body;
+    const user = await getUserFromDb(userId);
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    }
+
+    if (!gmailAddress || !appPassword) {
+      return res.status(400).json({ error: 'Gmail address and 16-character App Password are required' });
+    }
+
+    // Test connection first to verify credentials work with Google IMAP
+    const testResult = await testGmailConnection(gmailAddress, appPassword);
+    if (!testResult.success) {
+      return res.status(400).json({
+        error: testResult.message,
+        details: 'Connection test failed. Please verify your Gmail address and 16-character App Password.',
+      });
+    }
+
+    // Save credentials to Postgres
+    await saveGmailConfig(gmailAddress, appPassword, autoSync !== false);
+
+    // Run an immediate initial sync in background
+    syncGmailEmails().catch((err) => console.warn('Initial sync error:', err.message));
+
+    res.json({
+      success: true,
+      message: `Successfully connected ${gmailAddress}! Initial mail sync started.`,
+      totalInboxMessages: testResult.totalMessages,
+    });
+  } catch (err: any) {
+    console.error('Error saving gmail config:', err);
+    res.status(500).json({ error: err.message || 'Failed to configure Gmail' });
+  }
+});
+
+// Test connection on demand
+app.post('/api/admin/gmail/test', async (req, res) => {
+  try {
+    const { userId, gmailAddress, appPassword } = req.body;
+    const user = await getUserFromDb(userId);
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
+    const result = await testGmailConnection(gmailAddress, appPassword);
+    if (!result.success) {
+      return res.status(400).json({ error: result.message });
+    }
+
+    res.json({ success: true, message: result.message, totalMessages: result.totalMessages });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Trigger manual mail sync
+app.post('/api/admin/gmail/sync', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const user = await getUserFromDb(userId);
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
+    const result = await syncGmailEmails();
+    if (!result.success) {
+      return res.status(400).json({ error: result.message });
+    }
+
+    res.json(result);
+  } catch (err: any) {
+    console.error('Error syncing Gmail:', err);
+    res.status(500).json({ error: err.message || 'Failed to sync Gmail' });
+  }
+});
+
+// Disconnect Gmail
+app.post('/api/admin/gmail/disconnect', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const user = await getUserFromDb(userId);
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
+    await disconnectGmailConfig();
+    res.json({ success: true, message: 'Gmail account disconnected successfully' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch admin mailbox emails
 app.get('/api/admin/mailbox', async (req, res) => {
   try {
     const { userId } = req.query;
@@ -4421,21 +4553,9 @@ app.get('/api/admin/mailbox', async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
     }
 
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS admin_emails (
-        id VARCHAR(64) PRIMARY KEY,
-        sender_email VARCHAR(255) NOT NULL,
-        sender_name VARCHAR(255),
-        recipient_email VARCHAR(255) NOT NULL,
-        subject TEXT NOT NULL,
-        body TEXT NOT NULL,
-        folder VARCHAR(32) DEFAULT 'inbox',
-        is_read BOOLEAN DEFAULT FALSE,
-        created_at BIGINT NOT NULL
-      );
-    `);
+    await initGmailTables();
 
-    const resMails = await pool.query(`SELECT * FROM admin_emails ORDER BY created_at DESC LIMIT 200`);
+    const resMails = await pool.query(`SELECT * FROM admin_emails ORDER BY created_at DESC LIMIT 250`);
     const emails = resMails.rows.map((m) => ({
       id: m.id,
       senderEmail: m.sender_email,
@@ -4443,7 +4563,7 @@ app.get('/api/admin/mailbox', async (req, res) => {
       recipientEmail: m.recipient_email,
       subject: m.subject,
       body: m.body,
-      folder: m.folder,
+      folder: m.folder || 'inbox',
       isRead: m.is_read === true,
       createdAt: parseInt(m.created_at, 10),
     }));
@@ -4455,77 +4575,62 @@ app.get('/api/admin/mailbox', async (req, res) => {
   }
 });
 
-app.post('/api/admin/mailbox/simulate', async (req, res) => {
+// Mark email as read
+app.patch('/api/admin/mailbox/:id/read', async (req, res) => {
   try {
+    const { id } = req.params;
+    const { userId, isRead = true } = req.body;
+    const user = await getUserFromDb(userId);
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
+    await pool.query(`UPDATE admin_emails SET is_read = $1 WHERE id = $2`, [isRead, id]);
+    res.json({ success: true, id, isRead });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete email
+app.delete('/api/admin/mailbox/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
     const { userId } = req.body;
     const user = await getUserFromDb(userId);
     if (!user || user.role !== 'admin') {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
-    const mailId = `mail_sim_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
-    const now = Date.now();
-    const sender = 'player.test@gmail.com';
-    const subj = 'Deposit Support: Payment Confirmation #GLAD-9821';
-    const bodyText = 'Hello Admin,\n\nI just made a deposit of ₦15,000 via OPay transfer. Please credit my account. My username is ProPlayer99.\n\nThanks!';
-
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS admin_emails (
-        id VARCHAR(64) PRIMARY KEY,
-        sender_email VARCHAR(255) NOT NULL,
-        sender_name VARCHAR(255),
-        recipient_email VARCHAR(255) NOT NULL,
-        subject TEXT NOT NULL,
-        body TEXT NOT NULL,
-        folder VARCHAR(32) DEFAULT 'inbox',
-        is_read BOOLEAN DEFAULT FALSE,
-        created_at BIGINT NOT NULL
-      );
-    `);
-
-    await pool.query(`
-      INSERT INTO admin_emails (id, sender_email, sender_name, recipient_email, subject, body, folder, is_read, created_at)
-      VALUES (${escapeSql(mailId)}, ${escapeSql(sender)}, 'Test Player', 'codstake@detailr.online', ${escapeSql(subj)}, ${escapeSql(bodyText)}, 'inbox', false, ${now})
-    `);
-
-    res.json({ success: true, message: 'Simulated test email received successfully in inbox!' });
+    await pool.query(`DELETE FROM admin_emails WHERE id = $1`, [id]);
+    res.json({ success: true, id, message: 'Email deleted successfully' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/api/inbound-mail', async (req, res) => {
+// Inbound Mail Webhook (works on Render: https://codm-new.onrender.com/api/inbound-mail)
+app.post(['/api/inbound-mail', '/api/admin/mail/webhook'], async (req, res) => {
   try {
-    console.log('📬 Inbound Mail Received:', req.body);
+    console.log('📬 Inbound Mail Webhook Received:', req.body);
     const { sender, from, subject, body, text, recipient, to } = req.body || {};
-    const senderEmail = sender || from || 'unknown@domain.com';
-    const subj = subject || 'Incoming Mail';
-    const bodyContent = body || text || JSON.stringify(req.body);
-    const mailId = `mail_in_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+    const senderEmail = sender || from || 'incoming@webhook.service';
+    const subj = subject || 'Incoming Payment/Support Mail';
+    const bodyContent = body || text || (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
+    const mailId = `mail_wb_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
     const now = Date.now();
 
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS admin_emails (
-        id VARCHAR(64) PRIMARY KEY,
-        sender_email VARCHAR(255) NOT NULL,
-        sender_name VARCHAR(255),
-        recipient_email VARCHAR(255) NOT NULL,
-        subject TEXT NOT NULL,
-        body TEXT NOT NULL,
-        folder VARCHAR(32) DEFAULT 'inbox',
-        is_read BOOLEAN DEFAULT FALSE,
-        created_at BIGINT NOT NULL
-      );
-    `);
+    await initGmailTables();
 
-    await pool.query(`
-      INSERT INTO admin_emails (id, sender_email, sender_name, recipient_email, subject, body, folder, is_read, created_at)
-      VALUES (${escapeSql(mailId)}, ${escapeSql(senderEmail)}, ${escapeSql(senderEmail)}, 'codstake@detailr.online', ${escapeSql(subj)}, ${escapeSql(bodyContent)}, 'inbox', false, ${now})
-    `);
+    await pool.query(
+      `INSERT INTO admin_emails (id, sender_email, sender_name, recipient_email, subject, body, folder, is_read, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, 'inbox', false, $7)`,
+      [mailId, senderEmail, senderEmail, recipient || to || 'admin@codstake.com', subj, bodyContent, now]
+    );
 
-    res.json({ success: true, message: 'Inbound email received and saved to admin mailbox' });
+    res.json({ success: true, message: 'Inbound email received and saved to admin mailbox', mailId });
   } catch (err: any) {
-    console.error('Error handling inbound mail:', err);
+    console.error('Error handling inbound webhook mail:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -4533,6 +4638,8 @@ app.post('/api/inbound-mail', async (req, res) => {
 async function startServer() {
   // 1. Initialize Supabase PostgreSQL database
   await initDatabase();
+  await initGmailTables();
+  startGmailAutoSyncService();
 
   // Always serve static public assets
   const publicPath = path.resolve(__dirname, 'public');

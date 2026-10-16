@@ -506,5 +506,139 @@ export async function fetchAdminOpaySettings(adminUserId: string): Promise<{
   return await res.json();
 }
 
+// ==========================================
+// 📧 GMAIL & ADMIN MAILBOX API CLIENT
+// ==========================================
+
+export interface GmailIntegrationStatus {
+  configured: boolean;
+  gmailAddress: string | null;
+  autoSync: boolean;
+  lastSyncedAt: number | null;
+  lastSyncStatus: 'idle' | 'success' | 'error' | 'syncing';
+  lastSyncError: string | null;
+  totalEmailsSynced: number;
+  hasEnvOverride: boolean;
+}
+
+export interface AdminEmailItem {
+  id: string;
+  senderEmail: string;
+  senderName: string;
+  recipientEmail: string;
+  subject: string;
+  body: string;
+  folder: string;
+  isRead: boolean;
+  createdAt: number;
+}
+
+export async function fetchGmailConfig(adminUserId: string): Promise<GmailIntegrationStatus> {
+  const res = await fetch(`/api/admin/gmail/config?userId=${encodeURIComponent(adminUserId)}`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to fetch Gmail status');
+  }
+  return await res.json();
+}
+
+export async function saveGmailCredentials(
+  adminUserId: string,
+  gmailAddress: string,
+  appPassword: string,
+  autoSync: boolean = true
+) {
+  const res = await fetch('/api/admin/gmail/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId: adminUserId, gmailAddress, appPassword, autoSync }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to connect Gmail');
+  }
+  return await res.json();
+}
+
+export async function testGmailApiConnection(
+  adminUserId: string,
+  gmailAddress?: string,
+  appPassword?: string
+) {
+  const res = await fetch('/api/admin/gmail/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId: adminUserId, gmailAddress, appPassword }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Connection test failed');
+  }
+  return await res.json();
+}
+
+export async function triggerGmailSync(adminUserId: string) {
+  const res = await fetch('/api/admin/gmail/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId: adminUserId }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to sync Gmail');
+  }
+  return await res.json();
+}
+
+export async function disconnectGmailAccount(adminUserId: string) {
+  const res = await fetch('/api/admin/gmail/disconnect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId: adminUserId }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to disconnect Gmail');
+  }
+  return await res.json();
+}
+
+export async function fetchAdminMailbox(adminUserId: string): Promise<AdminEmailItem[]> {
+  const res = await fetch(`/api/admin/mailbox?userId=${encodeURIComponent(adminUserId)}`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to fetch mailbox');
+  }
+  const data = await res.json();
+  return data.emails || data.messages || [];
+}
+
+export async function markAdminEmailRead(adminUserId: string, emailId: string, isRead: boolean = true) {
+  const res = await fetch(`/api/admin/mailbox/${emailId}/read`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId: adminUserId, isRead }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to update email status');
+  }
+  return await res.json();
+}
+
+export async function deleteAdminEmail(adminUserId: string, emailId: string) {
+  const res = await fetch(`/api/admin/mailbox/${emailId}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId: adminUserId }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to delete email');
+  }
+  return await res.json();
+}
+
+
 
 
