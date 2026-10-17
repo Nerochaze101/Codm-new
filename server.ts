@@ -1697,42 +1697,49 @@ app.post("/api/deposits/verify", async (req, res) => {
         UPDATE deposit_requests 
         SET status = 'completed', 
             payment_reference = ${escapeSql(cleanRef)},
-            completed_at = ${now}
-        WHERE id = ${escapeSql(dep.id)}
-      `);
-
-      const balRes = await client.query(`
-        UPDATE users 
-        SET balance = balance + ${escapeSql(amountToCredit)} 
-        WHERE id = ${escapeSql(dep.user_id)} 
-        RETURNING balance;
-      `);
-
-      const newBalance = parseFloat(balRes.rows[0].balance);
-      const txId = `tx_dep_${now}_${Math.floor(100 + Math.random() * 900)}`;
-      const txDesc = `⚡ Verified Deposit (Flutterwave MFB Session Ref: ${cleanRef}): ₦${amountToCredit.toLocaleString()} credited successfully`;
-      await client.query(`
-        INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
-        VALUES (${escapeSql(txId)}, ${escapeSql(dep.user_id)}, 'DEPOSIT', ${escapeSql(amountToCredit)}, ${escapeSql(txDesc)}, ${now})
-      `);
-
-      await client.query('COMMIT');
-      client.release();
-
-      return res.json({
-        success: true,
-        message: `Payment verified via Session Reference & Flutterwave mail! ₦${amountToCredit.toLocaleString()} credited to your wallet.`,
-        credited: true,
-        newBalance,
-      });
-    } catch (txErr: any) {
-      await client.query('ROLLBACK');
-      client.release();
-      throw txErr;
+    try {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const now = Date.now();
+        const amountToCredit = parseFloat(dep.amount);
+        await client.query(`
+          UPDATE deposit_requests 
+          SET status = "completed",
+              payment_reference = ${escapeSql(cleanRef)},
+              completed_at = ${now}
+          WHERE id = ${escapeSql(dep.id)}
+        `);
+        const balRes = await client.query(`
+          UPDATE users 
+          SET balance = balance + ${escapeSql(amountToCredit)} 
+          WHERE id = ${escapeSql(dep.user_id)} 
+          RETURNING balance;
+        `);
+        const newBalance = parseFloat(balRes.rows[0].balance);
+        const txId = `tx_dep_${now}_${Math.floor(100 + Math.random() * 900)}`;
+        const txDesc = `⚡ Verified Deposit (Flutterwave MFB Session Ref: ${cleanRef}): ₦${amountToCredit.toLocaleString()} credited successfully`;
+        await client.query(`
+          INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
+          VALUES (${escapeSql(txId)}, ${escapeSql(dep.user_id)}, "DEPOSIT", ${escapeSql(amountToCredit)}, ${escapeSql(txDesc)}, ${now})
+        `);
+        await client.query("COMMIT");
+        client.release();
+        return res.json({
+          success: true,
+          message: `Payment verified via Session Reference & Flutterwave mail! ₦${amountToCredit.toLocaleString()} credited to your wallet.`,
+          credited: true,
+          newBalance,
+        });
+      } catch (txErr: any) {
+        await client.query("ROLLBACK");
+        client.release();
+        throw txErr;
+      }
+    } catch (err: any) {
+      console.error("Error verifying deposit session:", err);
+      res.status(500).json({ error: err.message || "Failed to verify deposit session" });
     }
-  } catch (err: any) {
-    console.error('Error verifying deposit session:', err);
-    res.status(500).json({ error: err.message || 'Failed to verify deposit session' });
   }
 });
 
