@@ -1558,12 +1558,12 @@ app.post('/api/deposits/create', async (req, res) => {
         expiresAt,
       },
       accountDetails: {
-        bankName: 'OPay Digital Services Limited (OPay)',
-        accountNumber: '7079874999',
-        accountName: 'QUADRI OPEYEMI ABDULSALAM',
+        bankName: 'Flutterwave MFB',
+        accountNumber: '9238778409',
+        accountName: 'Quadri Abdulsalam',
         amount: numAmount,
         paymentReference: paymentRef,
-        instructions: `Transfer exactly ₦${numAmount.toLocaleString()} to OPay (7079874999). Enter '${paymentRef}' or '${user.codmIgn}' in transfer remark for instant automated crediting.`,
+        instructions: `Transfer exactly ₦${numAmount.toLocaleString()} to Flutterwave MFB (9238778409). Enter '${paymentRef}' or '${user.codmIgn}' in transfer remark for instant automated crediting.`,
       },
     });
   } catch (err: any) {
@@ -1595,6 +1595,104 @@ app.get('/api/deposits/:id/status', async (req, res) => {
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to check deposit status' });
+  }
+});
+
+// Verify Deposit Session ID / Reference & Instant Email Reconciliation
+app.post('/api/deposits/verify-session', async (req, res) => {
+  try {
+    const { depositId, userId, sessionReference, bankName, accountNumber, accountName } = req.body;
+    if (!depositId || !sessionReference) {
+      return res.status(400).json({ error: 'Deposit ID and Session Reference are required' });
+    }
+    const depRes = await pool.query(`SELECT * FROM deposit_requests WHERE id = ${escapeSql(depositId)}`);
+    if (depRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Deposit request not found' });
+    }
+    const dep = depRes.rows[0];
+    if (dep.status === 'completed') {
+      const user = await getUserFromDb(dep.user_id);
+      return res.json({ success: true, message: 'Deposit already credited!', credited: true, newBalance: user?.balance || 0 });
+    }
+
+    // Save user bank details to profile if provided
+    if (bankName || accountNumber || accountName) {
+      await pool.query(`
+        UPDATE users 
+        SET bank_name = COALESCE(${escapeSql(bankName || null)}, bank_name),
+            account_number = COALESCE(${escapeSql(accountNumber || null)}, account_number),
+            account_name = COALESCE(${escapeSql(accountName || null)}, account_name)
+        WHERE id = ${escapeSql(userId || dep.user_id)}
+      `);
+    }
+
+    // Trigger real-time Gmail sync to check Flutterwave mail
+    try {
+      await syncGmailEmails();
+    } catch (syncErr: any) {
+      console.warn('Real-time Gmail sync warning:', syncErr.message);
+    }
+
+    // Check admin_emails for matching session reference or payment reference or amount
+    const cleanRef = sessionReference.trim();
+    const emailsRes = await pool.query(`
+      SELECT * FROM admin_emails 
+      WHERE (
+        subject ILIKE '%' || ${escapeSql(cleanRef)} || '%'
+        OR body ILIKE '%' || ${escapeSql(cleanRef)} || '%'
+        OR body ILIKE '%' || ${escapeSql(dep.payment_reference)} || '%'
+        OR body ILIKE '%' || ${escapeSql(dep.amount)} || '%'
+      )
+      ORDER BY created_at DESC LIMIT 5
+    `);
+
+    // Credit user wallet balance instantly
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const now = Date.now();
+      const amountToCredit = parseFloat(dep.amount);
+
+      await client.query(`
+        UPDATE deposit_requests 
+        SET status = 'completed', 
+            payment_reference = ${escapeSql(cleanRef)},
+            completed_at = ${now}
+        WHERE id = ${escapeSql(dep.id)}
+      `);
+
+      const balRes = await client.query(`
+        UPDATE users 
+        SET balance = balance + ${escapeSql(amountToCredit)} 
+        WHERE id = ${escapeSql(dep.user_id)} 
+        RETURNING balance;
+      `);
+
+      const newBalance = parseFloat(balRes.rows[0].balance);
+      const txId = `tx_dep_${now}_${Math.floor(100 + Math.random() * 900)}`;
+      const txDesc = `⚡ Verified Deposit (Flutterwave MFB Session Ref: ${cleanRef}): ₦${amountToCredit.toLocaleString()} credited successfully`;
+      await client.query(`
+        INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
+        VALUES (${escapeSql(txId)}, ${escapeSql(dep.user_id)}, 'DEPOSIT', ${escapeSql(amountToCredit)}, ${escapeSql(txDesc)}, ${now})
+      `);
+
+      await client.query('COMMIT');
+      client.release();
+
+      return res.json({
+        success: true,
+        message: `Payment verified via Session Reference & Flutterwave mail! ₦${amountToCredit.toLocaleString()} credited to your wallet.`,
+        credited: true,
+        newBalance,
+      });
+    } catch (txErr: any) {
+      await client.query('ROLLBACK');
+      client.release();
+      throw txErr;
+    }
+  } catch (err: any) {
+    console.error('Error verifying deposit session:', err);
+    res.status(500).json({ error: err.message || 'Failed to verify deposit session' });
   }
 });
 
@@ -1918,9 +2016,9 @@ app.get('/api/admin/opay/settings', async (req, res) => {
       webhookUrl,
       secretKey,
       accountDetails: {
-        bankName: 'OPay Digital Services Limited (OPay)',
-        accountNumber: '7079874999',
-        accountName: 'QUADRI OPEYEMI ABDULSALAM',
+        bankName: 'Flutterwave MFB',
+        accountNumber: '9238778409',
+        accountName: 'Quadri Abdulsalam',
       },
       stats: {
         totalAlerts: parseInt(countRes.rows[0].total, 10),
@@ -2924,16 +3022,16 @@ async function handleResolveBankAccount(req: any, res: any) {
     }
   }
 
-  // 3. Platform Admin Account check (e.g. OPay 7079874999)
-  if (accountNumber === '7079874999' && (bankName.toLowerCase().includes('opay') || bankName.toLowerCase().includes('paycom'))) {
+  // 3. Platform Admin Account check (Flutterwave MFB 9238778409)
+  if (accountNumber === '9238778409' && (bankName.toLowerCase().includes('flutterwave') || bankName.toLowerCase().includes('flw'))) {
     return res.json({
       status: true,
       gateway: 'platform',
       data: {
-        account_number: '7079874999',
-        account_name: 'QUADRI OPEYEMI ABDULSALAM',
+        account_number: '9238778409',
+        account_name: 'Quadri Abdulsalam',
         bank_code: flwCode,
-        bank_name: 'OPay Digital Services Limited (OPay)',
+        bank_name: 'Flutterwave MFB',
       },
     });
   }

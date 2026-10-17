@@ -126,7 +126,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   };
 
   const handleCopyAccount = () => {
-    navigator.clipboard.writeText('7079874999');
+    navigator.clipboard.writeText('9238778409');
     setCopiedAcc(true);
     setTimeout(() => setCopiedAcc(false), 2000);
   };
@@ -249,13 +249,13 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   <div className="space-y-2.5 text-xs">
                     <div className="flex items-center justify-between py-1">
                       <span className="text-neutral-400 font-mono">Bank Name:</span>
-                      <span className="font-bold text-white">OPay Digital Services Limited (OPay)</span>
+                      <span className="font-bold text-white">Flutterwave MFB</span>
                     </div>
 
                     <div className="flex items-center justify-between py-1.5 bg-neutral-900 p-3.5 rounded-xl border border-neutral-800">
                       <div>
                         <span className="text-[10px] uppercase text-neutral-400 block font-mono">Account Number</span>
-                        <span className="text-2xl font-black text-amber-400 font-mono tracking-wider">7079874999</span>
+                        <span className="text-2xl font-black text-amber-400 font-mono tracking-wider">9238778409</span>
                       </div>
                       <button
                         type="button"
@@ -278,7 +278,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
                     <div className="flex items-center justify-between py-1">
                       <span className="text-neutral-400 font-mono">Account Name:</span>
-                      <span className="font-bold text-white text-right">QUADRI OPEYEMI ABDULSALAM</span>
+                      <span className="font-bold text-white text-right">Quadri Abdulsalam</span>
                     </div>
 
                     <div className="flex items-center justify-between py-1.5 border-t border-neutral-900 pt-2">

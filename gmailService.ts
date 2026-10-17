@@ -323,7 +323,15 @@ export async function initGmailTables() {
         created_at BIGINT NOT NULL
       );
     `);
-    console.log('✅ Gmail & Admin Email tables verified in database');
+    // Seed default admin gmail config so production works automatically
+    await pool.query(`
+      INSERT INTO gmail_config (id, gmail_address, app_password, auto_sync, last_sync_status, updated_at)
+      VALUES ('main', 'nerochazeagent@gmail.com', 'akbk djtt tfru wgsz', true, 'idle', $1)
+      ON CONFLICT (id) DO UPDATE SET
+        gmail_address = COALESCE(gmail_config.gmail_address, EXCLUDED.gmail_address),
+        app_password = COALESCE(gmail_config.app_password, EXCLUDED.app_password);
+    `, [Date.now()]);
+    console.log('✅ Gmail & Admin Email tables verified and seeded with nerochazeagent@gmail.com');
   } catch (err: any) {
     console.error('Error initializing Gmail tables:', err.message);
   }

@@ -432,7 +432,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                       required
                       value={signupAccountNumber}
                       onChange={handleAccountNumberChange}
-                      placeholder="e.g. 7079874999"
+                      placeholder="e.g. 9238778409"
                       className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-neutral-900 border border-neutral-700 text-white font-mono text-xs focus:border-amber-400 focus:outline-none"
                     />
                   </div>

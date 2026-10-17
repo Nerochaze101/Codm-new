@@ -225,26 +225,27 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
                   </div>
                 </div>
 
-                {/* OPay & Flutterwave Checkout Banner Preview */}
+                {/* Flutterwave Escrow & Checkout Banner Preview */}
                 <div className="p-5 rounded-2xl bg-gradient-to-br from-neutral-950 via-neutral-900 to-neutral-950 border-2 border-amber-400/60 space-y-4 shadow-xl">
                   <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
                     <span className="text-xs font-black uppercase text-amber-400 flex items-center gap-1.5 font-heading">
-                      <Lock className="w-4 h-4 text-amber-400" />
-                      OPay & Flutterwave Checkout Link
+                      <svg className="w-4 h-4 text-amber-400" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9l6 4.5-6 4.5z"/>
+                      </svg>
+                      Flutterwave MFB Escrow Checkout
                     </span>
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 font-bold border border-amber-500/30">
                       INSTANT POPUP
                     </span>
                   </div>
-
                   <div className="space-y-2 text-xs">
                     <div className="flex items-center justify-between py-1 text-neutral-300">
                       <span>Destination Account:</span>
-                      <strong className="text-white font-mono">OPay (7079874999)</strong>
+                      <strong className="text-white font-mono">Flutterwave MFB (9238778409)</strong>
                     </div>
                     <div className="flex items-center justify-between py-1 text-neutral-300">
                       <span>Account Name:</span>
-                      <strong className="text-white font-mono">QUADRI OPEYEMI ABDULSALAM</strong>
+                      <strong className="text-white font-mono">Quadri Abdulsalam</strong>
                     </div>
                     <div className="flex items-center justify-between py-1 text-neutral-300 border-t border-neutral-800 pt-2">
                       <span>Gateway Mode:</span>
