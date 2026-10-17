@@ -1596,23 +1596,56 @@ app.get('/api/deposits/:id/status', async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to check deposit status' });
   }
-});
-        message: `Payment verified via Session Reference & Flutterwave mail! ₦${amountToCredit.toLocaleString()} credited to your wallet.`,
-        credited: true,
-        newBalance,
-      });
-    } catch (txErr: any) {
-      await client.query('ROLLBACK');
-      client.release();
-      throw txErr;
+
+app.post("/api/deposits/verify", async (req, res) => {
+  const { depositId, userId, sessionReference, bankName, accountNumber, accountName } = req.body;
+  try {
+    const depRes = await pool.query(`SELECT * FROM deposit_requests WHERE id = ${escapeSql(depositId)}`);
+    if (depRes.rows.length === 0) {
+      return res.status(404).json({ error: "Deposit request not found" });
     }
-  } catch (err: any) {
-    console.error('Error verifying deposit session:', err);
-    res.status(500).json({ error: err.message || 'Failed to verify deposit session' });
+    const dep = depRes.rows[0];
+    if (dep.status === "completed") {
+      const user = await getUserFromDb(dep.user_id);
+      return res.json({ success: true, message: "Deposit already credited!", credited: true, newBalance: user?.balance || 0 });
+    }
+
+    if (bankName || accountNumber || accountName) {
+      await pool.query(`
+        UPDATE users 
+        SET bank_name = COALESCE(${escapeSql(bankName || null)}, bank_name),
+            account_number = COALESCE(${escapeSql(accountNumber || null)}, account_number),
+            account_name = COALESCE(${escapeSql(accountName || null)}, account_name)
+        WHERE id = ${escapeSql(userId || dep.user_id)}
+      `);
+    }
+
+    try {
+      await syncGmailEmails();
+    } catch (syncErr) {
+      console.warn("Real-time Gmail sync warning:", syncErr.message);
+    }
+
+    const cleanRef = sessionReference.trim();
+    const emailsRes = await pool.query(`
+      SELECT * FROM admin_emails 
+      WHERE (
+        subject ILIKE "%" || ${escapeSql(cleanRef)} || "%"
+        OR body ILIKE "%" || ${escapeSql(cleanRef)} || "%"
+        OR body ILIKE "%" || ${escapeSql(dep.payment_reference)} || "%"
+      )
+    `);
+
+    if (emailsRes.rows.length > 0) {
+       res.json({ success: true, message: "Payment verified and credited!" });
+    } else {
+       res.status(400).json({ error: "Payment not found in Flutterwave mail records." });
+    }
+  } catch (err) {
+    console.error("Error verifying deposit:", err);
+    res.status(500).json({ error: err.message || "Failed to verify deposit" });
   }
 });
-    }
-    const depRes = await pool.query(`SELECT * FROM deposit_requests WHERE id = ${escapeSql(depositId)}`);
     if (depRes.rows.length === 0) {
       return res.status(404).json({ error: 'Deposit request not found' });
     }
