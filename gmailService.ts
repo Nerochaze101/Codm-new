@@ -81,15 +81,20 @@ class NativeGmailImapClient {
 
   async connect(email: string, appPass: string): Promise<{ success: boolean; message: string }> {
     return new Promise((resolve) => {
-      let buffer = '';
       let resolved = false;
+      let timer: NodeJS.Timeout | null = null;
 
       const finish = (res: { success: boolean; message: string }) => {
         if (!resolved) {
           resolved = true;
+          if (timer) clearTimeout(timer);
           resolve(res);
         }
       };
+
+      timer = setTimeout(() => {
+        finish({ success: false, message: 'Connection to Gmail IMAP timed out (15s)' });
+      }, 15000);
 
       try {
         const s = tls.connect(
@@ -100,47 +105,50 @@ class NativeGmailImapClient {
             timeout: 12000,
           },
           () => {
-            // Connected, wait for server greeting
+            // TLS connection established
           }
         );
         this.socket = s;
 
-        s.on('data', (chunk) => {
+        let buffer = '';
+        let loginTag = '';
+        let loginSent = false;
+
+        const onData = (chunk: Buffer) => {
           buffer += chunk.toString();
-          if (buffer.includes('* OK')) {
-            // Initial greeting received, now authenticate
-            const tag = 'A' + this.tagCounter++;
-            const loginCmd = `${tag} LOGIN "${email}" "${appPass}"\r\n`;
 
-            const onLoginData = (dataChunk: Buffer) => {
-              const lines = dataChunk.toString().split('\r\n');
-              for (const line of lines) {
-                if (line.startsWith(tag + ' OK')) {
-                  s.off('data', onLoginData);
-                  finish({ success: true, message: 'Authentication successful' });
-                  return;
-                } else if (line.startsWith(tag + ' NO') || line.startsWith(tag + ' BAD')) {
-                  s.off('data', onLoginData);
-                  let errorMsg = 'Google rejected credentials.';
-                  if (line.includes('AUTHENTICATIONFAILED') || line.includes('Invalid credentials')) {
-                    errorMsg =
-                      'Google rejected credentials. Ensure 2-Step Verification is ON and you are using a 16-character App Password (not your normal Google account password).';
-                  }
-                  finish({ success: false, message: errorMsg });
-                  return;
-                }
-              }
-            };
-
-            s.on('data', onLoginData);
-            s.write(loginCmd);
+          if (!loginSent && buffer.includes('* OK')) {
+            loginSent = true;
+            loginTag = 'A' + this.tagCounter++;
+            s.write(`${loginTag} LOGIN "${email}" "${appPass}"\r\n`);
+            return;
           }
-        });
 
+          if (loginSent && loginTag) {
+            const lines = buffer.split('\r\n');
+            for (const line of lines) {
+              if (line.startsWith(loginTag + ' OK')) {
+                s.off('data', onData);
+                finish({ success: true, message: 'Authentication successful' });
+                return;
+              } else if (line.startsWith(loginTag + ' NO') || line.startsWith(loginTag + ' BAD')) {
+                s.off('data', onData);
+                let errorMsg = 'Google rejected credentials.';
+                if (line.includes('AUTHENTICATIONFAILED') || line.includes('Invalid credentials')) {
+                  errorMsg =
+                    'Google rejected credentials. Ensure 2-Step Verification is ON and you are using a 16-character App Password (not your normal Google account password).';
+                }
+                finish({ success: false, message: errorMsg });
+                return;
+              }
+            }
+          }
+        };
+
+        s.on('data', onData);
         s.on('error', (err) => {
           finish({ success: false, message: `TLS socket error: ${err.message}` });
         });
-
         s.on('timeout', () => {
           finish({ success: false, message: 'Connection to Gmail IMAP timed out' });
           this.close();
@@ -419,7 +427,32 @@ export async function testGmailConnection(
   const cleanEmail = user.trim().toLowerCase();
   const cleanPass = pass.trim().replace(/\s+/g, '');
 
-  // 1. Try ImapFlow if present
+  // 1. Primary engine: Pure Node.js TLS IMAP Client (fast, zero dependencies)
+  const nativeClient = new NativeGmailImapClient();
+  try {
+    const conn = await nativeClient.connect(cleanEmail, cleanPass);
+    if (!conn.success) {
+      await nativeClient.close();
+      return conn;
+    }
+
+    const inbox = await nativeClient.selectInbox();
+    await nativeClient.close();
+
+    if (!inbox.ok) {
+      return { success: false, message: 'Authenticated, but could not select INBOX.' };
+    }
+
+    return {
+      success: true,
+      message: `Connected successfully to ${cleanEmail}! Inbox contains ${inbox.total} message(s).`,
+      totalMessages: inbox.total,
+    };
+  } catch (nativeErr: any) {
+    await nativeClient.close();
+  }
+
+  // 2. Secondary fallback: ImapFlow if available
   const engines = await loadImapflow();
   if (engines) {
     try {
@@ -430,7 +463,7 @@ export async function testGmailConnection(
         auth: { user: cleanEmail, pass: cleanPass },
         logger: false,
         tls: { rejectUnauthorized: false },
-        connectionTimeout: 12000,
+        connectionTimeout: 10000,
       });
 
       await client.connect();
@@ -454,31 +487,7 @@ export async function testGmailConnection(
     }
   }
 
-  // 2. Native TLS IMAP client fallback
-  const nativeClient = new NativeGmailImapClient();
-  try {
-    const conn = await nativeClient.connect(cleanEmail, cleanPass);
-    if (!conn.success) {
-      await nativeClient.close();
-      return conn;
-    }
-
-    const inbox = await nativeClient.selectInbox();
-    await nativeClient.close();
-
-    if (!inbox.ok) {
-      return { success: false, message: 'Could not access INBOX folder.' };
-    }
-
-    return {
-      success: true,
-      message: `Connected successfully to ${cleanEmail}! Inbox contains ${inbox.total} message(s).`,
-      totalMessages: inbox.total,
-    };
-  } catch (err: any) {
-    await nativeClient.close();
-    return { success: false, message: err.message || 'Gmail connection failed' };
-  }
+  return { success: false, message: 'Could not connect to Gmail IMAP server' };
 }
 
 // Fetch & Sync recent emails from Gmail INBOX
