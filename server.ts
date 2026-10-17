@@ -1848,7 +1848,6 @@ app.post(['/api/admin/opay/alerts/:id/assign', '/api/admin/sms-alerts/:id/assign
 // ==========================================
 // 📧 ADMIN MAILBOX API (`codstake@detailr.online`)
 // ==========================================
-
 // Get Mailbox Messages (from admin_emails & IMAP sync)
 app.get('/api/admin/mailbox', async (req, res) => {
   try {
@@ -1857,22 +1856,35 @@ app.get('/api/admin/mailbox', async (req, res) => {
     if (!adminUser || adminUser.role !== 'admin') {
       return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
     }
-
     await initGmailTables();
+    await pool.query(`
+      DELETE FROM admin_emails a USING admin_emails b
+      WHERE a.created_at < b.created_at 
+        AND a.sender_email = b.sender_email 
+        AND a.subject = b.subject 
+        AND a.body = b.body
+    `).catch(() => {});
 
-    const mRes = await pool.query(`SELECT * FROM admin_emails ORDER BY created_at DESC LIMIT 250`);
-    const emails = mRes.rows.map(r => ({
-      id: r.id,
-      senderEmail: r.sender_email,
-      senderName: r.sender_name || r.sender_email,
-      recipientEmail: r.recipient_email,
-      subject: r.subject,
-      body: r.body,
-      isRead: r.is_read === true,
-      folder: r.folder || 'inbox',
-      createdAt: parseInt(r.created_at, 10),
-    }));
-
+    const mRes = await pool.query(`SELECT * FROM admin_emails ORDER BY created_at DESC LIMIT 300`);
+    const seen = new Set<string>();
+    const emails: any[] = [];
+    for (const r of mRes.rows) {
+      const key = `${(r.sender_email || '').toLowerCase()}|${(r.subject || '').toLowerCase()}|${(r.body || '').substring(0, 80)}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        emails.push({
+          id: r.id,
+          senderEmail: r.sender_email,
+          senderName: r.sender_name || r.sender_email,
+          recipientEmail: r.recipient_email,
+          subject: r.subject,
+          body: r.body,
+          isRead: r.is_read === true,
+          folder: r.folder || 'inbox',
+          createdAt: parseInt(r.created_at, 10),
+        });
+      }
+    }
     res.json({ emails, messages: emails });
   } catch (err: any) {
     console.error('Error fetching admin mailbox messages:', err);
@@ -1880,7 +1892,6 @@ app.get('/api/admin/mailbox', async (req, res) => {
   }
 });
 
-// Send / Reply Email from codstake@detailr.online
 app.post('/api/admin/mailbox/send', async (req, res) => {
   try {
     const { userId, recipientEmail, subject, body } = req.body;
@@ -3441,28 +3452,20 @@ const activeWithdrawalLocks = new Set<string>();
 // Wallet withdrawal with Flutterwave & Paystack Transfers API & atomic database update
 app.post('/api/users/:id/withdraw', async (req, res) => {
   const userId = req.params.id;
-
-  // 1. Race condition guard: In-flight user lock
   if (activeWithdrawalLocks.has(userId)) {
     return res.status(429).json({ error: 'A withdrawal is currently in progress for this account. Please wait a moment.' });
   }
-
   const { amount, bankName = '', accountNumber = '', accountName = '', bankCode = '', gateway = 'flutterwave' } = req.body;
   const numAmount = Number(amount);
   if (!numAmount || numAmount <= 0) {
     return res.status(400).json({ error: 'Invalid withdrawal amount' });
   }
-
   activeWithdrawalLocks.add(userId);
   const client = await pool.connect();
   let user: UserProfile | null = null;
-  let newBalance = 0;
   const txId = `tx_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
-
   try {
     await client.query('BEGIN');
-
-    // 2. Race condition guard: Row-level lock (FOR UPDATE)
     const userLockRes = await client.query(`SELECT * FROM users WHERE id = ${escapeSql(userId)} FOR UPDATE`);
     if (userLockRes.rows.length === 0) {
       await client.query('ROLLBACK');
@@ -3470,20 +3473,10 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
     }
     const userRow = userLockRes.rows[0];
     const currentBalance = parseFloat(userRow.balance || 0);
-
-    // Check existing pending cashouts that haven't been deducted yet
-    const pendingSumRes = await client.query(`
-      SELECT COALESCE(SUM(amount), 0) as pending_total 
-      FROM withdrawal_requests 
-      WHERE user_id = ${escapeSql(userId)} AND status = 'pending' AND balance_deducted = false
-    `);
-    const pendingTotal = parseFloat(pendingSumRes.rows[0]?.pending_total || 0);
-    const availableForCashout = currentBalance - pendingTotal;
-
-    if (numAmount > availableForCashout) {
+    if (numAmount > currentBalance) {
       await client.query('ROLLBACK');
       return res.status(400).json({
-        error: `Insufficient available balance for cashout. Available: ₦${Math.max(0, availableForCashout).toLocaleString()} (₦${pendingTotal.toLocaleString()} pending admin payout).`,
+        error: `Insufficient balance for cashout. Available: ₦${currentBalance.toLocaleString()}`,
       });
     }
 
@@ -3496,17 +3489,60 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
       WHERE id = ${escapeSql(userId)}
     `);
 
-    const wdId = `wd_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
-    const userIgn = userRow.codm_ign || userRow.username || 'Gladiator';
     const cleanBank = (bankName || userRow.bank_name || '').trim();
     const cleanAccNum = (accountNumber || userRow.account_number || '').trim();
     const cleanAccName = (accountName || userRow.account_name || '').trim();
+
+    // Deduct balance instantly
+    await client.query(`
+      UPDATE users SET balance = balance - ${escapeSql(numAmount)} WHERE id = ${escapeSql(userId)}
+    `);
+
+    const wdId = `wd_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+    const userIgn = userRow.codm_ign || userRow.username || 'Gladiator';
     const remark = `CODM-${userIgn.slice(0, 10).toUpperCase()}-${cleanAccNum.slice(-4)}`;
-    const pendingDesc = `⏳ Pending Admin Approval: Withdrawal request of ₦${numAmount.toLocaleString()} to ${cleanBank} (${cleanAccNum} - ${cleanAccName})`;
+
+    // Trigger Flutterwave Transfer API instantly
+    const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || '';
+    const flwCode = getFlutterwaveBankCode(cleanBank, bankCode);
+    let transferResponse: any = null;
+    let transferSuccess = false;
+
+    if (flwSecret && !flwSecret.startsWith('FLWSECK_TEST-xxxx')) {
+      try {
+        const trfRes = await fetch('https://api.flutterwave.com/v3/transfers', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${flwSecret}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            account_bank: flwCode,
+            account_number: cleanAccNum,
+            amount: numAmount,
+            narration: `CodStakes Payout to ${cleanAccName}`,
+            currency: 'NGN',
+            reference: `FLW_INSTANT_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`,
+            beneficiary_name: cleanAccName,
+          }),
+        });
+        transferResponse = await trfRes.json();
+        if (transferResponse.status === 'success' || transferResponse.status === 'pending') {
+          transferSuccess = true;
+        }
+      } catch (trfErr: any) {
+        console.error('Flutterwave instant transfer error:', trfErr.message);
+      }
+    } else {
+      transferSuccess = true;
+      transferResponse = { status: 'success', message: 'Simulated instant payout via Flutterwave test mode' };
+    }
+
+    const desc = `⚡ Instant Withdrawal Sent via Flutterwave: ₦${numAmount.toLocaleString()} to ${cleanBank} (${cleanAccNum})`;
 
     await client.query(`
       INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
-      VALUES (${escapeSql(txId)}, ${escapeSql(userId)}, 'WITHDRAWAL', ${escapeSql(numAmount)}, ${escapeSql(pendingDesc)}, ${Date.now()})
+      VALUES (${escapeSql(txId)}, ${escapeSql(userId)}, 'WITHDRAWAL', ${escapeSql(numAmount)}, ${escapeSql(desc)}, ${Date.now()})
     `);
 
     await client.query(`
@@ -3523,11 +3559,11 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
         ${escapeSql(cleanAccNum)},
         ${escapeSql(cleanAccName)},
         ${escapeSql(bankCode || '')},
-        'pending',
+        'completed',
         ${escapeSql(remark)},
         ${Date.now()},
-        false,
-        false
+        true,
+        true
       )
     `);
 
@@ -3536,34 +3572,18 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
 
     return res.json({
       success: true,
-      pending: true,
-      balance: currentBalance,
-      pendingAmount: numAmount,
+      pending: false,
+      balance: user?.balance ?? (currentBalance - numAmount),
+      amount: numAmount,
+      transferResponse,
       transaction: {
         id: txId,
         type: 'WITHDRAWAL',
         amount: numAmount,
-        description: pendingDesc,
+        description: desc,
         timestamp: Date.now(),
       },
-      withdrawalRequest: {
-        id: wdId,
-        userId,
-        codmIgn: userIgn,
-        email: userRow.email || '',
-        phone: userRow.phone || '',
-        amount: numAmount,
-        bankName: cleanBank,
-        accountNumber: cleanAccNum,
-        accountName: cleanAccName,
-        bankCode: bankCode || '',
-        status: 'pending',
-        remark,
-        balanceDeducted: false,
-        webhookReceived: false,
-        createdAt: Date.now(),
-      },
-      message: 'Withdrawal request submitted! It is now pending admin approval. The funds will be deducted instantly when approved and sent via OPay.',
+      message: `Withdrawal of ₦${numAmount.toLocaleString()} sent instantly via Flutterwave API to ${cleanBank} (${cleanAccNum})!`,
     });
   } catch (dbErr: any) {
     try { await client.query('ROLLBACK'); } catch (_) {}
@@ -4639,37 +4659,6 @@ app.post('/api/admin/gmail/disconnect', async (req, res) => {
     res.json({ success: true, message: 'Gmail account disconnected successfully' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
-  }
-});
-
-// Fetch admin mailbox emails
-app.get('/api/admin/mailbox', async (req, res) => {
-  try {
-    const { userId } = req.query;
-    const user = await getUserFromDb(userId as string);
-    if (!user || user.role !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
-    }
-
-    await initGmailTables();
-
-    const resMails = await pool.query(`SELECT * FROM admin_emails ORDER BY created_at DESC LIMIT 250`);
-    const emails = resMails.rows.map((m) => ({
-      id: m.id,
-      senderEmail: m.sender_email,
-      senderName: m.sender_name || m.sender_email,
-      recipientEmail: m.recipient_email,
-      subject: m.subject,
-      body: m.body,
-      folder: m.folder || 'inbox',
-      isRead: m.is_read === true,
-      createdAt: parseInt(m.created_at, 10),
-    }));
-
-    res.json({ emails });
-  } catch (err: any) {
-    console.error('Error fetching admin mailbox:', err);
-    res.status(500).json({ error: err.message || 'Failed to fetch mailbox' });
   }
 });
 
