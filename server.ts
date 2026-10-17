@@ -1423,13 +1423,7 @@ async function matchAndCreditOpayDeposit(smsDetails: {
 
       // 2. Mark deposit request as completed
       if (matchedDepositReq) {
-        await client.query(`
-          UPDATE deposit_requests 
-          SET status = 'completed', 
-              sms_alert_id = ${escapeSql(alertId)}, 
-              completed_at = ${now}
-          WHERE id = ${escapeSql(matchedDepositReq.id)}
-        `);
+        await client.query(`UPDATE deposit_requests SET status = 'completed', sms_alert_id = ${escapeSql(alertId)}, completed_at = ${now} WHERE id = ${escapeSql(matchedDepositReq.id)}`);
       }
 
       // 3. Insert transaction
@@ -1693,11 +1687,6 @@ app.post("/api/deposits/verify", async (req, res) => {
       const now = Date.now();
       const amountToCredit = parseFloat(dep.amount);
 
-      await client.query(`
-        UPDATE deposit_requests 
-        SET status = 'completed', 
-            payment_reference = ${escapeSql(cleanRef)},
-    try {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
@@ -1705,7 +1694,7 @@ app.post("/api/deposits/verify", async (req, res) => {
         const amountToCredit = parseFloat(dep.amount);
         await client.query(`
           UPDATE deposit_requests 
-          SET status = "completed",
+          SET status = 'completed',
               payment_reference = ${escapeSql(cleanRef)},
               completed_at = ${now}
           WHERE id = ${escapeSql(dep.id)}
@@ -1721,7 +1710,7 @@ app.post("/api/deposits/verify", async (req, res) => {
         const txDesc = `⚡ Verified Deposit (Flutterwave MFB Session Ref: ${cleanRef}): ₦${amountToCredit.toLocaleString()} credited successfully`;
         await client.query(`
           INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
-          VALUES (${escapeSql(txId)}, ${escapeSql(dep.user_id)}, "DEPOSIT", ${escapeSql(amountToCredit)}, ${escapeSql(txDesc)}, ${now})
+          VALUES (${escapeSql(txId)}, ${escapeSql(dep.user_id)}, 'DEPOSIT', ${escapeSql(amountToCredit)}, ${escapeSql(txDesc)}, ${now})
         `);
         await client.query("COMMIT");
         client.release();
@@ -1740,7 +1729,6 @@ app.post("/api/deposits/verify", async (req, res) => {
       console.error("Error verifying deposit session:", err);
       res.status(500).json({ error: err.message || "Failed to verify deposit session" });
     }
-  }
 });
 
 // 3. MacroDroid Webhook Receiver (Incoming SMS alert from Admin's Android Phone)
@@ -1995,7 +1983,6 @@ app.get('/api/admin/mailbox', async (req, res) => {
     if (!adminUser || adminUser.role !== 'admin') {
       return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
     }
-    await initGmailTables();
     await pool.query(`
       DELETE FROM admin_emails a USING admin_emails b
       WHERE a.created_at < b.created_at 
@@ -4846,7 +4833,6 @@ app.post(['/api/inbound-mail', '/api/admin/mail/webhook'], async (req, res) => {
     const mailId = `mail_wb_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
     const now = Date.now();
 
-    await initGmailTables();
 
     await pool.query(
       `INSERT INTO admin_emails (id, sender_email, sender_name, recipient_email, subject, body, folder, is_read, created_at)
