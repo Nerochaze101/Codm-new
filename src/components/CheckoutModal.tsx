@@ -149,11 +149,21 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     setIsVerifying(true);
     setVerificationStep("Verifying session reference & Flutterwave mail...");
     try {
-      if (!depositReqId) {
-        throw new Error("Deposit request not initialized. Please reopen checkout.");
+      let reqId = depositReqId;
+      if (!reqId) {
+        if (!customer.id) {
+          throw new Error("User session not found. Please log in again.");
+        }
+        const initRes = await createDepositRequest(customer.id, amount);
+        if (initRes && initRes.deposit) {
+          reqId = initRes.deposit.id;
+          setDepositReqId(reqId);
+        } else {
+          throw new Error("Failed to initialize deposit request. Please try again.");
+        }
       }
       const res = await verifyDepositSession(
-        depositReqId,
+        reqId,
         customer.id || "",
         sessionInput,
         "Flutterwave MFB",

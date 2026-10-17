@@ -4629,8 +4629,30 @@ app.post('/api/matches/:id/admin-resolve', async (req, res) => {
   match.status = 'SETTLED';
   match.winnerId = winnerObj.id;
   match.winnerIgn = winnerObj.codmIgn;
-  await updatePlatformFinance(match.platformFee);
-  match.resolutionNotes = `Referee adjudicated in favor of ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} paid out to winner.`;
+
+  // Process referral bonuses from platform fee (10% to each referrer)
+  const platformFee = match.platformFee;
+  const bonusPerReferrer = Math.floor(platformFee * 0.10);
+  const referrers = [];
+  if (winnerUser?.referredBy) referrers.push(winnerUser.referredBy);
+  if (loserUser?.referredBy) referrers.push(loserUser.referredBy);
+  
+  for (const referrerId of [...new Set(referrers)]) { // Unique referrers
+    await pool.query(`
+      UPDATE users SET balance = balance + ${escapeSql(bonusPerReferrer)} WHERE id = ${escapeSql(referrerId)}
+    `);
+    await saveTransactionToDb(referrerId, {
+      id: `tx_ref_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      type: 'REFERRAL_EARNING',
+      amount: bonusPerReferrer,
+      description: '10% Referral bonus from match platform fee',
+      timestamp: Date.now()
+    });
+  }
+  
+  await updatePlatformFinance(platformFee - (bonusPerReferrer * [...new Set(referrers)].length));
+  
+  match.resolutionNotes = `Referee adjudicated in favor of ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} paid out to winner. Bonus distributed.`;
 
   match.chatMessages.push({
     id: `msg_${Date.now()}`,
@@ -4869,100 +4891,5 @@ startServer().catch((err) => {
   console.error('Failed to start server:', err);
 });
 
-// Verify Deposit Session ID / Reference & Instant Email Reconciliation
-app.post('/api/deposits/verify-session', async (req, res) => {
-  try {
-    const { depositId, userId, sessionReference, bankName, accountNumber, accountName } = req.body;
-    if (!depositId || !sessionReference) {
-      return res.status(400).json({ error: 'Deposit ID and Session Reference are required' });
-    }
-    const depRes = await pool.query(`SELECT * FROM deposit_requests WHERE id = ${escapeSql(depositId)}`);
-    if (depRes.rows.length === 0) {
-      return res.status(404).json({ error: 'Deposit request not found' });
-    }
-    const dep = depRes.rows[0];
-    if (dep.status === 'completed') {
-      const user = await getUserFromDb(dep.user_id);
-      return res.json({ success: true, message: 'Deposit already credited!', credited: true, newBalance: user?.balance || 0 });
-    }
 
-    if (bankName || accountNumber || accountName) {
-      await pool.query(`
-        UPDATE users 
-        SET bank_name = COALESCE(${escapeSql(bankName || null)}, bank_name),
-            account_number = COALESCE(${escapeSql(accountNumber || null)}, account_number),
-            account_name = COALESCE(${escapeSql(accountName || null)}, account_name)
-        WHERE id = ${escapeSql(userId || dep.user_id)}
-      `);
-    }
 
-    try {
-      await syncGmailEmails();
-    } catch (syncErr: any) {
-      console.warn('Real-time Gmail sync warning:', syncErr.message);
-    }
-
-    const cleanRef = sessionReference.trim();
-    const emailsRes = await pool.query(`
-      SELECT * FROM admin_emails 
-      WHERE (
-        subject ILIKE '%' || ${escapeSql(cleanRef)} || '%'
-        OR body ILIKE '%' || ${escapeSql(cleanRef)} || '%'
-        OR body ILIKE '%' || ${escapeSql(dep.payment_reference)} || '%'
-        OR body ILIKE '%' || ${escapeSql(dep.amount)} || '%'
-      )
-      ORDER BY created_at DESC LIMIT 5
-    `);
-
-    if (emailsRes.rows.length === 0) {
-      return res.status(400).json({ error: 'Payment not found in Flutterwave notifications. Please ensure you entered the correct reference and wait 1 minute for sync.' });
-    }
-
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      const now = Date.now();
-      const amountToCredit = parseFloat(dep.amount);
-      await client.query(`
-        UPDATE deposit_requests 
-        SET status = 'completed',
-            payment_reference = ${escapeSql(cleanRef)},
-            completed_at = ${now}
-        WHERE id = ${escapeSql(dep.id)}
-      `);
-      const balRes = await client.query(`
-        UPDATE users 
-        SET balance = balance + ${escapeSql(amountToCredit)} 
-        WHERE id = ${escapeSql(dep.user_id)} 
-        RETURNING balance;
-      `);
-      const newBalance = parseFloat(balRes.rows[0].balance);
-      const txId = `tx_dep_${now}_${Math.floor(100 + Math.random() * 900)}`;
-      const txDesc = `⚡ Verified Deposit (Flutterwave MFB Session Ref: ${cleanRef}): ₦${amountToCredit.toLocaleString()} credited successfully`;
-      await client.query(`
-        INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
-        VALUES (${escapeSql(txId)}, ${escapeSql(dep.user_id)}, 'DEPOSIT', ${escapeSql(amountToCredit)}, ${escapeSql(txDesc)}, ${now})
-      `);
-      await client.query('COMMIT');
-      client.release();
-      return res.json({
-        success: true,
-        message: `Payment verified via Session Reference & Flutterwave mail! ₦${amountToCredit.toLocaleString()} credited to your wallet.`,
-        credited: true,
-        newBalance,
-      });
-    } catch (txErr: any) {
-      await client.query('ROLLBACK');
-      client.release();
-      throw txErr;
-    }
-  } catch (err: any) {
-    console.error('Error verifying deposit session:', err);
-    res.status(500).json({ error: err.message || 'Failed to verify deposit session' });
-  }
-});
-
-startServer().catch((err) => {
-  console.error('Failed to start server:', err);
-  process.exit(1);
-});
