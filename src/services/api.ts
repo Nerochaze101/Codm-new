@@ -639,6 +639,19 @@ export async function deleteAdminEmail(adminUserId: string, emailId: string) {
   return await res.json();
 }
 
+export async function verifyDepositSession(depositId: string, userId: string, sessionReference: string, bankName?: string, accountNumber?: string, accountName?: string) {
+  const res = await fetch('/api/deposits/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ depositId, userId, sessionReference, bankName, accountNumber, accountName }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to verify deposit session');
+  }
+  return await res.json();
+}
+
 
 
 

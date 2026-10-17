@@ -13,7 +13,7 @@ import {
   Radio,
   Smartphone,
 } from 'lucide-react';
-import { createDepositRequest, checkDepositStatus } from '../services/api';
+import { createDepositRequest, checkDepositStatus, verifyDepositSession } from '../services/api';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -52,6 +52,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [depositReqId, setDepositReqId] = useState<string | null>(null);
   const [activePaymentRef, setActivePaymentRef] = useState<string>(reference);
   const [autoConfirmed, setAutoConfirmed] = useState<boolean>(false);
+  const [sessionInput, setSessionInput] = useState<string>("");
+  const [showSessionPrompt, setShowSessionPrompt] = useState<boolean>(false);
 
   // Initialize real deposit request on modal open
   useEffect(() => {
@@ -135,6 +137,42 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     navigator.clipboard.writeText(activePaymentRef);
     setCopiedRef(true);
     setTimeout(() => setCopiedRef(false), 2000);
+  };
+
+  
+  const handleVerifySession = async () => {
+    if (!sessionInput.trim()) {
+      setError("Please enter your transaction session ID or reference.");
+      return;
+    }
+    setError(null);
+    setIsVerifying(true);
+    setVerificationStep("Verifying session reference & Flutterwave mail...");
+    try {
+      if (!depositReqId) {
+        throw new Error("Deposit request not initialized. Please reopen checkout.");
+      }
+      const res = await verifyDepositSession(
+        depositReqId,
+        customer.id || "",
+        sessionInput,
+        "Flutterwave MFB",
+        "9238778409",
+        customer.name
+      );
+      if (res.success) {
+        setVerificationStep("Payment verified! Crediting wallet...");
+        setTimeout(() => {
+          setIsVerifying(false);
+          onSuccess(sessionInput);
+        }, 1000);
+      } else {
+        throw new Error(res.error || "Payment verification failed.");
+      }
+    } catch (err: any) {
+      setIsVerifying(false);
+      setError(err.message || "Verification failed. Make sure you submitted the correct session reference.");
+    }
   };
 
   const handleSimulateWebhookSuccess = async () => {
@@ -291,14 +329,54 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                     Transfer exactly <strong className="text-amber-400 font-mono">₦{amount.toLocaleString()}</strong> from your OPay or bank app to the account above, then click the confirmation button below.
                   </p>
 
-                  <button
-                    type="button"
-                    onClick={handleSimulateWebhookSuccess}
-                    className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs uppercase tracking-wider cursor-pointer transition-all shadow-xl flex items-center justify-center gap-2"
-                  >
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>I Have Made the Transfer (Verify & Complete)</span>
-                  </button>
+                  
+                  {!showSessionPrompt ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowSessionPrompt(true)}
+                      className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs uppercase tracking-wider cursor-pointer transition-all shadow-xl flex items-center justify-center gap-2"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>I Have Made the Transfer</span>
+                    </button>
+                  ) : (
+                    <div className="space-y-3 pt-2 border-t border-neutral-800 animate-in fade-in duration-200">
+                      <div>
+                        <label className="block text-[11px] font-mono uppercase text-amber-400 font-bold mb-1.5">
+                          Enter Transfer Session ID / Reference
+                        </label>
+                        <input
+                          type="text"
+                          value={sessionInput}
+                          onChange={(e) => setSessionInput(e.target.value)}
+                          placeholder="e.g. 20261017... or Ref ID"
+                          className="w-full p-3 bg-neutral-900 border border-neutral-700 rounded-xl text-white font-mono text-xs focus:border-amber-450 outline-none"
+                        />
+                        <p className="text-[10px] text-neutral-400 mt-1">
+                          System will instantly verify session ID with Flutterwave email & credit your wallet.
+                        </p>
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setShowSessionPrompt(false)}
+                          className="px-4 py-3 bg-neutral-850 hover:bg-neutral-800 text-neutral-300 font-bold rounded-xl text-xs uppercase cursor-pointer"
+                        >
+                          Back
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleVerifySession}
+                          className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs uppercase tracking-wider cursor-pointer transition-all shadow-lg flex items-center justify-center gap-2"
+                        >
+                          <Zap className="w-4 h-4 fill-current" />
+                          <span>Submit & Verify Instantly</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                 </div>
               </div>
 

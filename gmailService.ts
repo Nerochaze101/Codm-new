@@ -709,5 +709,5 @@ export function startGmailAutoSyncService() {
     } catch (e: any) {
       console.warn('Periodic Gmail sync warning:', e.message);
     }
-  }, 180000); // 3 minutes
+  }, 15000); // 15 seconds for real-time sync
 }
