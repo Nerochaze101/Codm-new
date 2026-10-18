@@ -16,6 +16,7 @@ import {
   testGmailConnection,
   syncGmailEmails,
   startGmailAutoSyncService,
+  cleanupVerifiedMails,
 } from './gmailService.js';
 
 dotenv.config();
@@ -1201,6 +1202,29 @@ app.post('/api/admin/claim-admin', async (req, res) => {
 // 📱 MACRODROID & OPAY AUTOMATED SMS FUNDING ENGINE
 // ==========================================
 
+// Extract monetary amount in NGN from email subject and body text
+function extractAmountFromEmailText(text: string): number | null {
+  if (!text) return null;
+  const clean = text.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ');
+  const patterns = [
+    /(?:amount|credited\s+with|credit\s+of|received|credit|paid|transfer\s+of|total)[:\s]+(?:NGN|₦|N)?\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
+    /(?:NGN|₦)\s*([0-9,]+(?:\.[0-9]{1,2})?)/i,
+    /([0-9,]+(?:\.[0-9]{1,2})?)\s*(?:NGN|₦)/i,
+    /(?:CR|Credit)\s*[:\s]*([0-9,]+(?:\.[0-9]{1,2})?)/i,
+  ];
+
+  for (const pat of patterns) {
+    const match = clean.match(pat);
+    if (match && match[1]) {
+      const cleanNum = parseFloat(match[1].replace(/,/g, ''));
+      if (!isNaN(cleanNum) && cleanNum > 0) {
+        return cleanNum;
+      }
+    }
+  }
+  return null;
+}
+
 // Parse OPay Credit Alert SMS (Android SMS sent by OPay and captured via MacroDroid)
 function parseOpaySms(rawText: string): {
   amount: number | null;
@@ -1405,6 +1429,13 @@ async function matchAndCreditOpayDeposit(smsDetails: {
         const uRes = await client.query(`SELECT * FROM users WHERE id = ${escapeSql(matchedDepositReq.user_id)} FOR UPDATE`);
         if (uRes.rows.length > 0) matchedUser = uRes.rows[0];
       }
+    }
+
+    // Strict amount validation: If linked to a pending deposit request, the amount MUST match exactly!
+    if (matchedDepositReq && smsDetails.amount && Math.abs(smsDetails.amount - parseFloat(matchedDepositReq.amount)) > 0.01) {
+      console.warn(`⚠️ [Webhook Amount Mismatch] SMS alert has ₦${smsDetails.amount} but pending deposit #${matchedDepositReq.id} requested ₦${matchedDepositReq.amount}. Rejecting auto-credit to prevent mismatch.`);
+      matchedUser = null;
+      matchedDepositReq = null;
     }
 
     // IF MATCHED: Instantly Credit the User's Wallet!
@@ -1646,60 +1677,56 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
       console.warn("Real-time Gmail sync warning:", syncErr.message);
     }
 
-    // 2. Check admin_emails for matching session reference or payment reference
+    // 2. Check admin_emails for matching session reference or payment reference (excluding already verified emails)
     const emailsRes = await client.query(`
       SELECT * FROM admin_emails 
-      WHERE (
-        subject ILIKE '%' || ${escapeSql(cleanRef)} || '%'
-        OR body ILIKE '%' || ${escapeSql(cleanRef)} || '%'
-        OR subject ILIKE '%' || ${escapeSql(dep.payment_reference)} || '%'
-        OR body ILIKE '%' || ${escapeSql(dep.payment_reference)} || '%'
-      )
+      WHERE (is_verified IS NOT TRUE AND folder != 'verified')
+        AND (
+          subject ILIKE '%' || ${escapeSql(cleanRef)} || '%'
+          OR body ILIKE '%' || ${escapeSql(cleanRef)} || '%'
+          OR subject ILIKE '%' || ${escapeSql(dep.payment_reference)} || '%'
+          OR body ILIKE '%' || ${escapeSql(dep.payment_reference)} || '%'
+        )
       ORDER BY created_at DESC LIMIT 5
     `);
 
-    let matchedSource = "";
-    let matchedEmailId = null;
-    let matchedAlertId = null;
-
-    if (emailsRes.rows.length > 0) {
-      matchedSource = "Flutterwave MFB Notification Email";
-      matchedEmailId = emailsRes.rows[0].id;
-    } else {
-      // 3. Fallback: Check opay_sms_alerts table for SMS/push webhook notifications
-      try {
-        const smsRes = await client.query(`
-          SELECT * FROM opay_sms_alerts
-          WHERE (
-            reference ILIKE '%' || ${escapeSql(cleanRef)} || '%'
-            OR narration ILIKE '%' || ${escapeSql(cleanRef)} || '%'
-            OR narration ILIKE '%' || ${escapeSql(dep.payment_reference)} || '%'
-            OR sms_body ILIKE '%' || ${escapeSql(cleanRef)} || '%'
-            OR sms_body ILIKE '%' || ${escapeSql(dep.payment_reference)} || '%'
-          )
-          AND status != 'auto_credited' AND status != 'manually_credited'
-          ORDER BY created_at DESC LIMIT 1
-        `);
-        if (smsRes.rows.length > 0) {
-          matchedSource = "Bank SMS/Push Alert";
-          matchedAlertId = smsRes.rows[0].id;
-        }
-      } catch (smsErr) {
-        console.warn("Error querying opay_sms_alerts:", smsErr.message);
-      }
-    }
-
-    if (!matchedSource) {
+    if (emailsRes.rows.length === 0) {
       await client.query("ROLLBACK");
       client.release();
       return res.status(400).json({ 
-        error: `Payment verification pending: No matching bank notification found yet for Session ID '${cleanRef}' or reference '${dep.payment_reference}'. Please ensure you entered the correct reference from your bank receipt and wait 30-60 seconds for notification sync.`
+        error: "We could not confirm a matching bank transfer for this reference yet. If you recently transferred the funds, please allow a moment and try again."
       });
     }
 
-    // Credit user wallet balance atomically
+    const matchedEmail = emailsRes.rows[0];
+    const expectedAmount = parseFloat(dep.amount);
+    const parsedEmailAmt = extractAmountFromEmailText(matchedEmail.subject + ' ' + matchedEmail.body);
+
+    // Strict validation: The transferred amount must match the requested amount
+    if (parsedEmailAmt !== null && Math.abs(parsedEmailAmt - expectedAmount) > 0.01) {
+      await client.query("ROLLBACK");
+      client.release();
+      return res.status(400).json({
+        error: `The transferred amount (₦${parsedEmailAmt.toLocaleString()}) does not match your deposit request of ₦${expectedAmount.toLocaleString()}. Please transfer the exact amount requested.`
+      });
+    }
+
+    const fullText = (matchedEmail.subject + ' ' + matchedEmail.body).toLowerCase();
+    const numStr = expectedAmount.toString();
+    const numFormatted = expectedAmount.toLocaleString('en-US');
+    const containsExpected = fullText.includes(numStr) || fullText.includes(numFormatted);
+
+    if (!containsExpected && parsedEmailAmt === null) {
+      await client.query("ROLLBACK");
+      client.release();
+      return res.status(400).json({
+        error: `Could not verify a transfer of ₦${expectedAmount.toLocaleString()} for this transaction. Please confirm the amount on your receipt.`
+      });
+    }
+
+    // Credit user wallet balance atomically with the verified expected amount
     const now = Date.now();
-    const amountToCredit = parseFloat(dep.amount);
+    const amountToCredit = expectedAmount;
 
     await client.query(`
       UPDATE deposit_requests 
@@ -1718,34 +1745,31 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
 
     const newBalance = parseFloat(balRes.rows[0].balance);
     const txId = `tx_dep_${now}_${Math.floor(100 + Math.random() * 900)}`;
-    const txDesc = `⚡ Verified Deposit (${matchedSource} Ref: ${cleanRef}): ₦${amountToCredit.toLocaleString()} credited successfully`;
+    const txDesc = `Deposit: ₦${amountToCredit.toLocaleString()} via Bank Transfer [Ref: ${cleanRef}]`;
 
     await client.query(`
       INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
       VALUES (${escapeSql(txId)}, ${escapeSql(dep.user_id)}, 'DEPOSIT', ${escapeSql(amountToCredit)}, ${escapeSql(txDesc)}, ${now})
     `);
 
-    // Clean up or mark the matched alert to prevent replay attacks
-    if (matchedEmailId) {
-      await client.query(`DELETE FROM admin_emails WHERE id = ${escapeSql(matchedEmailId)}`);
-      console.log(`🗑️ Automatically deleted matched payment email ${matchedEmailId} to prevent session ID replay.`);
-    } else if (matchedAlertId) {
-      await client.query(`
-        UPDATE opay_sms_alerts 
-        SET status = 'auto_credited',
-            matched_user_id = ${escapeSql(dep.user_id)},
-            credited_at = ${now}
-        WHERE id = ${escapeSql(matchedAlertId)}
-      `);
-      console.log(`✅ Flagged SMS alert ${matchedAlertId} as auto_credited.`);
-    }
+    // Mark matched email as verified with timestamp (auto-clears from database after 3 mins)
+    await client.query(`
+      UPDATE admin_emails 
+      SET is_verified = TRUE,
+          folder = 'verified',
+          verified_at = ${now}
+      WHERE id = ${escapeSql(matchedEmail.id)}
+    `);
+
+    // Clear any verified mails older than 3 minutes to keep the database clean
+    cleanupVerifiedMails().catch(() => {});
 
     await client.query("COMMIT");
     client.release();
 
     return res.json({
       success: true,
-      message: `Payment verified via ${matchedSource}! ₦${amountToCredit.toLocaleString()} credited to your wallet.`,
+      message: `Deposit verified successfully! ₦${amountToCredit.toLocaleString()} has been credited to your wallet balance.`,
       credited: true,
       newBalance,
     });
@@ -1753,7 +1777,7 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
     try { await client.query("ROLLBACK"); } catch (_) {}
     try { client.release(); } catch (_) {}
     console.error("Error verifying deposit session:", err);
-    res.status(500).json({ error: err.message || "Failed to verify deposit session" });
+    res.status(500).json({ error: "An unexpected error occurred while verifying your transfer. Please try again." });
   }
 });
 
@@ -1917,6 +1941,10 @@ app.get('/api/admin/mailbox', async (req, res) => {
     if (!adminUser || adminUser.role !== 'admin') {
       return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
     }
+
+    // Automatically clean up verified mails older than 3 minutes
+    await cleanupVerifiedMails().catch(() => {});
+
     await pool.query(`
       DELETE FROM admin_emails a USING admin_emails b
       WHERE a.created_at < b.created_at 
@@ -1942,6 +1970,8 @@ app.get('/api/admin/mailbox', async (req, res) => {
           isRead: r.is_read === true,
           folder: r.folder || 'inbox',
           createdAt: parseInt(r.created_at, 10),
+          isVerified: r.is_verified === true || r.folder === 'verified',
+          verifiedAt: r.verified_at ? parseInt(r.verified_at, 10) : undefined,
         });
       }
     }
@@ -1949,6 +1979,21 @@ app.get('/api/admin/mailbox', async (req, res) => {
   } catch (err: any) {
     console.error('Error fetching admin mailbox messages:', err);
     res.status(500).json({ error: err.message || 'Failed to fetch mailbox messages' });
+  }
+});
+
+// Clean up verified mails older than 3 minutes on demand
+app.post('/api/admin/mailbox/cleanup-verified', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const adminUser = await getUserFromDb(userId);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    }
+    const count = await cleanupVerifiedMails(3 * 60 * 1000);
+    res.json({ success: true, count, message: `Cleared ${count} verified record(s) older than 3 minutes from database.` });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

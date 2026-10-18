@@ -531,6 +531,8 @@ export interface AdminEmailItem {
   folder: string;
   isRead: boolean;
   createdAt: number;
+  isVerified?: boolean;
+  verifiedAt?: number;
 }
 
 export async function fetchGmailConfig(adminUserId: string): Promise<GmailIntegrationStatus> {
@@ -635,6 +637,19 @@ export async function deleteAdminEmail(adminUserId: string, emailId: string) {
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || 'Failed to delete email');
+  }
+  return await res.json();
+}
+
+export async function cleanupVerifiedAdminMails(adminUserId: string): Promise<{ success: boolean; count: number; message: string }> {
+  const res = await fetch('/api/admin/mailbox/cleanup-verified', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId: adminUserId }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to clean up verified emails');
   }
   return await res.json();
 }

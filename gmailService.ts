@@ -24,6 +24,8 @@ export interface AdminEmail {
   folder: string;
   isRead: boolean;
   createdAt: number;
+  isVerified?: boolean;
+  verifiedAt?: number;
 }
 
 // Dynamic loader for imapflow & mailparser to avoid ERR_MODULE_NOT_FOUND on Render
@@ -320,8 +322,12 @@ export async function initGmailTables() {
         body TEXT NOT NULL,
         folder VARCHAR(32) DEFAULT 'inbox',
         is_read BOOLEAN DEFAULT FALSE,
-        created_at BIGINT NOT NULL
+        created_at BIGINT NOT NULL,
+        is_verified BOOLEAN DEFAULT FALSE,
+        verified_at BIGINT
       );
+      ALTER TABLE admin_emails ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT FALSE;
+      ALTER TABLE admin_emails ADD COLUMN IF NOT EXISTS verified_at BIGINT;
     `);
     // Seed default admin gmail config so production works automatically
     await pool.query(`
@@ -678,17 +684,65 @@ export async function syncGmailEmails(): Promise<{
   }
 }
 
-// Background auto-sync scheduler (runs every 3 minutes if auto-sync is enabled)
+/**
+ * Clears verified emails and completed alerts older than 3 minutes (180,000 ms) from the database
+ * to maintain high performance and keep database tables pristine.
+ */
+export async function cleanupVerifiedMails(cutoffMs: number = 3 * 60 * 1000): Promise<number> {
+  try {
+    const cutoffTime = Date.now() - cutoffMs;
+
+    // 1. Delete emails explicitly marked as verified older than 3 minutes
+    const res1 = await pool.query(
+      `DELETE FROM admin_emails
+       WHERE (is_verified = TRUE OR folder = 'verified')
+         AND (
+           (verified_at IS NOT NULL AND verified_at <= $1)
+           OR (verified_at IS NULL AND created_at <= $1)
+         )
+       RETURNING id`,
+      [cutoffTime]
+    );
+
+    // 2. Also delete any emails corresponding to completed deposit requests completed > 3 minutes ago
+    const res2 = await pool.query(
+      `DELETE FROM admin_emails ae
+       USING deposit_requests dr
+       WHERE dr.status = 'completed'
+         AND dr.completed_at IS NOT NULL
+         AND dr.completed_at <= $1
+         AND (
+           ae.subject ILIKE '%' || dr.payment_reference || '%'
+           OR ae.body ILIKE '%' || dr.payment_reference || '%'
+           OR ae.body ILIKE '%' || dr.id || '%'
+         )
+       RETURNING ae.id`,
+      [cutoffTime]
+    ).catch(() => ({ rowCount: 0 }));
+
+    const totalCleaned = (res1.rowCount || 0) + (res2.rowCount || 0);
+    if (totalCleaned > 0) {
+      console.log(`🧹 [Mail Cleanup] Purged ${totalCleaned} verified email(s) older than 3 minutes.`);
+    }
+    return totalCleaned;
+  } catch (err: any) {
+    console.warn('⚠️ [Mail Cleanup] Error clearing verified mails:', err.message);
+    return 0;
+  }
+}
+
+// Background auto-sync scheduler (runs every 15s to sync and clean up verified records)
 let autoSyncInterval: NodeJS.Timeout | null = null;
 
 export function startGmailAutoSyncService() {
   if (autoSyncInterval) return;
 
-  console.log('📬 Gmail Auto-Sync background service initialized (polling every 3m)');
+  console.log('📬 Gmail Auto-Sync & Verified Mail Cleanup background service initialized (polling every 15s)');
 
   // Initial check after 10 seconds
   setTimeout(async () => {
     try {
+      await cleanupVerifiedMails();
       const config = await getGmailConfig();
       if (config && config.autoSync && config.gmailAddress && config.appPassword) {
         console.log(`📬 Running initial Gmail sync for ${config.gmailAddress}...`);
@@ -701,9 +755,12 @@ export function startGmailAutoSyncService() {
 
   autoSyncInterval = setInterval(async () => {
     try {
+      // 1. Periodically prune verified mails and completed alerts older than 3 minutes
+      await cleanupVerifiedMails();
+
+      // 2. Fetch fresh incoming emails
       const config = await getGmailConfig();
       if (config && config.autoSync && config.gmailAddress && config.appPassword) {
-        console.log(`📬 Auto-syncing Gmail for ${config.gmailAddress}...`);
         await syncGmailEmails();
       }
     } catch (e: any) {

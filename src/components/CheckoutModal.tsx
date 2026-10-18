@@ -105,7 +105,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           if (status.completed) {
             setAutoConfirmed(true);
             setIsVerifying(true);
-            setVerificationStep('⚡ OPay SMS Alert Detected! Crediting wallet balance...');
+            setVerificationStep('Payment confirmed! Updating your wallet balance...');
             setTimeout(() => {
               setIsVerifying(false);
               onSuccess(activePaymentRef, status.balance);
@@ -147,7 +147,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     }
     setError(null);
     setIsVerifying(true);
-    setVerificationStep("Verifying session reference & Flutterwave mail...");
+    setVerificationStep("Verifying your transfer with the bank...");
     try {
       let reqId = depositReqId;
       if (!reqId) {
@@ -171,7 +171,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         customer.name
       );
       if (res.success) {
-        setVerificationStep("Payment verified! Crediting wallet...");
+        setVerificationStep("Payment confirmed! Crediting your wallet...");
         setTimeout(() => {
           setIsVerifying(false);
           onSuccess(sessionInput, res.newBalance);
@@ -181,25 +181,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       }
     } catch (err: any) {
       setIsVerifying(false);
-      setError(err.message || "Verification failed. Make sure you submitted the correct session reference.");
+      setError(err.message || "Could not verify your transfer. Please check your session reference and try again.");
     }
-  };
-
-  const handleSimulateWebhookSuccess = async () => {
-    setIsVerifying(true);
-    setError(null);
-
-    setVerificationStep('Connecting to OPay & Bank Reconciliation Gateway...');
-    await new Promise((r) => setTimeout(r, 800));
-
-    setVerificationStep('Verifying bank transfer webhook payload...');
-    await new Promise((r) => setTimeout(r, 1000));
-
-    setVerificationStep('Payment confirmed! Crediting wallet & locking escrow...');
-    await new Promise((r) => setTimeout(r, 700));
-
-    setIsVerifying(false);
-    onSuccess(activePaymentRef);
   };
 
   return (
@@ -363,7 +346,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                           className="w-full p-3 bg-neutral-900 border border-neutral-700 rounded-xl text-white font-mono text-xs focus:border-amber-450 outline-none"
                         />
                         <p className="text-[10px] text-neutral-400 mt-1">
-                          System will instantly verify session ID with Flutterwave email & credit your wallet.
+                          Enter the transaction reference or session ID from your transfer receipt to confirm your deposit.
                         </p>
                       </div>
 
