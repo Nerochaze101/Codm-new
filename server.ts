@@ -1590,6 +1590,7 @@ app.get('/api/deposits/:id/status', async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to check deposit status' });
   }
+});
 
 app.post("/api/deposits/verify", async (req, res) => {
   const { depositId, userId, sessionReference, bankName, accountNumber, accountName } = req.body;
