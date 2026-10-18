@@ -287,6 +287,7 @@ export const StakePaymentModal: React.FC<StakePaymentModalProps> = ({
         title={`CODM Escrow: ${match.challengeCode}`}
         description={`Secure Stake Payment for 1v1 ${match.gameMode}`}
         customer={{
+          id: currentUser.id,
           name: currentUser.accountName || currentUser.codmIgn,
           email: currentUser.email || `${currentUser.codmIgn.toLowerCase()}@player.ng`,
           phone: currentUser.phone || '08000000000',

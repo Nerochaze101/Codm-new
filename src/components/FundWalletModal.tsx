@@ -75,11 +75,22 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
     setIsCheckoutOpen(true);
   };
 
-  const handleCheckoutSuccess = async (ref: string) => {
+  const handleCheckoutSuccess = async (ref: string, verifiedBalance?: number) => {
     const amountToFund = parseInt(customAmount, 10);
     setIsCheckoutOpen(false);
-    setIsProcessing(true);
 
+    if (typeof verifiedBalance === 'number') {
+      setIsProcessing(false);
+      setSuccessInfo({
+        amount: amountToFund,
+        balance: verifiedBalance,
+        txId: ref,
+      });
+      onSuccessDeposit(verifiedBalance, amountToFund);
+      return;
+    }
+
+    setIsProcessing(true);
     try {
       const result = await depositWallet(currentUser.id, amountToFund, 'OPay / Flutterwave Secure Checkout', ref, ref);
       setIsProcessing(false);
@@ -300,6 +311,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
         title="Fund Esports Wallet"
         description="Instant deposit via OPay, Transfer, Card, or USSD"
         customer={{
+          id: currentUser.id,
           name: currentUser.accountName || currentUser.codmIgn,
           email: currentUser.email || `${currentUser.codmIgn.toLowerCase()}@player.ng`,
           phone: currentUser.phone || '08000000000',

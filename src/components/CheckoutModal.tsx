@@ -27,7 +27,7 @@ interface CheckoutModalProps {
     phone?: string;
   };
   reference: string;
-  onSuccess: (ref: string) => void;
+  onSuccess: (ref: string, verifiedBalance?: number) => void;
   onClose: () => void;
 }
 
@@ -108,7 +108,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             setVerificationStep('⚡ OPay SMS Alert Detected! Crediting wallet balance...');
             setTimeout(() => {
               setIsVerifying(false);
-              onSuccess(activePaymentRef);
+              onSuccess(activePaymentRef, status.balance);
             }, 1200);
           }
         } catch (e) {
@@ -174,7 +174,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         setVerificationStep("Payment verified! Crediting wallet...");
         setTimeout(() => {
           setIsVerifying(false);
-          onSuccess(sessionInput);
+          onSuccess(sessionInput, res.newBalance);
         }, 1000);
       } else {
         throw new Error(res.error || "Payment verification failed.");

@@ -1592,7 +1592,7 @@ app.get('/api/deposits/:id/status', async (req, res) => {
   }
 });
 
-app.post("/api/deposits/verify", async (req, res) => {
+app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, res) => {
   const { depositId, userId, sessionReference, bankName, accountNumber, accountName } = req.body;
   if (!depositId || !sessionReference || !sessionReference.trim()) {
     return res.status(400).json({ error: "Deposit ID and Session Reference are required" });
@@ -1604,7 +1604,7 @@ app.post("/api/deposits/verify", async (req, res) => {
   try {
     const existingRefRes = await pool.query(`SELECT id FROM deposit_requests WHERE payment_reference = ${escapeSql(cleanRef)} AND status = 'completed' LIMIT 1`);
     if (existingRefRes.rows.length > 0) {
-      return res.status(400).json({ error: "This Session ID / Reference has already been used for a previous deposit and cannot be reused." });
+      return res.status(400).json({ error: "This Session ID / Reference has already been verified and credited." });
     }
   } catch (e) {
     // ignore if table check fails
@@ -1646,25 +1646,58 @@ app.post("/api/deposits/verify", async (req, res) => {
       console.warn("Real-time Gmail sync warning:", syncErr.message);
     }
 
-    // Check admin_emails for matching session reference or payment reference or amount
+    // 2. Check admin_emails for matching session reference or payment reference
     const emailsRes = await client.query(`
       SELECT * FROM admin_emails 
       WHERE (
         subject ILIKE '%' || ${escapeSql(cleanRef)} || '%'
         OR body ILIKE '%' || ${escapeSql(cleanRef)} || '%'
+        OR subject ILIKE '%' || ${escapeSql(dep.payment_reference)} || '%'
         OR body ILIKE '%' || ${escapeSql(dep.payment_reference)} || '%'
-        OR body ILIKE '%' || ${escapeSql(dep.amount)} || '%'
       )
       ORDER BY created_at DESC LIMIT 5
     `);
 
-    if (emailsRes.rows.length === 0) {
-      await client.query("ROLLBACK");
-      client.release();
-      return res.status(400).json({ error: "Payment verification failed: No matching email found in admin dashboard for this session reference or amount. Please make sure you transferred the exact amount and entered the correct session ID." });
+    let matchedSource = "";
+    let matchedEmailId = null;
+    let matchedAlertId = null;
+
+    if (emailsRes.rows.length > 0) {
+      matchedSource = "Flutterwave MFB Notification Email";
+      matchedEmailId = emailsRes.rows[0].id;
+    } else {
+      // 3. Fallback: Check opay_sms_alerts table for SMS/push webhook notifications
+      try {
+        const smsRes = await client.query(`
+          SELECT * FROM opay_sms_alerts
+          WHERE (
+            reference ILIKE '%' || ${escapeSql(cleanRef)} || '%'
+            OR narration ILIKE '%' || ${escapeSql(cleanRef)} || '%'
+            OR narration ILIKE '%' || ${escapeSql(dep.payment_reference)} || '%'
+            OR sms_body ILIKE '%' || ${escapeSql(cleanRef)} || '%'
+            OR sms_body ILIKE '%' || ${escapeSql(dep.payment_reference)} || '%'
+          )
+          AND status != 'auto_credited' AND status != 'manually_credited'
+          ORDER BY created_at DESC LIMIT 1
+        `);
+        if (smsRes.rows.length > 0) {
+          matchedSource = "Bank SMS/Push Alert";
+          matchedAlertId = smsRes.rows[0].id;
+        }
+      } catch (smsErr) {
+        console.warn("Error querying opay_sms_alerts:", smsErr.message);
+      }
     }
 
-    // Credit user wallet balance instantly
+    if (!matchedSource) {
+      await client.query("ROLLBACK");
+      client.release();
+      return res.status(400).json({ 
+        error: `Payment verification pending: No matching bank notification found yet for Session ID '${cleanRef}' or reference '${dep.payment_reference}'. Please ensure you entered the correct reference from your bank receipt and wait 30-60 seconds for notification sync.`
+      });
+    }
+
+    // Credit user wallet balance atomically
     const now = Date.now();
     const amountToCredit = parseFloat(dep.amount);
 
@@ -1685,17 +1718,26 @@ app.post("/api/deposits/verify", async (req, res) => {
 
     const newBalance = parseFloat(balRes.rows[0].balance);
     const txId = `tx_dep_${now}_${Math.floor(100 + Math.random() * 900)}`;
-    const txDesc = `⚡ Verified Deposit (Flutterwave MFB Session Ref: ${cleanRef}): ₦${amountToCredit.toLocaleString()} credited successfully`;
+    const txDesc = `⚡ Verified Deposit (${matchedSource} Ref: ${cleanRef}): ₦${amountToCredit.toLocaleString()} credited successfully`;
 
     await client.query(`
       INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
       VALUES (${escapeSql(txId)}, ${escapeSql(dep.user_id)}, 'DEPOSIT', ${escapeSql(amountToCredit)}, ${escapeSql(txDesc)}, ${now})
     `);
 
-    // Automatically delete the matching email(s) from admin_emails to prevent replay!
-    for (const em of emailsRes.rows) {
-      await client.query(`DELETE FROM admin_emails WHERE id = ${escapeSql(em.id)}`);
-      console.log(`🗑️ Automatically deleted matched payment email ${em.id} to prevent session ID replay.`);
+    // Clean up or mark the matched alert to prevent replay attacks
+    if (matchedEmailId) {
+      await client.query(`DELETE FROM admin_emails WHERE id = ${escapeSql(matchedEmailId)}`);
+      console.log(`🗑️ Automatically deleted matched payment email ${matchedEmailId} to prevent session ID replay.`);
+    } else if (matchedAlertId) {
+      await client.query(`
+        UPDATE opay_sms_alerts 
+        SET status = 'auto_credited',
+            matched_user_id = ${escapeSql(dep.user_id)},
+            credited_at = ${now}
+        WHERE id = ${escapeSql(matchedAlertId)}
+      `);
+      console.log(`✅ Flagged SMS alert ${matchedAlertId} as auto_credited.`);
     }
 
     await client.query("COMMIT");
@@ -1703,11 +1745,11 @@ app.post("/api/deposits/verify", async (req, res) => {
 
     return res.json({
       success: true,
-      message: `Payment verified via Session Reference & Flutterwave mail! ₦${amountToCredit.toLocaleString()} credited to your wallet.`,
+      message: `Payment verified via ${matchedSource}! ₦${amountToCredit.toLocaleString()} credited to your wallet.`,
       credited: true,
       newBalance,
     });
-  } catch (err: any) {
+  } catch (err) {
     try { await client.query("ROLLBACK"); } catch (_) {}
     try { client.release(); } catch (_) {}
     console.error("Error verifying deposit session:", err);
@@ -1716,98 +1758,6 @@ app.post("/api/deposits/verify", async (req, res) => {
 });
 
 // 3. MacroDroid Webhook Receiver (Incoming SMS alert from Admin's Android Phone)
-app.post('/api/deposits/verify-session', async (req, res) => {
-  try {
-    const { depositId, userId, sessionReference, bankName, accountNumber, accountName } = req.body;
-    if (!depositId || !sessionReference) {
-      return res.status(400).json({ error: 'Deposit ID and Session Reference are required' });
-    }
-    const depRes = await pool.query(`SELECT * FROM deposit_requests WHERE id = ${escapeSql(depositId)}`);
-    if (depRes.rows.length === 0) {
-      return res.status(404).json({ error: 'Deposit request not found' });
-    }
-    const dep = depRes.rows[0];
-    if (dep.status === 'completed') {
-      const user = await getUserFromDb(dep.user_id);
-      return res.json({ success: true, message: 'Deposit already credited!', credited: true, newBalance: user?.balance || 0 });
-    }
-
-    if (bankName || accountNumber || accountName) {
-      await pool.query(`
-        UPDATE users 
-        SET bank_name = COALESCE(${escapeSql(bankName || null)}, bank_name),
-            account_number = COALESCE(${escapeSql(accountNumber || null)}, account_number),
-            account_name = COALESCE(${escapeSql(accountName || null)}, account_name)
-        WHERE id = ${escapeSql(userId || dep.user_id)}
-      `);
-    }
-
-    try {
-      await syncGmailEmails();
-    } catch (syncErr: any) {
-      console.warn('Real-time Gmail sync warning:', syncErr.message);
-    }
-
-    const cleanRef = sessionReference.trim();
-    const emailsRes = await pool.query(`
-      SELECT * FROM admin_emails 
-      WHERE (
-        subject ILIKE '%' || ${escapeSql(cleanRef)} || '%'
-        OR body ILIKE '%' || ${escapeSql(cleanRef)} || '%'
-        OR body ILIKE '%' || ${escapeSql(dep.payment_reference)} || '%'
-        OR body ILIKE '%' || ${escapeSql(dep.amount)} || '%'
-      )
-      ORDER BY created_at DESC LIMIT 5
-    `);
-
-    if (emailsRes.rows.length === 0) {
-      return res.status(400).json({ error: 'Payment not found in Flutterwave notifications. Please ensure you entered the correct reference and wait 1 minute for sync.' });
-    }
-
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      const now = Date.now();
-      const amountToCredit = parseFloat(dep.amount);
-      await client.query(`
-        UPDATE deposit_requests 
-        SET status = 'completed',
-            payment_reference = ${escapeSql(cleanRef)},
-            completed_at = ${now}
-        WHERE id = ${escapeSql(dep.id)}
-      `);
-      const balRes = await client.query(`
-        UPDATE users 
-        SET balance = balance + ${escapeSql(amountToCredit)} 
-        WHERE id = ${escapeSql(dep.user_id)} 
-        RETURNING balance;
-      `);
-      const newBalance = parseFloat(balRes.rows[0].balance);
-      const txId = `tx_dep_${now}_${Math.floor(100 + Math.random() * 900)}`;
-      const txDesc = `⚡ Verified Deposit (Flutterwave MFB Session Ref: ${cleanRef}): ₦${amountToCredit.toLocaleString()} credited successfully`;
-      await client.query(`
-        INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
-        VALUES (${escapeSql(txId)}, ${escapeSql(dep.user_id)}, 'DEPOSIT', ${escapeSql(amountToCredit)}, ${escapeSql(txDesc)}, ${now})
-      `);
-      await client.query('COMMIT');
-      client.release();
-      return res.json({
-        success: true,
-        message: `Payment verified via Session Reference & Flutterwave mail! ₦${amountToCredit.toLocaleString()} credited to your wallet.`,
-        credited: true,
-        newBalance,
-      });
-    } catch (txErr: any) {
-      await client.query('ROLLBACK');
-      client.release();
-      throw txErr;
-    }
-  } catch (err: any) {
-    console.error('Error verifying deposit session:', err);
-    res.status(500).json({ error: err.message || 'Failed to verify deposit session' });
-  }
-});
-
 app.post(['/api/webhooks/macrodroid-opay', '/api/webhooks/opay-sms'], async (req, res) => {
   try {
     const providedSecret = req.headers['x-webhook-secret'] || req.query.secret || req.body?.secret;
