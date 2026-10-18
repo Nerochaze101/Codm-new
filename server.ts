@@ -3743,8 +3743,8 @@ app.post('/api/users/:id/clean-history', async (req, res) => {
       }
     }
 
-    // 2. Reconcile user balance with clean transaction ledger
-    if (syncBalance) {
+    // 2. Reconcile user balance with clean transaction ledger (only if not clearing all history)
+    if (syncBalance && !clearAll) {
       const remainingTxRes = await pool.query(
         `SELECT type, amount FROM transactions WHERE user_id = ${escapeSql(userId)}`
       );
