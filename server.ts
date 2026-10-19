@@ -4850,7 +4850,7 @@ async function settleAbandonedMatch(matchId: string, reason: string = 'Inactivit
 
     await client.query(`
       UPDATE matches 
-      SET status = 'ABANDONED',
+      SET status = 'ABANDONED_AND_SETTLED',
           resolution_notes = ${escapeSql(resolutionNotes)},
           chat_messages = ${escapeSql(chatMsgs)},
           settled_at = ${now}

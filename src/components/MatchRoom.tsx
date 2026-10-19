@@ -199,9 +199,9 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
       </div>
 
       {/* Settle Banner / Winner Announcement */}
-      {match.status === 'SETTLED' && (
+      {(match.status === 'SETTLED' || match.status === 'ABANDONED_AND_SETTLED') && (
         <div className={`p-6 rounded-2xl border shadow-2xl relative overflow-hidden text-center space-y-4 ${
-          isWinner
+          isWinner || match.status === 'ABANDONED_AND_SETTLED'
             ? 'bg-gradient-to-b from-amber-500/20 via-neutral-900 to-neutral-950 border-amber-500/50'
             : 'bg-neutral-900 border-neutral-800'
         }`}>
@@ -210,7 +210,9 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
           </div>
 
           <h2 className="text-2xl sm:text-4xl font-black font-heading tracking-wide text-white">
-            {isWinner ? (
+            {match.status === 'ABANDONED_AND_SETTLED' ? (
+              <span className="text-rose-400">MATCH ABANDONED & SETTLED</span>
+            ) : isWinner ? (
               <span className="text-amber-400">VICTORY! ₦{match.winnerPayout.toLocaleString()} WON</span>
             ) : (
               <span>MATCH CONCLUDED · WINNER: <span className="text-amber-400">{match.winnerIgn}</span></span>
@@ -227,6 +229,15 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
             <span className="text-neutral-400">Platform Fee ({match.platformFeePercentage}%): <strong>₦{match.platformFee.toLocaleString()}</strong></span>
             <span className="text-neutral-400">·</span>
             <span className="text-emerald-400 font-bold">Winner Payout: ₦{match.winnerPayout.toLocaleString()}</span>
+          </div>
+
+          <div className="pt-4">
+            <button
+              onClick={onBackToLobby}
+              className="px-6 py-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-white font-bold text-xs transition-colors cursor-pointer"
+            >
+              Return to Lobby
+            </button>
           </div>
 
           {/* Direct Cash Out Form if Winner has available balance */}

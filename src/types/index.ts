@@ -84,7 +84,8 @@ export interface Match {
     | 'SETTLED'
     | 'DISPUTED'
     | 'CANCELLED'
-    | 'ABANDONED';
+    | 'ABANDONED'
+    | 'ABANDONED_AND_SETTLED';
   createdAt: number;
   roomGeneratedAt?: number;
   creator: MatchPlayer;

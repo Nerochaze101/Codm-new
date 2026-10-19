@@ -9,6 +9,10 @@ import scoreVictoryLocal from './images/codm_score_victory_1791303464940.jpg';
 import matchRoomBgLocal from './images/match_room_bg_1791331746985.jpg';
 import appLogoLocal from './images/18012397-6DAC-458A-9230-E51DC47747A9.png';
 import cardBgSubtleLocal from './images/card_bg_subtle_1791810583071.jpg';
+import combatTacticalLocal from './images/combat_tactical_card_bg_1792421460463.jpg';
+import rulesFairPlayLocal from './images/rules_fair_play_bg_1792421473289.jpg';
+import adminDashboardLocal from './images/admin_dashboard_bg_1792421488185.jpg';
+import walletFinanceLocal from './images/wallet_finance_bg_1792421500912.jpg';
 
 export const CODM_IMAGES = {
   // App Official Professional Logo Icon Emblem
@@ -43,10 +47,10 @@ export const CODM_IMAGES = {
   scoreVictoryFallback: 'https://images.unsplash.com/photo-1563089145-599997674d42?auto=format&fit=crop&w=1200&q=80',
 
   // New Card Backgrounds
-  combatTacticalBg: '/src/assets/images/combat_tactical_card_bg_1792421460463.jpg',
-  rulesFairPlayBg: '/src/assets/images/rules_fair_play_bg_1792421473289.jpg',
-  adminDashboardBg: '/src/assets/images/admin_dashboard_bg_1792421488185.jpg',
-  walletFinanceBg: '/src/assets/images/wallet_finance_bg_1792421500912.jpg',
+  combatTacticalBg: combatTacticalLocal,
+  rulesFairPlayBg: rulesFairPlayLocal,
+  adminDashboardBg: adminDashboardLocal,
+  walletFinanceBg: walletFinanceLocal,
 
   // Maps gallery
   maps: {
