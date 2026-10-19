@@ -102,11 +102,29 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   const [stakeRole, setStakeRole] = useState<'opponent' | 'creator'>('opponent');
   const [isStakeModalOpen, setIsStakeModalOpen] = useState(false);
 
+  const [dismissedMatchIds, setDismissedMatchIds] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('codm_dismissed_matches') || '[]');
+    } catch {
+      return [] as string[];
+    }
+  });
+
+  const handleReturnToLobby = async (matchId: string) => {
+    const updated = [...dismissedMatchIds, matchId];
+    setDismissedMatchIds(updated);
+    try {
+      localStorage.setItem('codm_dismissed_matches', JSON.stringify(updated));
+    } catch {}
+    await onRefresh();
+  };
+
   // Find active match where currentUser is a participant (creator or opponent)
   const myActiveMatch = matches.find(
     (m) =>
       (m.creator.id === currentUser.id || m.opponent?.id === currentUser.id) &&
-      m.status !== 'CANCELLED'
+      m.status !== 'CANCELLED' &&
+      !dismissedMatchIds.includes(m.id)
   );
 
   const [timeLeft, setTimeLeft] = useState<string>('');
@@ -850,7 +868,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
               )}
 
               <button
-                onClick={onRefresh}
+                onClick={() => handleReturnToLobby(myActiveMatch.id)}
                 className="px-5 py-2.5 bg-neutral-800 text-neutral-200 hover:text-white font-bold rounded-xl text-xs hover:bg-neutral-700 transition-colors cursor-pointer uppercase"
               >
                 Return to Battle Lobby
@@ -885,7 +903,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
 
               <button
                 type="button"
-                onClick={onRefresh}
+                onClick={() => handleReturnToLobby(myActiveMatch.id)}
                 className="px-6 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wide transition-all shadow-md cursor-pointer"
               >
                 Return to Battle Lobby
