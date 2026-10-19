@@ -83,7 +83,8 @@ export interface Match {
     | 'VERIFYING'
     | 'SETTLED'
     | 'DISPUTED'
-    | 'CANCELLED';
+    | 'CANCELLED'
+    | 'ABANDONED';
   createdAt: number;
   roomGeneratedAt?: number;
   creator: MatchPlayer;

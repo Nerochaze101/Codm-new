@@ -97,9 +97,43 @@ export const RulesPage: React.FC<RulesPageProps> = ({
         </div>
       </div>
 
-      {/* 3. 1v1 Sniper Weapon Rules & Prohibited Items */}
+      {/* 3. New Rule Sections */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Allowed Weapons */}
+        {/* Rule 1: Automatic Result Settlement */}
+        <div className="p-6 rounded-3xl bg-neutral-900 border border-amber-500/40 space-y-4 shadow-xl">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
+              <Clock className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base sm:text-lg font-heading font-black text-white uppercase">
+                1. Automatic Result Settlement
+              </h3>
+            </div>
+          </div>
+          <p className="text-xs text-neutral-300 leading-relaxed">
+            When a match is finished and a player submits a result, the opponent has <strong>60 minutes</strong> to confirm or dispute. If they fail to do so, the win is automatically awarded to the first claimant.
+          </p>
+        </div>
+
+        {/* Rule 2: Abandoned Match Policy & Penalties */}
+        <div className="p-6 rounded-3xl bg-neutral-900 border border-rose-500/30 space-y-4 shadow-xl">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base sm:text-lg font-heading font-black text-white uppercase">
+                2. Abandoned Match Policy & Penalties
+              </h3>
+            </div>
+          </div>
+          <p className="text-xs text-neutral-300 leading-relaxed">
+            Stalled matches are subject to automated settlement. Abandoned matches incur a <strong>10% abandonment penalty</strong> on the stake, in addition to the standard platform fee. Remaining stakes are refunded to both players.
+          </p>
+        </div>
+
+        {/* Rule 3: Weapon Loadouts & Agreement */}
         <div className="p-6 rounded-3xl bg-neutral-900 border border-neutral-800 space-y-4 shadow-xl">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
@@ -107,106 +141,58 @@ export const RulesPage: React.FC<RulesPageProps> = ({
             </div>
             <div>
               <h3 className="text-base sm:text-lg font-heading font-black text-white uppercase">
-                Allowed Sniper Weapons (1v1 Duel)
+                3. Weapon Loadouts & Agreement
               </h3>
-              <p className="text-xs text-neutral-400">Standard competitive sniper loadouts</p>
             </div>
           </div>
-
+          <p className="text-xs text-neutral-300 leading-relaxed">
+            Players are permitted to use any weapon loadout mutually agreed upon by both parties. In the absence of an agreement, these rules apply:
+          </p>
           <ul className="space-y-2.5 text-xs text-neutral-300">
-            <li className="flex items-start gap-2 p-2.5 rounded-xl bg-neutral-950/80 border border-neutral-800">
+            <li className="flex items-start gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-              <span><strong>DL Q33</strong> — Standard default sniper rifle for all 1v1 duels.</span>
+              <span>Allowed Snipers: DL Q33, Locus, Koshka, Arctic.50, Outlaw.</span>
             </li>
-            <li className="flex items-start gap-2 p-2.5 rounded-xl bg-neutral-950/80 border border-neutral-800">
+            <li className="flex items-start gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-              <span><strong>Locus</strong> & <strong>Koshka</strong> — Allowed with standard attachments (no thermite ammo).</span>
-            </li>
-            <li className="flex items-start gap-2 p-2.5 rounded-xl bg-neutral-950/80 border border-neutral-800">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-              <span><strong>Arctic.50</strong> & <strong>Outlaw</strong> — Permitted for fast quickscopes.</span>
+              <span>Restricted: No thermite ammo, no secondary pistols, no melee weapons.</span>
             </li>
           </ul>
         </div>
 
-        {/* Banned Elements */}
+        {/* Rule 4: AI Scoreboard */}
         <div className="p-6 rounded-3xl bg-neutral-900 border border-neutral-800 space-y-4 shadow-xl">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
-              <AlertTriangle className="w-5 h-5" />
+            <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
+              <Camera className="w-5 h-5" />
             </div>
             <div>
               <h3 className="text-base sm:text-lg font-heading font-black text-white uppercase">
-                Banned Equipment & Disqualifications
+                4. AI Scoreboard Verification
               </h3>
-              <p className="text-xs text-neutral-400">Strictly prohibited in competitive 1v1 wagers</p>
             </div>
           </div>
-
-          <ul className="space-y-2.5 text-xs text-neutral-300">
-            <li className="flex items-start gap-2 p-2.5 rounded-xl bg-neutral-950/80 border border-neutral-800">
-              <span className="w-4 h-4 rounded-full bg-rose-500/20 text-rose-400 font-bold flex items-center justify-center shrink-0 mt-0.5 text-[10px]">✕</span>
-              <span><strong>No Secondary Pistols or Melee Weapons</strong> (Shorty, Katana, Kali Sticks, etc.).</span>
-            </li>
-            <li className="flex items-start gap-2 p-2.5 rounded-xl bg-neutral-950/80 border border-neutral-800">
-              <span className="w-4 h-4 rounded-full bg-rose-500/20 text-rose-400 font-bold flex items-center justify-center shrink-0 mt-0.5 text-[10px]">✕</span>
-              <span><strong>No Scorestreaks or Operator Skills</strong> (UAV, Shock RC, Annihilator, Purifier).</span>
-            </li>
-            <li className="flex items-start gap-2 p-2.5 rounded-xl bg-neutral-950/80 border border-neutral-800">
-              <span className="w-4 h-4 rounded-full bg-rose-500/20 text-rose-400 font-bold flex items-center justify-center shrink-0 mt-0.5 text-[10px]">✕</span>
-              <span><strong>No Glitching or Out-of-Bounds Exploits</strong> on Shipment or Killhouse.</span>
-            </li>
-          </ul>
-        </div>
-      </div>
-
-      {/* 4. AI Referee Scoreboard Verification Process */}
-      <div className="p-6 sm:p-8 rounded-3xl bg-neutral-900 border border-neutral-800 space-y-6 shadow-xl">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
-            <Camera className="w-5 h-5" />
-          </div>
-          <div>
-            <h3 className="text-lg sm:text-xl font-heading font-black text-white uppercase">
-              AI Scoreboard Inspection & Payout Protocol
-            </h3>
-            <p className="text-xs text-neutral-400">Automated verification for instant payouts</p>
-          </div>
+          <p className="text-xs text-neutral-300 leading-relaxed">
+            Final results require an end-game scoreboard screenshot for automated AI verification.
+          </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-          <div className="p-4 rounded-2xl bg-neutral-950/80 border border-neutral-800 space-y-2">
-            <div className="font-bold text-amber-400 font-mono uppercase">1. Clear Scoreboard Screenshot</div>
-            <p className="text-neutral-400 leading-relaxed">
-              Capture the end-game scoreboard displaying the gold "VICTORY" or silver "DEFEAT" banner with both player IGNs visible.
-            </p>
+        {/* Rule 5: Dispute Protocol */}
+        <div className="p-6 rounded-3xl bg-neutral-900 border border-neutral-800 space-y-4 shadow-xl">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
+              <Scale className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base sm:text-lg font-heading font-black text-white uppercase">
+                5. Dispute Protocol
+              </h3>
+            </div>
           </div>
-
-          <div className="p-4 rounded-2xl bg-neutral-950/80 border border-neutral-800 space-y-2">
-            <div className="font-bold text-amber-400 font-mono uppercase">2. AI Vision Verification</div>
-            <p className="text-neutral-400 leading-relaxed">
-              Our automated referee scans the kill breakdown, victory banner, and gamer tag to confirm the legitimate winner.
-            </p>
-          </div>
-
-          <div className="p-4 rounded-2xl bg-neutral-950/80 border border-neutral-800 space-y-2">
-            <div className="font-bold text-emerald-400 font-mono uppercase">3. Instant Escrow Payout</div>
-            <p className="text-neutral-400 leading-relaxed">
-              The full pot (minus standard 10% platform fee) is immediately released to the winner with zero delay.
-            </p>
-          </div>
+          <p className="text-xs text-neutral-300 leading-relaxed">
+            Conflicting results freeze the escrow pot for human admin review. Ties/draws result in a 100% stake refund.
+          </p>
         </div>
-      </div>
-
-      {/* 5. Dispute Protection Guarantee */}
-      <div className="p-6 sm:p-8 rounded-3xl bg-gradient-to-r from-amber-500/10 via-neutral-900 to-neutral-900 border border-amber-500/40 space-y-3 shadow-xl">
-        <div className="flex items-center gap-2.5 text-amber-400 font-heading font-black text-base uppercase">
-          <Scale className="w-5 h-5" />
-          <span>Dispute Adjudication & 100% Escrow Refund Policy</span>
-        </div>
-        <p className="text-xs sm:text-sm text-neutral-300 leading-relaxed">
-          If both players disagree or submit conflicting screenshots, the escrow pot is immediately frozen and assigned to human esports admins for manual match log review. If a match ends in a mutual tie or draw, <strong>100% of all deposited stakes</strong> are automatically refunded to both players.
-        </p>
       </div>
     </div>
   );

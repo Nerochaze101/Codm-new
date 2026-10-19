@@ -1,13 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserProfile, Match } from '../types';
 import {
   User, Trophy, Award, TrendingUp, ShieldCheck, Swords,
   Edit3, Check, Copy, ArrowRight, Shield, Zap, Flame, Clock,
   Calendar, CheckCircle2, AlertCircle, Camera, Crosshair, Users, LogOut, BookOpen,
-  Volume2, VolumeX
+  Volume2, VolumeX, Building, CreditCard, Lock, Loader2, Save, RefreshCw
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { useSoundSettings, playShotgunSound } from '../hooks/useSound';
+import { SUPPORTED_BANKS } from './CashOutModal';
 
 interface ProfilePageProps {
   currentUser: UserProfile;
@@ -63,6 +64,113 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
   const [saveSuccess, setSaveSuccess] = useState(false);
   const { soundEnabled, toggleSound } = useSoundSettings();
   const [soundTestPlayed, setSoundTestPlayed] = useState(false);
+
+  // Dedicated Permanent Bank Details State
+  const [isEditingBank, setIsEditingBank] = useState(false);
+  const [bankName, setBankName] = useState(currentUser.bankName || 'OPay Digital Bank');
+  const [accountNumber, setAccountNumber] = useState(currentUser.accountNumber || '');
+  const [accountName, setAccountName] = useState(currentUser.accountName || '');
+  const [isResolvingNuban, setIsResolvingNuban] = useState(false);
+  const [nubanError, setNubanError] = useState<string | null>(null);
+  const [nubanResolved, setNubanResolved] = useState(false);
+  const [copiedBank, setCopiedBank] = useState(false);
+  const [bankSaveSuccess, setBankSaveSuccess] = useState(false);
+  const [isSavingBank, setIsSavingBank] = useState(false);
+
+  useEffect(() => {
+    if (currentUser.bankName) setBankName(currentUser.bankName);
+    if (currentUser.accountNumber) setAccountNumber(currentUser.accountNumber);
+    if (currentUser.accountName) setAccountName(currentUser.accountName);
+    if (currentUser.bankName) setEditBankName(currentUser.bankName);
+    if (currentUser.accountNumber) setEditAccountNumber(currentUser.accountNumber);
+    if (currentUser.accountName) setEditAccountName(currentUser.accountName);
+  }, [currentUser.bankName, currentUser.accountNumber, currentUser.accountName]);
+
+  const resolveBankDetails = async (accNum: string, bank: string) => {
+    if (accNum.length !== 10) return;
+    setIsResolvingNuban(true);
+    setNubanError(null);
+    setNubanResolved(false);
+
+    try {
+      const res = await fetch(`/api/resolve-account?account_number=${encodeURIComponent(accNum)}&bank_name=${encodeURIComponent(bank)}`);
+      const data = await res.json();
+      if (data.status && data.data?.account_name) {
+        setAccountName(data.data.account_name);
+        setNubanResolved(true);
+        setNubanError(null);
+      } else {
+        setNubanResolved(false);
+        setNubanError(data.error || data.message || `Could not verify account name with ${bank}.`);
+      }
+    } catch (err: any) {
+      setNubanResolved(false);
+      setNubanError('Network error checking bank account. Please verify internet connection.');
+    } finally {
+      setIsResolvingNuban(false);
+    }
+  };
+
+  const handleAccountNumberChange = (val: string) => {
+    const clean = val.replace(/\D/g, '').slice(0, 10);
+    setAccountNumber(clean);
+    setNubanResolved(false);
+    setNubanError(null);
+    if (clean.length === 10) {
+      resolveBankDetails(clean, bankName);
+    }
+  };
+
+  const handleBankChange = (newBank: string) => {
+    setBankName(newBank);
+    setNubanResolved(false);
+    setNubanError(null);
+    if (accountNumber.length === 10) {
+      resolveBankDetails(accountNumber, newBank);
+    }
+  };
+
+  const handleSavePermanentBank = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!bankName) {
+      setNubanError('Please select a bank name');
+      return;
+    }
+    if (!accountNumber || accountNumber.trim().length !== 10) {
+      setNubanError('Please enter a valid 10-digit Nigerian account number');
+      return;
+    }
+    if (!accountName || !accountName.trim()) {
+      setNubanError('Please verify or enter the account holder name');
+      return;
+    }
+
+    setIsSavingBank(true);
+    setNubanError(null);
+    try {
+      if (onUpdateUser) {
+        await onUpdateUser({
+          bankName: bankName.trim(),
+          accountNumber: accountNumber.trim(),
+          accountName: accountName.trim(),
+        });
+      }
+      setIsEditingBank(false);
+      setBankSaveSuccess(true);
+      setTimeout(() => setBankSaveSuccess(false), 3500);
+    } catch (err: any) {
+      setNubanError(err.message || 'Failed to save bank details to database');
+    } finally {
+      setIsSavingBank(false);
+    }
+  };
+
+  const handleCopyBank = () => {
+    if (!currentUser.accountNumber) return;
+    navigator.clipboard.writeText(currentUser.accountNumber);
+    setCopiedBank(true);
+    setTimeout(() => setCopiedBank(false), 2000);
+  };
 
   const winRate =
     currentUser.wins + currentUser.losses > 0
@@ -220,6 +328,237 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
           <span>Profile information successfully updated!</span>
         </div>
       )}
+
+      {/* ------------------------------------------------------------- */}
+      {/* 2. PERMANENT PAYOUT BANK DETAILS (SAVED IN DATABASE)          */}
+      {/* ------------------------------------------------------------- */}
+      <div className="rounded-3xl bg-neutral-900 border-2 border-emerald-500/40 p-6 sm:p-7 space-y-5 shadow-2xl relative overflow-hidden">
+        <div className="absolute top-0 right-0 p-8 opacity-5 text-emerald-400 pointer-events-none">
+          <Building className="w-32 h-32" />
+        </div>
+
+        {/* Card Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-neutral-800 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+              <Building className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base sm:text-lg font-black font-heading text-white uppercase tracking-wide">
+                  Permanent Payout Bank Account
+                </h2>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  Database Synced
+                </span>
+              </div>
+              <p className="text-xs text-neutral-400">
+                Official Nigerian bank account for automated 1v1 match winnings, prize disbursements, and instant withdrawals. Stored permanently until you change it.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setIsEditingBank(!isEditingBank);
+              setNubanError(null);
+            }}
+            className="px-4 py-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 self-start sm:self-auto shrink-0 border border-neutral-700"
+          >
+            <Edit3 className="w-3.5 h-3.5 text-amber-400" />
+            <span>{isEditingBank ? 'Cancel' : currentUser.bankName && currentUser.accountNumber ? 'Change Bank Details' : 'Link Bank Account'}</span>
+          </button>
+        </div>
+
+        {bankSaveSuccess && (
+          <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold flex items-center gap-2 animate-in fade-in">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>Bank details saved permanently to your profile and database!</span>
+          </div>
+        )}
+
+        {/* Display Current Saved Bank Details */}
+        {!isEditingBank && (
+          <div>
+            {currentUser.bankName && currentUser.accountNumber ? (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="p-4 rounded-2xl bg-neutral-950/80 border border-neutral-800 space-y-1">
+                  <span className="text-[10px] font-mono font-bold text-neutral-400 uppercase tracking-wider block">
+                    Bank Name
+                  </span>
+                  <div className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                    <Building className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>{currentUser.bankName}</span>
+                  </div>
+                  <span className="text-[10px] text-emerald-400 font-mono">Supported Nigerian Bank</span>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-neutral-950/80 border border-neutral-800 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-mono font-bold text-neutral-400 uppercase tracking-wider">
+                      Account Number (NUBAN)
+                    </span>
+                    <button
+                      onClick={handleCopyBank}
+                      className="text-neutral-400 hover:text-amber-400 transition-colors p-0.5 cursor-pointer flex items-center gap-1 text-[10px]"
+                      title="Copy Account Number"
+                    >
+                      {copiedBank ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                      <span className="font-mono">{copiedBank ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  </div>
+                  <div className="text-base sm:text-lg font-black font-mono-nums text-amber-400 tracking-wider">
+                    {currentUser.accountNumber}
+                  </div>
+                  <span className="text-[10px] text-neutral-500 font-mono">10-Digit Direct Deposit NUBAN</span>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-neutral-950/80 border border-neutral-800 space-y-1">
+                  <span className="text-[10px] font-mono font-bold text-neutral-400 uppercase tracking-wider block">
+                    Verified Account Holder Name
+                  </span>
+                  <div className="text-sm sm:text-base font-bold text-emerald-300 flex items-center gap-1.5 truncate">
+                    <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span className="truncate">{currentUser.accountName || currentUser.codmIgn}</span>
+                  </div>
+                  <span className="text-[10px] text-emerald-400/80 font-mono">✓ Verified Account Holder</span>
+                </div>
+              </div>
+            ) : (
+              <div className="p-5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <div className="text-xs font-bold text-amber-300 uppercase tracking-wider font-mono">
+                      No Payout Bank Details Linked
+                    </div>
+                    <p className="text-xs text-neutral-400">
+                      Link your permanent Nigerian bank account so that 1v1 match winnings and wallet cashouts are processed automatically to you.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setIsEditingBank(true)}
+                  className="px-4 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wider cursor-pointer whitespace-nowrap shadow-md"
+                >
+                  Link Bank Account
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Change Bank Details Interactive Form */}
+        {isEditingBank && (
+          <form onSubmit={handleSavePermanentBank} className="p-5 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-4 animate-in fade-in">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <span className="text-xs font-black uppercase text-white tracking-wider flex items-center gap-2">
+                <Building className="w-4 h-4 text-amber-400" />
+                <span>Update Permanent Bank Details</span>
+              </span>
+              <span className="text-[10px] text-neutral-500 font-mono">Updates Saved Permanently In DB</span>
+            </div>
+
+            {nubanError && (
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                <span>{nubanError}</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {/* Bank Selector */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider block font-mono">
+                  Select Bank
+                </label>
+                <select
+                  value={bankName}
+                  onChange={(e) => handleBankChange(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-900 border border-neutral-700 text-white font-semibold text-xs focus:outline-none focus:border-amber-400 cursor-pointer"
+                >
+                  {SUPPORTED_BANKS.map((b) => (
+                    <option key={b.name} value={b.name} className="bg-neutral-900 text-white">
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* 10-digit Account Number */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider block font-mono">
+                  10-Digit Account Number (NUBAN)
+                </label>
+                <input
+                  type="text"
+                  maxLength={10}
+                  value={accountNumber}
+                  onChange={(e) => handleAccountNumberChange(e.target.value)}
+                  placeholder="e.g. 9151609682"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-900 border border-neutral-700 text-white font-mono-nums text-xs focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              {/* Account Holder Name */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider block font-mono">
+                    Account Holder Name
+                  </label>
+                  {isResolvingNuban && (
+                    <span className="text-[10px] text-amber-400 flex items-center gap-1 font-mono">
+                      <Loader2 className="w-3 h-3 animate-spin" /> Verifying...
+                    </span>
+                  )}
+                  {nubanResolved && !isResolvingNuban && (
+                    <span className="text-[10px] text-emerald-400 flex items-center gap-1 font-mono font-bold">
+                      <CheckCircle2 className="w-3 h-3" /> Auto-Verified
+                    </span>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  value={accountName}
+                  onChange={(e) => setAccountName(e.target.value)}
+                  placeholder="Legal full name on bank account"
+                  className={`w-full px-3.5 py-2.5 rounded-xl bg-neutral-900 border text-xs focus:outline-none ${
+                    nubanResolved ? 'border-emerald-500/50 text-emerald-300 font-bold' : 'border-neutral-700 text-white'
+                  }`}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsEditingBank(false)}
+                className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-bold transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isSavingBank || isResolvingNuban}
+                className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-neutral-950 text-xs font-black transition-all cursor-pointer uppercase shadow-md flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {isSavingBank ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Saving to Database...</span>
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-3.5 h-3.5" />
+                    <span>Save Bank Details Permanently</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
 
       {/* ------------------------------------------------------------- */}
       {/* 2. EDIT PROFILE FORM (TOGGLE)                                  */}

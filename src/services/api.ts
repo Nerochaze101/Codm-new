@@ -246,6 +246,32 @@ export async function cancelMatch(matchId: string): Promise<Match> {
   return await res.json();
 }
 
+export async function abandonMatch(matchId: string, reason?: string): Promise<{ success: boolean; match: Match; data: any }> {
+  const res = await fetch(`/api/matches/${matchId}/abandon`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to settle abandoned match');
+  }
+  return await res.json();
+}
+
+export async function adminAbandonMatch(matchId: string, adminUserId: string, reason?: string): Promise<{ success: boolean; match: Match; data: any }> {
+  const res = await fetch(`/api/admin/matches/${matchId}/abandon`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId: adminUserId, reason }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to settle abandoned match as admin');
+  }
+  return await res.json();
+}
+
 export async function submitMatchResult(matchId: string, payload: {
   playerId: string;
   claim: 'VICTORY' | 'DEFEAT' | 'DRAW';

@@ -10,6 +10,7 @@ import {
 import { CODM_IMAGES } from '../assets/images';
 import { SkeletonLoader } from './SkeletonLoader';
 import { StakePaymentModal } from './StakePaymentModal';
+import { calculateAbandonedMatchRefund } from '../utils/feeCalculator';
 
 // Helper for card background
 const CardBackground = () => (
@@ -51,6 +52,7 @@ interface CoreArenaProps {
   onSimulateOpponentStake?: (matchId: string) => Promise<void>;
   onSubmitResult: (matchId: string, claim: 'VICTORY' | 'DEFEAT' | 'DRAW', screenshotBase64?: string) => Promise<void>;
   onCancelMatch: (matchId: string) => Promise<void>;
+  onAbandonMatch?: (matchId: string, reason?: string) => Promise<any>;
   onOpenWallet?: () => void;
   onRefresh: () => Promise<void>;
   onOpenNewUserOnboarding: (match?: Match) => void;
@@ -76,6 +78,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   onSimulateOpponentStake,
   onSubmitResult,
   onCancelMatch,
+  onAbandonMatch,
   onOpenWallet,
   onRefresh,
   onOpenNewUserOnboarding,
@@ -90,6 +93,9 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   const [copiedLink, setCopiedLink] = useState(false);
   const [arenaCashoutConfirming, setArenaCashoutConfirming] = useState(false);
   const [isArenaCashoutSubmitting, setIsArenaCashoutSubmitting] = useState(false);
+  const [isAbandoning, setIsAbandoning] = useState(false);
+  const [showAbandonModal, setShowAbandonModal] = useState(false);
+  const [abandonError, setAbandonError] = useState<string | null>(null);
 
   // Staking Modal state
   const [stakeTargetMatch, setStakeTargetMatch] = useState<Match | null>(null);
@@ -410,14 +416,50 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
             <div className="relative z-10 space-y-4">
               {/* Live Countdown Timer Banner */}
               {myActiveMatch.roomGeneratedAt && (
-                <div className="flex items-center justify-between p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 text-xs shadow-inner">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 text-xs shadow-inner">
                   <div className="flex items-center gap-2 text-neutral-300">
                     <Clock className="w-4 h-4 text-amber-400 animate-pulse" />
                     <span>Match Countdown ({myActiveMatch.matchDurationMinutes || 15}m):</span>
                   </div>
-                  <span className={`font-mono font-black text-sm px-3 py-1 rounded-lg ${isExpired ? 'bg-rose-500/20 text-rose-400 animate-bounce' : 'bg-amber-500/20 text-amber-400'}`}>
-                    {timeLeft || '15:00'}
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <span className={`font-mono font-black text-sm px-3 py-1 rounded-lg ${isExpired ? 'bg-rose-500/20 text-rose-400 animate-bounce' : 'bg-amber-500/20 text-amber-400'}`}>
+                      {timeLeft || '15:00'}
+                    </span>
+                    {onAbandonMatch && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAbandonError(null);
+                          setShowAbandonModal(true);
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white border border-neutral-700 font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
+                        title="Settle match as abandoned and refund stakes minus platform fee + 10% penalty fee"
+                      >
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Settle Abandoned</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Inactivity / Expiration Alert */}
+              {isExpired && onAbandonMatch && (
+                <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs animate-in fade-in">
+                  <div className="flex items-start sm:items-center gap-2.5 text-rose-300">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5 sm:mt-0" />
+                    <span>Match time expired! Opponent went AFK? Settle this match as abandoned to recover your stake minus platform fee & 10% penalty fee.</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAbandonError(null);
+                      setShowAbandonModal(true);
+                    }}
+                    className="px-3.5 py-1.5 rounded-lg bg-rose-500 hover:bg-rose-400 text-white font-bold text-xs uppercase tracking-wider shrink-0 transition-all cursor-pointer shadow whitespace-nowrap"
+                  >
+                    Settle & Refund
+                  </button>
                 </div>
               )}
 
@@ -808,6 +850,41 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
               </button>
             </div>
           )}
+
+          {/* Abandoned / Refunded State */}
+          {myActiveMatch.status === 'ABANDONED' && (
+            <div className="relative z-10 p-6 rounded-2xl bg-gradient-to-b from-amber-500/10 to-neutral-950 border border-amber-500/40 text-center space-y-4 animate-in fade-in">
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center mx-auto shadow-lg">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+
+              <div className="space-y-1">
+                <div className="text-lg sm:text-xl font-black text-white font-heading uppercase">
+                  MATCH SETTLED AS ABANDONED
+                </div>
+                <span className="inline-block px-3 py-1 rounded-full text-xs font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                  Escrow Stakes Refunded Minus Fees
+                </span>
+              </div>
+
+              <p className="text-xs text-neutral-300 max-w-lg mx-auto leading-relaxed">
+                {myActiveMatch.resolutionNotes || 'This match was settled due to inactivity or player abandonment. Staked players were refunded their stake minus the platform fee plus a 10% penalty fee.'}
+              </p>
+
+              <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold max-w-md mx-auto flex items-center justify-center gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>Your refund has been credited directly to your available wallet balance.</span>
+              </div>
+
+              <button
+                type="button"
+                onClick={onRefresh}
+                className="px-6 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wide transition-all shadow-md cursor-pointer"
+              >
+                Return to Battle Lobby
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1010,6 +1087,97 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Settle Abandoned Match Modal */}
+      {showAbandonModal && myActiveMatch && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in">
+          <div className="relative w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-3xl shadow-2xl p-6 space-y-5">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <h3 className="text-base font-bold text-white font-heading uppercase">
+                  Settle Abandoned Match
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowAbandonModal(false)}
+                className="p-1 rounded-lg text-neutral-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {(() => {
+              const calc = calculateAbandonedMatchRefund(myActiveMatch.stakeAmount, myActiveMatch.platformFeePercentage);
+              return (
+                <div className="space-y-4">
+                  <p className="text-xs text-neutral-300 leading-relaxed">
+                    Settle this stalled or inactive match immediately. Escrow will release funds back to each player minus the platform fee plus a 10% penalty fee.
+                  </p>
+
+                  <div className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-2.5 text-xs font-mono">
+                    <div className="flex items-center justify-between text-neutral-400">
+                      <span>Your Locked Stake:</span>
+                      <strong className="text-white font-mono-nums">₦{calc.stakeAmount.toLocaleString()}</strong>
+                    </div>
+                    <div className="flex items-center justify-between text-rose-400">
+                      <span>Platform Fee ({(calc.platformFeeRate * 100).toFixed(0)}%):</span>
+                      <span className="font-mono-nums">-₦{calc.platformFee.toLocaleString()}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-rose-400">
+                      <span>10% Abandonment Penalty:</span>
+                      <span className="font-mono-nums">-₦{calc.penaltyFee.toLocaleString()}</span>
+                    </div>
+                    <div className="pt-2 border-t border-neutral-800 flex items-center justify-between text-emerald-400 font-bold text-sm">
+                      <span>Refund to Your Wallet:</span>
+                      <span className="font-mono-nums text-base">₦{calc.refundPerPlayer.toLocaleString()}</span>
+                    </div>
+                  </div>
+
+                  {abandonError && (
+                    <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>{abandonError}</span>
+                    </div>
+                  )}
+
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAbandonModal(false)}
+                      className="flex-1 py-3 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-bold transition-colors cursor-pointer"
+                    >
+                      Keep Waiting
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isAbandoning}
+                      onClick={async () => {
+                        if (!onAbandonMatch) return;
+                        setIsAbandoning(true);
+                        setAbandonError(null);
+                        try {
+                          await onAbandonMatch(myActiveMatch.id, 'Player reported match abandoned / opponent AFK');
+                          setShowAbandonModal(false);
+                        } catch (err: any) {
+                          setAbandonError(err.message || 'Failed to settle match');
+                        } finally {
+                          setIsAbandoning(false);
+                        }
+                      }}
+                      className="flex-1 py-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wide transition-all shadow-md cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isAbandoning ? 'Settling...' : `Confirm & Settle (₦${calc.refundPerPlayer.toLocaleString()})`}
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
         </div>
       )}
 

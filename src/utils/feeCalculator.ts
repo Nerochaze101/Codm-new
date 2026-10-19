@@ -58,3 +58,40 @@ export function calculateWithdrawalFee(requestedPayout: number): WithdrawalFeeBr
     totalDeduction,
   };
 }
+
+export interface AbandonedMatchSettlementBreakdown {
+  stakeAmount: number;
+  platformFeeRate: number; // e.g. 0.10 (10%)
+  platformFee: number;     // e.g. ₦100
+  penaltyFeeRate: number;  // 0.10 (10% penalty fee)
+  penaltyFee: number;      // e.g. ₦100
+  totalDeduction: number;  // platformFee + penaltyFee
+  refundPerPlayer: number; // stakeAmount - totalDeduction
+}
+
+/**
+ * Calculate abandoned match settlement, refund, and fee deductions
+ * Refunds player stake minus platform fee plus 10% penalty fee
+ */
+export function calculateAbandonedMatchRefund(
+  stakeAmount: number,
+  platformFeePercentage: number = 10
+): AbandonedMatchSettlementBreakdown {
+  const stake = Math.max(0, stakeAmount);
+  const platformFeeRate = (platformFeePercentage || 10) / 100;
+  const platformFee = Math.round(stake * platformFeeRate);
+  const penaltyFeeRate = 0.10; // 10% penalty fee for abandoned/stalled matches
+  const penaltyFee = Math.round(stake * penaltyFeeRate);
+  const totalDeduction = platformFee + penaltyFee;
+  const refundPerPlayer = Math.max(0, stake - totalDeduction);
+
+  return {
+    stakeAmount: stake,
+    platformFeeRate,
+    platformFee,
+    penaltyFeeRate,
+    penaltyFee,
+    totalDeduction,
+    refundPerPlayer,
+  };
+}

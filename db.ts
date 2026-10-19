@@ -273,10 +273,14 @@ export async function initDatabase() {
         chat_messages JSONB DEFAULT '[]'::jsonb,
         created_at BIGINT NOT NULL,
         room_generated_at BIGINT,
-        settled_at BIGINT
+        settled_at BIGINT,
+        result_submitted_at BIGINT,
+        result_submitted_by VARCHAR(255)
       );
 
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS match_duration_minutes INT DEFAULT 15;
+      ALTER TABLE matches ADD COLUMN IF NOT EXISTS result_submitted_at BIGINT;
+      ALTER TABLE matches ADD COLUMN IF NOT EXISTS result_submitted_by VARCHAR(255);
 
       CREATE TABLE IF NOT EXISTS transactions (
         id VARCHAR(255) PRIMARY KEY,

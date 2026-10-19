@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { UserProfile } from '../types';
 import {
   ShieldCheck, Zap, Filter, Clock, CheckCircle2,
   AlertTriangle, AlertCircle, Trash2, RefreshCw, ArrowDownLeft,
-  ArrowUpRight, Trophy
+  ArrowUpRight, Trophy, Building, Edit3
 } from 'lucide-react';
 import { CashOutModal } from './CashOutModal';
 import { FundWalletModal } from './FundWalletModal';
@@ -29,6 +30,7 @@ export const WalletPage: React.FC<WalletPageProps> = ({
   onCashOut,
   onCleanHistory,
 }) => {
+  const navigate = useNavigate();
   const [isCashOutModalOpen, setIsCashOutModalOpen] = useState(false);
   const [isFundModalOpen, setIsFundModalOpen] = useState(false);
   const [filter, setFilter] = useState<'ALL' | 'PAYOUTS' | 'DEPOSITS' | 'WINNINGS'>('ALL');
@@ -100,13 +102,31 @@ export const WalletPage: React.FC<WalletPageProps> = ({
               ₦{currentUser.balance.toLocaleString()}
             </div>
             {currentUser.bankName && currentUser.accountNumber ? (
-              <p className="text-xs text-neutral-400 font-mono">
-                Saved Payout Bank: <strong className="text-neutral-200">{currentUser.bankName} ({currentUser.accountNumber} - {currentUser.accountName || currentUser.codmIgn})</strong>
-              </p>
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <span className="text-xs text-neutral-400 font-mono flex items-center gap-1.5">
+                  <Building className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Saved Payout Bank: <strong className="text-neutral-200">{currentUser.bankName} ({currentUser.accountNumber} - {currentUser.accountName || currentUser.codmIgn})</strong></span>
+                </span>
+                <button
+                  onClick={() => navigate('/profile')}
+                  className="text-[11px] text-amber-400 hover:text-amber-300 font-bold underline cursor-pointer ml-1 flex items-center gap-1"
+                >
+                  <Edit3 className="w-3 h-3" />
+                  <span>Change</span>
+                </button>
+              </div>
             ) : (
-              <p className="text-xs text-amber-400 font-mono">
-                ⚠️ No bank details saved yet. Enter bank info during cashout to receive automatic payouts.
-              </p>
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <span className="text-xs text-amber-400 font-mono">
+                  ⚠️ No bank details saved yet.
+                </span>
+                <button
+                  onClick={() => navigate('/profile')}
+                  className="text-xs text-amber-400 hover:text-amber-300 font-bold underline cursor-pointer"
+                >
+                  Link Bank Account in Profile →
+                </button>
+              </div>
             )}
           </div>
 

@@ -4,7 +4,7 @@ import { UserProfile, Match } from './types';
 import {
   fetchUser, fetchMatches, fetchMatch, createMatch, joinMatch,
   opponentStakeMatch, creatorStakeMatch,
-  cancelMatch, submitMatchResult,
+  cancelMatch, abandonMatch, submitMatchResult,
   createUser, signUpUser, signInUser, updateUser, withdrawWallet,
   cleanUserHistory
 } from './services/api';
@@ -247,6 +247,20 @@ function MainApp() {
     }
   };
 
+  const handleAbandonMatch = async (matchId: string, reason?: string) => {
+    try {
+      const res = await abandonMatch(matchId, reason);
+      const updatedUser = await fetchUser(currentUser.id);
+      setCurrentUser(updatedUser);
+      await loadData();
+      return res;
+    } catch (err: any) {
+      console.error('Match abandonment failed:', err);
+      alert(err.message || 'Failed to settle abandoned match');
+      throw err;
+    }
+  };
+
   const handleSignUp = async (data: {
     email: string;
     password: string;
@@ -413,6 +427,7 @@ function MainApp() {
                 onSimulateOpponentStake={handleSimulateOpponentStake}
                 onSubmitResult={handleSubmitResult}
                 onCancelMatch={handleCancelMatch}
+                onAbandonMatch={handleAbandonMatch}
                 onCashOut={handleCashOut}
                 onRefresh={loadData}
                 onOpenCreateBet={handleOpenCreateBet}
@@ -510,6 +525,7 @@ function MainApp() {
                 onSimulateOpponentStake={handleSimulateOpponentStake}
                 onSubmitResult={handleSubmitResult}
                 onCancelMatch={handleCancelMatch}
+                onAbandonMatch={handleAbandonMatch}
                 onCashOut={handleCashOut}
                 onRefresh={loadData}
                 onOpenCreateBet={handleOpenCreateBet}

@@ -116,7 +116,8 @@ export interface Match {
     | 'VERIFYING'
     | 'SETTLED'
     | 'DISPUTED'
-    | 'CANCELLED';
+    | 'CANCELLED'
+    | 'ABANDONED';
   createdAt: number;
   roomGeneratedAt?: number;
   creator: {
@@ -3353,6 +3354,81 @@ app.patch('/api/users/:id', async (req, res) => {
   res.json(updatedUser || user);
 });
 
+// Dedicated endpoint to save user bank details permanently to database
+app.put('/api/users/:id/bank-details', async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const { bankName, accountNumber, accountName } = req.body;
+
+    if (!bankName || !accountNumber || !accountName) {
+      return res.status(400).json({ error: 'Bank name, account number, and account name are required' });
+    }
+
+    const cleanBank = String(bankName).trim();
+    const cleanAccNum = String(accountNumber).trim();
+    const cleanAccName = String(accountName).trim();
+
+    if (cleanAccNum.length < 10) {
+      return res.status(400).json({ error: 'Account number must be 10 digits' });
+    }
+
+    await pool.query(`
+      UPDATE users 
+      SET bank_name = ${escapeSql(cleanBank)},
+          account_number = ${escapeSql(cleanAccNum)},
+          account_name = ${escapeSql(cleanAccName)}
+      WHERE id = ${escapeSql(userId)}
+    `);
+
+    const updatedUser = await getUserFromDb(userId);
+    res.json({
+      success: true,
+      message: 'Bank details saved permanently to database',
+      user: updatedUser
+    });
+  } catch (err: any) {
+    console.error('Error saving user bank details:', err);
+    res.status(500).json({ error: err.message || 'Failed to save bank details' });
+  }
+});
+
+app.post('/api/users/:id/bank-details', async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const { bankName, accountNumber, accountName } = req.body;
+
+    if (!bankName || !accountNumber || !accountName) {
+      return res.status(400).json({ error: 'Bank name, account number, and account name are required' });
+    }
+
+    const cleanBank = String(bankName).trim();
+    const cleanAccNum = String(accountNumber).trim();
+    const cleanAccName = String(accountName).trim();
+
+    if (cleanAccNum.length < 10) {
+      return res.status(400).json({ error: 'Account number must be 10 digits' });
+    }
+
+    await pool.query(`
+      UPDATE users 
+      SET bank_name = ${escapeSql(cleanBank)},
+          account_number = ${escapeSql(cleanAccNum)},
+          account_name = ${escapeSql(cleanAccName)}
+      WHERE id = ${escapeSql(userId)}
+    `);
+
+    const updatedUser = await getUserFromDb(userId);
+    res.json({
+      success: true,
+      message: 'Bank details saved permanently to database',
+      user: updatedUser
+    });
+  } catch (err: any) {
+    console.error('Error saving user bank details:', err);
+    res.status(500).json({ error: err.message || 'Failed to save bank details' });
+  }
+});
+
 // Wallet deposit directly into database with strict idempotency and race condition protection
 app.post('/api/users/:id/deposit', async (req, res) => {
   const user = await getUserFromDb(req.params.id);
@@ -4670,6 +4746,288 @@ app.post('/api/matches/:id/admin-resolve', async (req, res) => {
   res.json(match);
 });
 
+// ==========================================
+// ⚔️ ABANDONED MATCH SETTLEMENT ENGINE
+// Settles abandoned/stalled matches, refunds players minus platform fee + 10% penalty fee, and routes fees to platform finance
+// ==========================================
+
+async function settleAbandonedMatch(matchId: string, reason: string = 'Inactivity / Abandoned'): Promise<{ match: Match | null; refundedPlayers: number; totalRefunded: number; feesCollected: number }> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const mRes = await client.query(`SELECT * FROM matches WHERE id = ${escapeSql(matchId)} FOR UPDATE`);
+    if (mRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return { match: null, refundedPlayers: 0, totalRefunded: 0, feesCollected: 0 };
+    }
+
+    const matchRow = mRes.rows[0];
+    if (matchRow.status === 'SETTLED' || matchRow.status === 'CANCELLED' || matchRow.status === 'ABANDONED') {
+      await client.query('ROLLBACK');
+      const currentM = await getMatchFromDb(matchId);
+      return { match: currentM, refundedPlayers: 0, totalRefunded: 0, feesCollected: 0 };
+    }
+
+    const creatorData = typeof matchRow.creator_data === 'string' ? JSON.parse(matchRow.creator_data) : (matchRow.creator_data || {});
+    const opponentData = typeof matchRow.opponent_data === 'string' ? JSON.parse(matchRow.opponent_data) : (matchRow.opponent_data || {});
+    const stakeAmount = parseFloat(matchRow.stake_amount) || 0;
+    const now = Date.now();
+
+    // Rake (platform fee) & 10% penalty fee calculation
+    const rakeRate = getRakePercentage(stakeAmount);
+    const platformFeePerPlayer = Math.round(stakeAmount * rakeRate);
+    const penaltyFeePerPlayer = Math.round(stakeAmount * 0.10);
+    const totalDeductionPerPlayer = platformFeePerPlayer + penaltyFeePerPlayer;
+    const refundPerPlayer = Math.max(0, stakeAmount - totalDeductionPerPlayer);
+
+    let totalFeesToPlatform = 0;
+    let totalRefunded = 0;
+    let refundedPlayers = 0;
+    const settledPlayers: string[] = [];
+
+    // Refund Creator if staked
+    if (creatorData.staked && matchRow.creator_id) {
+      await client.query(`
+        UPDATE users 
+        SET balance = balance + ${escapeSql(refundPerPlayer)},
+            escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(stakeAmount)})
+        WHERE id = ${escapeSql(matchRow.creator_id)}
+      `);
+
+      const txC = `tx_abn_${now}_c_${Math.floor(100 + Math.random() * 900)}`;
+      const descC = `⚠️ Abandoned Match #${matchRow.challenge_code} Settled: ₦${refundPerPlayer.toLocaleString()} refunded (minus ₦${platformFeePerPlayer.toLocaleString()} platform fee & ₦${penaltyFeePerPlayer.toLocaleString()} 10% penalty fee)`;
+      await client.query(`
+        INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+        VALUES (${escapeSql(txC)}, ${escapeSql(matchRow.creator_id)}, 'ESCROW_REFUND', ${escapeSql(refundPerPlayer)}, ${escapeSql(descC)}, ${escapeSql(matchId)}, ${now})
+        ON CONFLICT (id) DO NOTHING
+      `);
+
+      totalFeesToPlatform += totalDeductionPerPlayer;
+      totalRefunded += refundPerPlayer;
+      refundedPlayers++;
+      settledPlayers.push(creatorData.codmIgn || 'Creator');
+    }
+
+    // Refund Opponent if staked
+    if (opponentData.staked && matchRow.opponent_id) {
+      await client.query(`
+        UPDATE users 
+        SET balance = balance + ${escapeSql(refundPerPlayer)},
+            escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(stakeAmount)})
+        WHERE id = ${escapeSql(matchRow.opponent_id)}
+      `);
+
+      const txO = `tx_abn_${now}_o_${Math.floor(100 + Math.random() * 900)}`;
+      const descO = `⚠️ Abandoned Match #${matchRow.challenge_code} Settled: ₦${refundPerPlayer.toLocaleString()} refunded (minus ₦${platformFeePerPlayer.toLocaleString()} platform fee & ₦${penaltyFeePerPlayer.toLocaleString()} 10% penalty fee)`;
+      await client.query(`
+        INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+        VALUES (${escapeSql(txO)}, ${escapeSql(matchRow.opponent_id)}, 'ESCROW_REFUND', ${escapeSql(refundPerPlayer)}, ${escapeSql(descO)}, ${escapeSql(matchId)}, ${now})
+        ON CONFLICT (id) DO NOTHING
+      `);
+
+      totalFeesToPlatform += totalDeductionPerPlayer;
+      totalRefunded += refundPerPlayer;
+      refundedPlayers++;
+      settledPlayers.push(opponentData.codmIgn || 'Opponent');
+    }
+
+    // Route collected fees (platform fee + 10% penalty) to admin dashboard balance
+    if (totalFeesToPlatform > 0) {
+      await updatePlatformFinance(totalFeesToPlatform);
+    }
+
+    const resolutionNotes = `Match settled as abandoned (${reason}). Refunded ₦${refundPerPlayer.toLocaleString()} each to ${settledPlayers.length > 0 ? settledPlayers.join(' & ') : 'players'} after deducting ₦${platformFeePerPlayer.toLocaleString()} platform fee + ₦${penaltyFeePerPlayer.toLocaleString()} (10%) penalty fee. Total ₦${totalFeesToPlatform.toLocaleString()} collected for platform.`;
+
+    // Append system message to chat messages
+    const chatMsgs = typeof matchRow.chat_messages === 'string' ? JSON.parse(matchRow.chat_messages) : (matchRow.chat_messages || []);
+    chatMsgs.push({
+      id: `msg_${now}`,
+      senderId: 'SYSTEM',
+      senderName: 'CODM Referee Bot',
+      text: `⚠️ Match #${matchRow.challenge_code} was settled as abandoned. Players refunded ₦${refundPerPlayer.toLocaleString()} each minus platform fee and 10% penalty fee.`,
+      timestamp: now,
+    });
+
+    await client.query(`
+      UPDATE matches 
+      SET status = 'ABANDONED',
+          resolution_notes = ${escapeSql(resolutionNotes)},
+          chat_messages = ${escapeSql(chatMsgs)},
+          settled_at = ${now}
+      WHERE id = ${escapeSql(matchId)}
+    `);
+
+    await client.query('COMMIT');
+    const updatedMatch = await getMatchFromDb(matchId);
+    return {
+      match: updatedMatch,
+      refundedPlayers,
+      totalRefunded,
+      feesCollected: totalFeesToPlatform,
+    };
+  } catch (err: any) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    console.error(`Error settling abandoned match ${matchId}:`, err);
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Background auto-sweep for abandoned matches (runs on boot and every 3 minutes)
+async function sweepAbandonedMatches() {
+  await checkUnconfirmedResultMatches();
+  try {
+    const oneHourAgo = Date.now() - (60 * 60 * 1000); // 1 hour threshold for match creation
+    const thirtyMinsAgo = Date.now() - (30 * 60 * 1000); // 30 mins threshold after room generation
+    const staleRes = await pool.query(`
+      SELECT id, challenge_code, status, created_at, room_generated_at, match_duration_minutes
+      FROM matches
+      WHERE status IN ('READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'DISPUTED')
+        AND (
+          created_at < ${oneHourAgo}
+          OR (room_generated_at IS NOT NULL AND room_generated_at < ${thirtyMinsAgo})
+        )
+      ORDER BY created_at ASC
+      LIMIT 25
+    `);
+
+    if (staleRes.rows.length > 0) {
+      console.log(`🧹 [Abandoned Match Sweep] Found ${staleRes.rows.length} stale match(es) to settle...`);
+      for (const row of staleRes.rows) {
+        try {
+          await settleAbandonedMatch(row.id, 'Automatic match expiration / inactivity timeout');
+          console.log(`✅ Settled abandoned match #${row.challenge_code}`);
+        } catch (mErr: any) {
+          console.warn(`Could not auto-settle match ${row.id}:`, mErr.message);
+        }
+      }
+    }
+  } catch (err: any) {
+    console.warn('⚠️ [Abandoned Match Sweep] Sweep warning:', err.message);
+  }
+}
+
+async function checkUnconfirmedResultMatches() {
+  try {
+    const oneHour = 60 * 60 * 1000;
+    const now = Date.now();
+    const res = await pool.query(`
+      SELECT id, status, creator_data, opponent_data
+      FROM matches
+      WHERE status = 'SUBMITTING_RESULTS'
+    `);
+
+    for (const row of res.rows) {
+      const match = { 
+        ...row, 
+        creator: typeof row.creator_data === 'string' ? JSON.parse(row.creator_data) : row.creator_data,
+        opponent: typeof row.opponent_data === 'string' ? JSON.parse(row.opponent_data) : row.opponent_data
+      };
+
+      if (match.creator.submittedAt && !match.opponent.resultClaim && (now - match.creator.submittedAt > oneHour)) {
+        await settleAbandonedMatch(match.id, 'Automatic settlement: Opponent failed to confirm result within 1 hour');
+      } else if (match.opponent.submittedAt && !match.creator.resultClaim && (now - match.opponent.submittedAt > oneHour)) {
+        await settleAbandonedMatch(match.id, 'Automatic settlement: Creator failed to confirm result within 1 hour');
+      }
+    }
+  } catch (err) {
+    console.error('Error in checkUnconfirmedResultMatches:', err);
+  }
+}
+
+// User / Player or System: Settle an abandoned match
+app.post('/api/matches/:id/abandon', async (req, res) => {
+  try {
+    const matchId = req.params.id;
+    const match = await getMatchFromDb(matchId);
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+
+    if (match.status === 'SETTLED' || match.status === 'CANCELLED' || match.status === 'ABANDONED') {
+      return res.status(400).json({ error: `Match has already been ${match.status.toLowerCase()}` });
+    }
+
+    const { reason = 'Abandoned / stalled match' } = req.body || {};
+    const result = await settleAbandonedMatch(matchId, reason);
+
+    res.json({
+      success: true,
+      message: `Match settled as abandoned. Players refunded minus platform fee and 10% penalty fee.`,
+      match: result.match,
+      data: result,
+    });
+  } catch (err: any) {
+    console.error('Error settling abandoned match:', err);
+    res.status(500).json({ error: err.message || 'Failed to settle abandoned match' });
+  }
+});
+
+// Admin: Settle abandoned match explicitly
+app.post('/api/admin/matches/:id/abandon', async (req, res) => {
+  try {
+    const matchId = req.params.id;
+    const { userId, reason = 'Admin settled as abandoned' } = req.body || {};
+    const adminUser = await getUserFromDb(userId);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    }
+
+    const result = await settleAbandonedMatch(matchId, reason);
+    res.json({
+      success: true,
+      message: `Match settled as abandoned. Refunds processed.`,
+      match: result.match,
+      data: result,
+    });
+  } catch (err: any) {
+    console.error('Error in admin abandon match:', err);
+    res.status(500).json({ error: err.message || 'Failed to settle abandoned match' });
+  }
+});
+
+// Admin: Fetch all matches (with filter for active/disputed/abandoned)
+app.get('/api/admin/matches', async (req, res) => {
+  try {
+    const { userId, status } = req.query;
+    const adminUser = await getUserFromDb(userId as string);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    }
+
+    let queryStr = `SELECT * FROM matches`;
+    if (status && status !== 'all') {
+      queryStr += ` WHERE status = ${escapeSql(status as string)}`;
+    }
+    queryStr += ` ORDER BY created_at DESC LIMIT 100`;
+
+    const mRes = await pool.query(queryStr);
+    const matches = mRes.rows.map((m) => ({
+      id: m.id,
+      challengeCode: m.challenge_code,
+      roomCode: m.room_code || undefined,
+      gameMode: m.game_mode,
+      map: m.map,
+      stakeAmount: parseFloat(m.stake_amount),
+      potAmount: parseFloat(m.pot_amount),
+      platformFee: parseFloat(m.platform_fee || 0),
+      winnerPayout: parseFloat(m.winner_payout),
+      status: m.status,
+      createdAt: parseInt(m.created_at, 10),
+      creator: typeof m.creator_data === 'string' ? JSON.parse(m.creator_data) : m.creator_data,
+      opponent: m.opponent_data ? (typeof m.opponent_data === 'string' ? JSON.parse(m.opponent_data) : m.opponent_data) : undefined,
+      winnerId: m.winner_id || undefined,
+      winnerIgn: m.winner_ign || undefined,
+      resolutionNotes: m.resolution_notes || undefined,
+      settledAt: m.settled_at ? parseInt(m.settled_at, 10) : undefined,
+    }));
+
+    res.json({ matches });
+  } catch (err: any) {
+    console.error('Error fetching admin matches:', err);
+    res.status(500).json({ error: err.message || 'Failed to fetch matches' });
+  }
+});
+
 
 // ==========================================
 // 📧 GMAIL IMAP SYNC ENGINE & ADMIN MAILBOX
@@ -4861,6 +5219,10 @@ async function startServer() {
   await initDatabase();
   await initGmailTables();
   startGmailAutoSyncService();
+
+  // Start background auto-sweep for abandoned / expired matches
+  sweepAbandonedMatches().catch(e => console.warn('Initial sweepAbandonedMatches error:', e));
+  setInterval(sweepAbandonedMatches, 3 * 60 * 1000);
 
   // Always serve static public assets
   const publicPath = path.resolve(__dirname, 'public');
