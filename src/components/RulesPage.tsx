@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   ShieldCheck, Swords, Trophy, Camera, AlertTriangle, Scale,
-  CheckCircle2, Lock, Sparkles, Users, Crosshair, ArrowRight
+  CheckCircle2, Lock, Sparkles, Users, Crosshair, ArrowRight, Clock
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 

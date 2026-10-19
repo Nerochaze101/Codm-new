@@ -133,11 +133,18 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
     return () => clearInterval(interval);
   }, [myActiveMatch]);
 
+  const [searchQuery, setSearchQuery] = useState('');
+  
   // Open matches created by others that currentUser can join
   const openChallenges = matches.filter(
     (m) => m.status === 'PENDING_OPPONENT_STAKE' && m.creator.id !== currentUser.id
   );
 
+  const filteredChallenges = openChallenges.filter(m => 
+    m.challengeCode.toUpperCase().includes(searchQuery.toUpperCase()) ||
+    m.id.toUpperCase().includes(searchQuery.toUpperCase())
+  );
+  
   const isCreatorOfActive = myActiveMatch?.creator.id === currentUser.id;
 
   const copyCode = (code: string) => {
@@ -1033,18 +1040,35 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
           </div>
 
           {/* 3. LIVE OPEN CHALLENGES MATCHMAKING LOBBY */}
-          {openChallenges.length > 0 && (
-            <div className="space-y-4 pt-4">
-              <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider text-neutral-400 font-mono">
-                <div className="flex items-center gap-2">
-                  <Flame className="w-4 h-4 text-amber-400" />
-                  <span>Live Open Challenges (Accept & Send Stake)</span>
-                </div>
-                <span className="text-amber-400 font-mono-nums">{openChallenges.length} Open Matches</span>
+          <div className="space-y-4 pt-4">
+            <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider text-neutral-400 font-mono">
+              <div className="flex items-center gap-2">
+                <Flame className="w-4 h-4 text-amber-400" />
+                <span>Live Open Challenges (Accept & Send Stake)</span>
               </div>
-
+              <span className="text-amber-400 font-mono-nums">{openChallenges.length} Open Matches</span>
+            </div>
+            
+            {/* SEARCH BAR */}
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="Search Challenge Code (e.g. #CODM-8291-SHI)..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-neutral-900 border border-neutral-700 rounded-2xl py-3 px-4 text-sm text-white focus:ring-2 focus:ring-amber-500 transition"
+              />
+            </div>
+            
+            {openChallenges.filter(m => 
+              m.challengeCode.toUpperCase().includes(searchQuery.toUpperCase()) ||
+              m.id.toUpperCase().includes(searchQuery.toUpperCase())
+            ).length > 0 && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {openChallenges.map((m) => {
+                {openChallenges.filter(m => 
+                  m.challengeCode.toUpperCase().includes(searchQuery.toUpperCase()) ||
+                  m.id.toUpperCase().includes(searchQuery.toUpperCase())
+                ).map((m) => {
                   return (
                     <div
                       key={m.id}
@@ -1085,8 +1109,8 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                   );
                 })}
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
 
