@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { UserProfile } from '../types';
 import { X, Building2, Zap, AlertCircle, CheckCircle2, ShieldCheck, ArrowLeft, AlertTriangle } from 'lucide-react';
+import { calculateWithdrawalFee } from '../utils/feeCalculator';
 
 interface CashOutModalProps {
   isOpen: boolean;
@@ -118,6 +119,7 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
 
   const parsedAmount = parseInt(amountInput, 10);
   const amountToWithdraw = isNaN(parsedAmount) ? 0 : parsedAmount;
+  const withdrawalCalc = calculateWithdrawalFee(amountToWithdraw);
 
   // Step 1: Validate and move to confirmation screen
   const handleProceedToReview = (e: React.FormEvent) => {
@@ -129,8 +131,8 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
       return;
     }
 
-    if (amountToWithdraw + 50 > currentUser.balance) {
-      setError(`Insufficient balance (includes ₦50 withdrawal fee). Maximum available withdrawal is ₦${Math.max(0, currentUser.balance - 50).toLocaleString()}`);
+    if (withdrawalCalc.totalDeduction > currentUser.balance) {
+      setError(`Insufficient balance (includes ₦${withdrawalCalc.totalFee.toFixed(2)} withdrawal fee). Maximum available withdrawal is ₦${Math.max(0, currentUser.balance - withdrawalCalc.totalFee).toLocaleString()}`);
       return;
     }
 
@@ -250,13 +252,13 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
 
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-neutral-400">Withdrawal Fee</span>
-                  <span className="font-bold text-amber-300 font-mono">₦50.00</span>
+                  <span className="font-bold text-amber-300 font-mono">₦{withdrawalCalc.totalFee.toFixed(2)}</span>
                 </div>
 
                 <div className="flex items-center justify-between text-xs pb-2 border-b border-neutral-800/80">
                   <span className="text-neutral-400 font-bold">Total Wallet Deduction</span>
                   <span className="font-black text-white font-mono-nums">
-                    ₦{(amountToWithdraw + 50).toLocaleString()}
+                    ₦{withdrawalCalc.totalDeduction.toLocaleString()}
                   </span>
                 </div>
 
@@ -285,7 +287,7 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
                 <div className="pt-2.5 border-t border-neutral-800/80 flex items-center justify-between text-xs">
                   <span className="text-neutral-400">Remaining Balance</span>
                   <span className="font-bold text-neutral-300 font-mono-nums">
-                    ₦{Math.max(0, currentUser.balance - (amountToWithdraw + 50)).toLocaleString()}
+                    ₦{Math.max(0, currentUser.balance - withdrawalCalc.totalDeduction).toLocaleString()}
                   </span>
                 </div>
               </div>
