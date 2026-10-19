@@ -100,8 +100,9 @@ export const RulesPage: React.FC<RulesPageProps> = ({
       {/* 3. New Rule Sections */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Rule 1: Automatic Result Settlement */}
-        <div className="p-6 rounded-3xl bg-neutral-900 border border-amber-500/40 space-y-4 shadow-xl">
-          <div className="flex items-center gap-3">
+        <div className="p-6 rounded-3xl bg-neutral-900 border border-amber-500/40 space-y-4 shadow-xl relative overflow-hidden">
+          <img src={CODM_IMAGES.rulesFairPlayBg} className="absolute inset-0 w-full h-full object-cover opacity-10" />
+          <div className="relative z-10 flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
               <Clock className="w-5 h-5" />
             </div>
@@ -111,14 +112,15 @@ export const RulesPage: React.FC<RulesPageProps> = ({
               </h3>
             </div>
           </div>
-          <p className="text-xs text-neutral-300 leading-relaxed">
+          <p className="text-xs text-neutral-300 leading-relaxed relative z-10">
             When a match is finished and a player submits a result, the opponent has <strong>60 minutes</strong> to confirm or dispute. If they fail to do so, the win is automatically awarded to the first claimant.
           </p>
         </div>
 
         {/* Rule 2: Abandoned Match Policy & Penalties */}
-        <div className="p-6 rounded-3xl bg-neutral-900 border border-rose-500/30 space-y-4 shadow-xl">
-          <div className="flex items-center gap-3">
+        <div className="p-6 rounded-3xl bg-neutral-900 border border-rose-500/30 space-y-4 shadow-xl relative overflow-hidden">
+          <img src={CODM_IMAGES.rulesFairPlayBg} className="absolute inset-0 w-full h-full object-cover opacity-10" />
+          <div className="relative z-10 flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
               <AlertTriangle className="w-5 h-5" />
             </div>
@@ -128,14 +130,15 @@ export const RulesPage: React.FC<RulesPageProps> = ({
               </h3>
             </div>
           </div>
-          <p className="text-xs text-neutral-300 leading-relaxed">
+          <p className="text-xs text-neutral-300 leading-relaxed relative z-10">
             Stalled matches are subject to automated settlement. Abandoned matches incur a <strong>10% abandonment penalty</strong> on the stake, in addition to the standard platform fee. Remaining stakes are refunded to both players.
           </p>
         </div>
 
         {/* Rule 3: Weapon Loadouts & Agreement */}
-        <div className="p-6 rounded-3xl bg-neutral-900 border border-neutral-800 space-y-4 shadow-xl">
-          <div className="flex items-center gap-3">
+        <div className="p-6 rounded-3xl bg-neutral-900 border border-neutral-800 space-y-4 shadow-xl relative overflow-hidden">
+          <img src={CODM_IMAGES.rulesFairPlayBg} className="absolute inset-0 w-full h-full object-cover opacity-10" />
+          <div className="relative z-10 flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
               <Crosshair className="w-5 h-5" />
             </div>
@@ -145,10 +148,10 @@ export const RulesPage: React.FC<RulesPageProps> = ({
               </h3>
             </div>
           </div>
-          <p className="text-xs text-neutral-300 leading-relaxed">
+          <p className="text-xs text-neutral-300 leading-relaxed relative z-10">
             Players are permitted to use any weapon loadout mutually agreed upon by both parties. In the absence of an agreement, these rules apply:
           </p>
-          <ul className="space-y-2.5 text-xs text-neutral-300">
+          <ul className="space-y-2.5 text-xs text-neutral-300 relative z-10">
             <li className="flex items-start gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
               <span>Allowed Snipers: DL Q33, Locus, Koshka, Arctic.50, Outlaw.</span>
@@ -161,8 +164,9 @@ export const RulesPage: React.FC<RulesPageProps> = ({
         </div>
 
         {/* Rule 4: AI Scoreboard */}
-        <div className="p-6 rounded-3xl bg-neutral-900 border border-neutral-800 space-y-4 shadow-xl">
-          <div className="flex items-center gap-3">
+        <div className="p-6 rounded-3xl bg-neutral-900 border border-neutral-800 space-y-4 shadow-xl relative overflow-hidden">
+          <img src={CODM_IMAGES.rulesFairPlayBg} className="absolute inset-0 w-full h-full object-cover opacity-10" />
+          <div className="relative z-10 flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
               <Camera className="w-5 h-5" />
             </div>
@@ -172,14 +176,15 @@ export const RulesPage: React.FC<RulesPageProps> = ({
               </h3>
             </div>
           </div>
-          <p className="text-xs text-neutral-300 leading-relaxed">
+          <p className="text-xs text-neutral-300 leading-relaxed relative z-10">
             Final results require an end-game scoreboard screenshot for automated AI verification.
           </p>
         </div>
 
         {/* Rule 5: Dispute Protocol */}
-        <div className="p-6 rounded-3xl bg-neutral-900 border border-neutral-800 space-y-4 shadow-xl">
-          <div className="flex items-center gap-3">
+        <div className="p-6 rounded-3xl bg-neutral-900 border border-neutral-800 space-y-4 shadow-xl relative overflow-hidden">
+          <img src={CODM_IMAGES.rulesFairPlayBg} className="absolute inset-0 w-full h-full object-cover opacity-10" />
+          <div className="relative z-10 flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
               <Scale className="w-5 h-5" />
             </div>
@@ -189,7 +194,7 @@ export const RulesPage: React.FC<RulesPageProps> = ({
               </h3>
             </div>
           </div>
-          <p className="text-xs text-neutral-300 leading-relaxed">
+          <p className="text-xs text-neutral-300 leading-relaxed relative z-10">
             Conflicting results freeze the escrow pot for human admin review. Ties/draws result in a 100% stake refund.
           </p>
         </div>

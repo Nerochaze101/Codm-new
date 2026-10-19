@@ -42,6 +42,12 @@ export const CODM_IMAGES = {
   scoreVictory: scoreVictoryLocal || '/images/codm_score_victory_1791303464940.jpg',
   scoreVictoryFallback: 'https://images.unsplash.com/photo-1563089145-599997674d42?auto=format&fit=crop&w=1200&q=80',
 
+  // New Card Backgrounds
+  combatTacticalBg: '/src/assets/images/combat_tactical_card_bg_1792421460463.jpg',
+  rulesFairPlayBg: '/src/assets/images/rules_fair_play_bg_1792421473289.jpg',
+  adminDashboardBg: '/src/assets/images/admin_dashboard_bg_1792421488185.jpg',
+  walletFinanceBg: '/src/assets/images/wallet_finance_bg_1792421500912.jpg',
+
   // Maps gallery
   maps: {
     Shipment: sniperShipmentLocal || 'https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=800&q=80',

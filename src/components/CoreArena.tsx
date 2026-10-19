@@ -1072,39 +1072,42 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                   return (
                     <div
                       key={m.id}
-                      className="p-5 rounded-2xl bg-neutral-900 border border-neutral-800 hover:border-amber-400/60 transition-all space-y-4 shadow-lg"
+                      className="p-5 rounded-2xl bg-neutral-900 border border-neutral-800 hover:border-amber-400/60 transition-all space-y-4 shadow-lg relative overflow-hidden"
                     >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-mono-nums bg-amber-500/15 text-amber-400 border border-amber-500/30 px-2.5 py-1 rounded-lg font-black">
-                          CHALLENGE: #{m.challengeCode}
-                        </span>
-                        <span className="text-sm font-mono-nums font-black text-emerald-400">
-                          ₦{m.stakeAmount.toLocaleString()} Stake
-                        </span>
-                      </div>
-
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="font-heading font-black text-white text-sm uppercase">{m.gameMode}</div>
-                          <div className="text-xs text-neutral-400 font-medium mt-0.5">Map: <strong className="text-neutral-200">{m.map}</strong> · Host: <strong className="text-amber-400">{m.creator.codmIgn}</strong></div>
+                      <img src={CODM_IMAGES.combatTacticalBg} className="absolute inset-0 w-full h-full object-cover opacity-10" />
+                      <div className="relative z-10">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-mono-nums bg-amber-500/15 text-amber-400 border border-amber-500/30 px-2.5 py-1 rounded-lg font-black">
+                            CHALLENGE: #{m.challengeCode}
+                          </span>
+                          <span className="text-sm font-mono-nums font-black text-emerald-400">
+                            ₦{m.stakeAmount.toLocaleString()} Stake
+                          </span>
                         </div>
-                        <div className="text-right">
-                          <div className="text-[10px] text-neutral-400 uppercase font-mono">Winner Pot</div>
-                          <div className="font-black text-amber-400 font-mono-nums text-sm">₦{m.winnerPayout.toLocaleString()}</div>
-                        </div>
-                      </div>
 
-                      <button
-                        onClick={() => {
-                          setStakeTargetMatch(m);
-                          setStakeRole('opponent');
-                          setIsStakeModalOpen(true);
-                        }}
-                        className="w-full py-3 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide shadow-md"
-                      >
-                        <Lock className="w-4 h-4 stroke-[2.5]" />
-                        <span>Accept & Send ₦{m.stakeAmount.toLocaleString()} Stake</span>
-                      </button>
+                        <div className="flex items-center justify-between mt-4">
+                          <div>
+                            <div className="font-heading font-black text-white text-sm uppercase">{m.gameMode}</div>
+                            <div className="text-xs text-neutral-400 font-medium mt-0.5">Map: <strong className="text-neutral-200">{m.map}</strong> · Host: <strong className="text-amber-400">{m.creator.codmIgn}</strong></div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-[10px] text-neutral-400 uppercase font-mono">Winner Pot</div>
+                            <div className="font-black text-amber-400 font-mono-nums text-sm">₦{m.winnerPayout.toLocaleString()}</div>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => {
+                            setStakeTargetMatch(m);
+                            setStakeRole('opponent');
+                            setIsStakeModalOpen(true);
+                          }}
+                          className="w-full py-3 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide shadow-md mt-4"
+                        >
+                          <Lock className="w-4 h-4 stroke-[2.5]" />
+                          <span>Accept & Send ₦{m.stakeAmount.toLocaleString()} Stake</span>
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
