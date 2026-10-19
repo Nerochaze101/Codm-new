@@ -158,9 +158,12 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
     (m) => m.status === 'PENDING_OPPONENT_STAKE' && m.creator.id !== currentUser.id
   );
 
+  const cleanedQuery = searchQuery.trim().replace(/^#/, '').replace(/.*\?join=/, '').toUpperCase();
   const filteredChallenges = openChallenges.filter(m => 
-    m.challengeCode.toUpperCase().includes(searchQuery.toUpperCase()) ||
-    m.id.toUpperCase().includes(searchQuery.toUpperCase())
+    cleanedQuery === '' ||
+    m.challengeCode.toUpperCase().includes(cleanedQuery) ||
+    m.id.toUpperCase().includes(cleanedQuery) ||
+    (m.roomCode && m.roomCode.toUpperCase().includes(cleanedQuery))
   );
   
   const isCreatorOfActive = myActiveMatch?.creator.id === currentUser.id;
@@ -1078,15 +1081,9 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
               />
             </div>
             
-            {openChallenges.filter(m => 
-              m.challengeCode.toUpperCase().includes(searchQuery.toUpperCase()) ||
-              m.id.toUpperCase().includes(searchQuery.toUpperCase())
-            ).length > 0 && (
+            {filteredChallenges.length > 0 && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {openChallenges.filter(m => 
-                  m.challengeCode.toUpperCase().includes(searchQuery.toUpperCase()) ||
-                  m.id.toUpperCase().includes(searchQuery.toUpperCase())
-                ).map((m) => {
+                {filteredChallenges.map((m) => {
                   return (
                     <div
                       key={m.id}

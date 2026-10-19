@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import { Match, UserProfile } from '../types';
-import { X, Swords, ShieldCheck, Wallet, CheckCircle, ArrowRight, AlertCircle, Sparkles } from 'lucide-react';
+import { X, Swords, ShieldCheck, Wallet, CheckCircle, ArrowRight, AlertCircle, Sparkles, LogIn } from 'lucide-react';
 
 interface OpponentOnboardingModalProps {
   match: Match | null;
   isOpen: boolean;
+  currentUser: UserProfile;
   onClose: () => void;
+  onLoginExisting: (identifier: string) => Promise<void>;
   onCompleteOnboarding: (userData: {
     codmIgn: string;
     codmUid?: string;
@@ -18,19 +20,23 @@ interface OpponentOnboardingModalProps {
 export const OpponentOnboardingModal: React.FC<OpponentOnboardingModalProps> = ({
   match,
   isOpen,
+  currentUser,
   onClose,
+  onLoginExisting,
   onCompleteOnboarding,
 }) => {
+  const [authMode, setAuthMode] = useState<'register' | 'login'>(currentUser.id !== 'guest' ? 'register' : 'register');
   const [codmIgn, setCodmIgn] = useState('');
   const [codmUid, setCodmUid] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('+234 8');
+  const [loginIdentifier, setLoginIdentifier] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   if (!isOpen || !match) return null;
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!codmIgn.trim()) {
       setError('Please enter your Call of Duty: Mobile In-Game Name (IGN)');
@@ -50,6 +56,25 @@ export const OpponentOnboardingModal: React.FC<OpponentOnboardingModalProps> = (
       onClose();
     } catch (err: any) {
       setError(err.message || 'Onboarding failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!loginIdentifier.trim()) {
+      setError('Please enter your email, username, or CODM IGN');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      await onLoginExisting(loginIdentifier.trim());
+      onClose();
+    } catch (err: any) {
+      setError(err.message || 'Failed to sign in');
     } finally {
       setLoading(false);
     }
@@ -78,7 +103,7 @@ export const OpponentOnboardingModal: React.FC<OpponentOnboardingModalProps> = (
         </div>
 
         {/* Content */}
-        <form onSubmit={handleSubmit} className="p-4 overflow-y-auto space-y-3">
+        <div className="p-4 overflow-y-auto space-y-3">
           {error && (
             <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
@@ -119,92 +144,166 @@ export const OpponentOnboardingModal: React.FC<OpponentOnboardingModalProps> = (
             </div>
           </div>
 
-          {/* Form: CODM Gamer Credentials */}
-          <div className="space-y-3">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300">
-              Gamer Profile Registration
-            </h3>
-
-            <div>
-              <label className="text-xs font-medium text-neutral-300 block mb-1">
-                Your CODM In-Game Name (IGN) <span className="text-amber-400">*</span>
-              </label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. DeltaSniper_NG"
-                value={codmIgn}
-                onChange={(e) => setCodmIgn(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-sm focus:border-amber-400 focus:outline-none"
-              />
-              <p className="text-[11px] text-neutral-400 mt-1">
-                Must match your exact in-game name so victory screenshots can be verified.
+          {/* Already logged in banner or Tab Selector */}
+          {currentUser.id !== 'guest' ? (
+            <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 space-y-3 text-center">
+              <div className="flex items-center justify-center gap-2 text-emerald-400 text-xs font-bold">
+                <ShieldCheck className="w-4 h-4" />
+                <span>Logged in as {currentUser.codmIgn}</span>
+              </div>
+              <p className="text-[11px] text-neutral-300">
+                You can accept this 1v1 challenge instantly using your existing account.
               </p>
+              <button
+                type="button"
+                disabled={loading}
+                onClick={async () => {
+                  setLoading(true);
+                  setError(null);
+                  try {
+                    await onCompleteOnboarding({
+                      codmIgn: currentUser.codmIgn,
+                      codmUid: currentUser.codmUid,
+                      email: currentUser.email,
+                      phone: currentUser.phone,
+                      initialDeposit: 0,
+                    });
+                    onClose();
+                  } catch (err: any) {
+                    setError(err.message || 'Failed to accept match');
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+                className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs uppercase tracking-wide cursor-pointer transition-all shadow-md flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {loading ? 'Accepting Match...' : `Accept Challenge as ${currentUser.codmIgn}`}
+              </button>
             </div>
-
-            <div>
-              <label className="text-xs font-medium text-neutral-300 block mb-1">
-                CODM Player ID (UID)
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. 6829471928371902"
-                value={codmUid}
-                onChange={(e) => setCodmUid(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono-nums text-sm focus:border-amber-400 focus:outline-none"
-              />
-              <p className="text-[11px] text-neutral-400 mt-1">
-                Found in your CODM profile tab.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-medium text-neutral-300 block mb-1">
-                  Email Address
-                </label>
-                <input
-                  type="email"
-                  placeholder="gamer@gmail.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-xs focus:border-amber-400 focus:outline-none"
-                />
+          ) : (
+            <div className="space-y-4">
+              {/* Tabs */}
+              <div className="flex rounded-xl bg-neutral-950 p-1 border border-neutral-800">
+                <button
+                  type="button"
+                  onClick={() => setAuthMode('register')}
+                  className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                    authMode === 'register'
+                      ? 'bg-amber-400 text-neutral-950 shadow'
+                      : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  New Account (Sign Up)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAuthMode('login')}
+                  className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                    authMode === 'login'
+                      ? 'bg-amber-400 text-neutral-950 shadow'
+                      : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  Existing Account (Log In)
+                </button>
               </div>
 
-              <div>
-                <label className="text-xs font-medium text-neutral-300 block mb-1">
-                  WhatsApp / Phone
-                </label>
-                <input
-                  type="tel"
-                  placeholder="+234 812 345 6789"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-xs focus:border-amber-400 focus:outline-none"
-                />
-              </div>
-            </div>
-          </div>
+              {authMode === 'register' ? (
+                <form onSubmit={handleRegisterSubmit} className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-neutral-300 block mb-1">
+                      Your CODM In-Game Name (IGN) <span className="text-amber-400">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. DeltaSniper_NG"
+                      value={codmIgn}
+                      onChange={(e) => setCodmIgn(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-sm focus:border-amber-400 focus:outline-none"
+                    />
+                  </div>
 
-          {/* Submit */}
-          <div className="pt-2">
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-bold rounded-xl text-sm transition-all cursor-pointer shadow-lg disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              {loading ? (
-                <span>Registering Profile...</span>
+                  <div>
+                    <label className="text-xs font-medium text-neutral-300 block mb-1">
+                      CODM Player ID (UID)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. 6829471928371902"
+                      value={codmUid}
+                      onChange={(e) => setCodmUid(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono-nums text-sm focus:border-amber-400 focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-medium text-neutral-300 block mb-1">
+                        Email Address
+                      </label>
+                      <input
+                        type="email"
+                        placeholder="gamer@gmail.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-xs focus:border-amber-400 focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium text-neutral-300 block mb-1">
+                        WhatsApp / Phone
+                      </label>
+                      <input
+                        type="tel"
+                        placeholder="+234 812 345 6789"
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-xs focus:border-amber-400 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-bold rounded-xl text-sm transition-all cursor-pointer shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 mt-2"
+                  >
+                    {loading ? 'Creating Account...' : 'Sign Up & Accept Challenge'}
+                  </button>
+                </form>
               ) : (
-                <>
-                  <Swords className="w-4 h-4" />
-                  <span>Sign Up & Enter Match Room</span>
-                </>
+                <form onSubmit={handleLoginSubmit} className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-neutral-300 block mb-1">
+                      Email, Username or CODM IGN <span className="text-amber-400">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. onelly103@gmail.com or CODM_Gamer"
+                      value={loginIdentifier}
+                      onChange={(e) => setLoginIdentifier(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-sm focus:border-amber-400 focus:outline-none"
+                    />
+                    <p className="text-[11px] text-neutral-400 mt-1">
+                      Enter your registered email or CODM IGN to sign in instantly.
+                    </p>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-bold rounded-xl text-sm transition-all cursor-pointer shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 mt-2"
+                  >
+                    {loading ? 'Signing In...' : 'Log In & Accept Challenge'}
+                  </button>
+                </form>
               )}
-            </button>
-          </div>
-        </form>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

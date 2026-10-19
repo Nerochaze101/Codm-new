@@ -572,9 +572,23 @@ function MainApp() {
       <OpponentOnboardingModal
         match={onboardingTargetMatch}
         isOpen={isOnboardingModalOpen}
+        currentUser={currentUser}
         onClose={() => {
           setIsOnboardingModalOpen(false);
           setOnboardingTargetMatch(null);
+        }}
+        onLoginExisting={async (identifier) => {
+          const u = await signInUser({ identifier });
+          setCurrentUser(u);
+          localStorage.setItem('codm_current_user_id', u.id);
+          await loadData(u.id);
+          if (onboardingTargetMatch) {
+            await joinMatch(onboardingTargetMatch.id, u.id);
+            await loadData(u.id);
+          }
+          setIsOnboardingModalOpen(false);
+          setOnboardingTargetMatch(null);
+          navigate('/arena');
         }}
         onCompleteOnboarding={handleCompleteOnboarding}
       />
