@@ -1699,34 +1699,35 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
     }
 
     const matchedEmail = emailsRes.rows[0];
-    const expectedAmount = parseFloat(dep.amount);
+    const baseDepositAmount = parseFloat(dep.amount);
+    const expectedTransfer = baseDepositAmount + 15.5;
     const parsedEmailAmt = extractAmountFromEmailText(matchedEmail.subject + ' ' + matchedEmail.body);
 
-    // Strict validation: The transferred amount must match the requested amount
-    if (parsedEmailAmt !== null && Math.abs(parsedEmailAmt - expectedAmount) > 0.01) {
+    // Strict validation: The transferred amount must match expectedTransfer (base deposit + 15.5 fee)
+    if (parsedEmailAmt !== null && Math.abs(parsedEmailAmt - expectedTransfer) > 0.01) {
       await client.query("ROLLBACK");
       client.release();
       return res.status(400).json({
-        error: `The transferred amount (₦${parsedEmailAmt.toLocaleString()}) does not match your deposit request of ₦${expectedAmount.toLocaleString()}. Please transfer the exact amount requested.`
+        error: `The transferred amount (₦${parsedEmailAmt.toLocaleString()}) does not match the required total of ₦${expectedTransfer.toLocaleString()} (₦${baseDepositAmount.toLocaleString()} deposit + ₦15.50 processing fee). Please transfer the exact amount requested.`
       });
     }
 
     const fullText = (matchedEmail.subject + ' ' + matchedEmail.body).toLowerCase();
-    const numStr = expectedAmount.toString();
-    const numFormatted = expectedAmount.toLocaleString('en-US');
+    const numStr = expectedTransfer.toString();
+    const numFormatted = expectedTransfer.toLocaleString('en-US');
     const containsExpected = fullText.includes(numStr) || fullText.includes(numFormatted);
 
     if (!containsExpected && parsedEmailAmt === null) {
       await client.query("ROLLBACK");
       client.release();
       return res.status(400).json({
-        error: `Could not verify a transfer of ₦${expectedAmount.toLocaleString()} for this transaction. Please confirm the amount on your receipt.`
+        error: `Could not verify a transfer of ₦${expectedTransfer.toLocaleString()} for this transaction. Please confirm the amount on your receipt.`
       });
     }
 
-    // Credit user wallet balance atomically with the verified expected amount
+    // Credit user wallet balance atomically with baseDepositAmount, and send 5.50 platform fee to admin dashboard balance
     const now = Date.now();
-    const amountToCredit = expectedAmount;
+    const amountToCredit = baseDepositAmount;
 
     await client.query(`
       UPDATE deposit_requests 
@@ -1742,6 +1743,9 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
       WHERE id = ${escapeSql(dep.user_id)} 
       RETURNING balance;
     `);
+
+    // Send 5.50 (15.5 total fee minus 10 gateway fee) to admin dashboard balance
+    await updatePlatformFinance(5.5);
 
     const newBalance = parseFloat(balRes.rows[0].balance);
     const txId = `tx_dep_${now}_${Math.floor(100 + Math.random() * 900)}`;
@@ -3578,10 +3582,11 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
     }
     const userRow = userLockRes.rows[0];
     const currentBalance = parseFloat(userRow.balance || 0);
-    if (numAmount > currentBalance) {
+    const totalDeduction = numAmount + 50;
+    if (totalDeduction > currentBalance) {
       await client.query('ROLLBACK');
       return res.status(400).json({
-        error: `Insufficient balance for cashout. Available: ₦${currentBalance.toLocaleString()}`,
+        error: `Insufficient balance (includes ₦50 withdrawal fee). Available: ₦${currentBalance.toLocaleString()}`,
       });
     }
 
@@ -3598,16 +3603,19 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
     const cleanAccNum = (accountNumber || userRow.account_number || '').trim();
     const cleanAccName = (accountName || userRow.account_name || '').trim();
 
-    // Deduct balance instantly
+    // Deduct total balance (withdrawal amount + 50 fee) instantly
     await client.query(`
-      UPDATE users SET balance = balance - ${escapeSql(numAmount)} WHERE id = ${escapeSql(userId)}
+      UPDATE users SET balance = balance - ${escapeSql(totalDeduction)} WHERE id = ${escapeSql(userId)}
     `);
+
+    // Send 40 withdrawal fee to admin dashboard balance (10 disappears as Flutterwave fee)
+    await updatePlatformFinance(40);
 
     const wdId = `wd_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
     const userIgn = userRow.codm_ign || userRow.username || 'Gladiator';
     const remark = `CODM-${userIgn.slice(0, 10).toUpperCase()}-${cleanAccNum.slice(-4)}`;
 
-    // Trigger Flutterwave Transfer API instantly
+    // Trigger Flutterwave Transfer API instantly for numAmount
     const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || '';
     const flwCode = getFlutterwaveBankCode(cleanBank, bankCode);
     let transferResponse: any = null;
@@ -3643,11 +3651,11 @@ app.post('/api/users/:id/withdraw', async (req, res) => {
       transferResponse = { status: 'success', message: 'Simulated instant payout via Flutterwave test mode' };
     }
 
-    const desc = `⚡ Instant Withdrawal Sent via Flutterwave: ₦${numAmount.toLocaleString()} to ${cleanBank} (${cleanAccNum})`;
+    const desc = `⚡ Instant Withdrawal: ₦${numAmount.toLocaleString()} (+ ₦50 fee) to ${cleanBank} (${cleanAccNum})`;
 
     await client.query(`
       INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
-      VALUES (${escapeSql(txId)}, ${escapeSql(userId)}, 'WITHDRAWAL', ${escapeSql(numAmount)}, ${escapeSql(desc)}, ${Date.now()})
+      VALUES (${escapeSql(txId)}, ${escapeSql(userId)}, 'WITHDRAWAL', ${escapeSql(totalDeduction)}, ${escapeSql(desc)}, ${Date.now()})
     `);
 
     await client.query(`

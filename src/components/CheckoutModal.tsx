@@ -220,9 +220,9 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         {/* Amount & Timer Bar */}
         <div className="px-6 py-4 bg-neutral-950 border-b border-neutral-800 flex items-center justify-between">
           <div>
-            <span className="text-[10px] font-mono uppercase text-neutral-400 block">Total Due Amount</span>
+            <span className="text-[10px] font-mono uppercase text-neutral-400 block">Total Due Amount (Incl. ₦15.50 Fee)</span>
             <div className="text-2xl sm:text-3xl font-black text-amber-400 font-mono-nums tracking-tight">
-              ₦{amount.toLocaleString()}
+              ₦{(amount + 15.5).toLocaleString(undefined, { minimumFractionDigits: amount % 1 !== 0 ? 2 : 0, maximumFractionDigits: 2 })}
             </div>
           </div>
           <div className="text-right">
@@ -312,14 +312,22 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                       <span className="font-bold text-white text-right">Quadri Abdulsalam</span>
                     </div>
 
-                    <div className="flex items-center justify-between py-1.5 border-t border-neutral-900 pt-2">
-                      <span className="text-neutral-400 font-mono">Exact Due Amount:</span>
-                      <span className="font-black text-amber-400 font-mono text-base">₦{amount.toLocaleString()}</span>
+                    <div className="flex items-center justify-between py-1 text-xs">
+                      <span className="text-neutral-400 font-mono">Wallet Credit:</span>
+                      <span className="font-bold text-white font-mono">₦{amount.toLocaleString()}</span>
+                    </div>
+                    <div className="flex items-center justify-between py-1 text-xs">
+                      <span className="text-neutral-400 font-mono">Processing Fee:</span>
+                      <span className="font-bold text-amber-300 font-mono">₦15.50</span>
+                    </div>
+                    <div className="flex items-center justify-between py-1.5 border-t border-neutral-800 pt-2">
+                      <span className="text-neutral-400 font-mono font-bold">Exact Due Amount:</span>
+                      <span className="font-black text-amber-400 font-mono text-base">₦{(amount + 15.5).toLocaleString(undefined, { minimumFractionDigits: amount % 1 !== 0 ? 2 : 0, maximumFractionDigits: 2 })}</span>
                     </div>
                   </div>
 
                   <p className="text-[11px] text-neutral-400 leading-relaxed pt-1">
-                    Transfer exactly <strong className="text-amber-400 font-mono">₦{amount.toLocaleString()}</strong> from your OPay or bank app to the account above, then click the confirmation button below.
+                    Transfer exactly <strong className="text-amber-400 font-mono">₦{(amount + 15.5).toLocaleString(undefined, { minimumFractionDigits: amount % 1 !== 0 ? 2 : 0, maximumFractionDigits: 2 })}</strong> from your OPay or bank app to the account above, then click the confirmation button below.
                   </p>
 
                   
