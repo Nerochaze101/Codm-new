@@ -154,6 +154,7 @@ export interface Match {
     timestamp: number;
   }>;
   resolutionNotes?: string;
+  isPublic?: boolean;
 }
 
 // SQL escape helper to maintain compatibility with Supabase transaction pooler (PgBouncer)
@@ -412,6 +413,7 @@ async function getMatchFromDb(id: string): Promise<Match | null> {
       resolutionNotes: m.resolution_notes || undefined,
       chatMessages: typeof m.chat_messages === 'string' ? JSON.parse(m.chat_messages) : m.chat_messages || [],
       roomGeneratedAt: m.room_generated_at ? parseInt(m.room_generated_at, 10) : undefined,
+      isPublic: m.is_public ?? true,
     };
   } catch (err) {
     console.error(`Error getting match ${id} from DB:`, err);
@@ -444,6 +446,7 @@ async function getAllMatchesFromDb(): Promise<Match[]> {
       resolutionNotes: m.resolution_notes || undefined,
       chatMessages: typeof m.chat_messages === 'string' ? JSON.parse(m.chat_messages) : m.chat_messages || [],
       roomGeneratedAt: m.room_generated_at ? parseInt(m.room_generated_at, 10) : undefined,
+      isPublic: m.is_public ?? true,
     }));
   } catch (err) {
     console.error('Error getting matches from DB:', err);
@@ -458,7 +461,7 @@ async function saveMatchToDb(match: any) {
         id, challenge_code, room_code, game_mode, map, rules,
         stake_amount, pot_amount, platform_fee_percentage, platform_fee, winner_payout,
         match_duration_minutes, status, creator_id, creator_data, opponent_id, opponent_data,
-        winner_id, winner_ign, resolution_notes, chat_messages, created_at, room_generated_at, settled_at
+        winner_id, winner_ign, resolution_notes, chat_messages, created_at, room_generated_at, settled_at, is_public
       )
       VALUES (
         ${escapeSql(match.id)},
@@ -484,7 +487,8 @@ async function saveMatchToDb(match: any) {
         ${escapeSql(match.chatMessages || [])},
         ${escapeSql(match.createdAt)},
         ${escapeSql(match.roomGeneratedAt || null)},
-        ${escapeSql(match.settled_at || match.settledAt || null)}
+        ${escapeSql(match.settled_at || match.settledAt || null)},
+        ${escapeSql(match.isPublic !== false)}
       )
       ON CONFLICT (id) DO UPDATE SET
         room_code = EXCLUDED.room_code,
@@ -498,7 +502,8 @@ async function saveMatchToDb(match: any) {
         resolution_notes = EXCLUDED.resolution_notes,
         chat_messages = EXCLUDED.chat_messages,
         room_generated_at = EXCLUDED.room_generated_at,
-        settled_at = EXCLUDED.settled_at;
+        settled_at = EXCLUDED.settled_at,
+        is_public = EXCLUDED.is_public;
     `);
   } catch (err) {
     console.error(`Error saving match ${match.id} to DB:`, err);
@@ -3888,64 +3893,99 @@ app.post('/api/matches', async (req, res) => {
     ],
     stakeAmount = 100,
     matchDurationMinutes = 15,
+    isPublic = true,
   } = req.body;
 
-  const creator = await getUserFromDb(creatorId);
-  if (!creator) {
-    return res.status(404).json({ error: 'Creator user not found' });
-  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const userRes = await client.query(`SELECT * FROM users WHERE id = ${escapeSql(creatorId)} FOR UPDATE`);
+    if (userRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Creator user not found' });
+    }
+    const creator = userRes.rows[0];
+    const numStake = Number(stakeAmount);
+    if (numStake < 100) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Minimum stake is ₦100' });
+    }
 
-  const numStake = Number(stakeAmount);
-  if (numStake < 100) {
-    return res.status(400).json({ error: 'Minimum stake is ₦100' });
-  }
+    const currentBalance = parseFloat(creator.balance || 0);
+    if (currentBalance < numStake) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: `Insufficient wallet balance (₦${currentBalance.toLocaleString()}) to host this wager. Please fund your wallet first.` });
+    }
 
-  const numDuration = Math.max(15, parseInt(matchDurationMinutes, 10) || 15);
+    // Deduct stake immediately from host balance
+    await client.query(`
+      UPDATE users 
+      SET balance = balance - ${escapeSql(numStake)},
+          escrow_balance = escrow_balance + ${escapeSql(numStake)}
+      WHERE id = ${escapeSql(creatorId)}
+    `);
 
-  const matchId = `match_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-  const challengeCode = `CHALLENGE-${Math.floor(1000 + Math.random() * 9000)}`;
-  const potAmount = numStake * 2;
-  const rakeRate = getRakePercentage(numStake);
-  const platformFee = Math.round(potAmount * rakeRate);
-  const winnerPayout = potAmount - platformFee;
-  const platformFeePercentage = Math.round(rakeRate * 100);
+    const numDuration = Math.max(15, parseInt(matchDurationMinutes, 10) || 15);
+    const matchId = `match_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    const challengeCode = `CHALLENGE-${Math.floor(1000 + Math.random() * 9000)}`;
+    const potAmount = numStake * 2;
+    const rakeRate = getRakePercentage(numStake);
+    const platformFee = Math.round(potAmount * rakeRate);
+    const winnerPayout = potAmount - platformFee;
+    const platformFeePercentage = Math.round(rakeRate * 100);
 
-  const newMatch: Match = {
-    id: matchId,
-    challengeCode,
-    roomCode: undefined,
-    gameMode,
-    map,
-    rules,
-    stakeAmount: numStake,
-    potAmount,
-    platformFeePercentage,
-    platformFee,
-    winnerPayout,
-    matchDurationMinutes: numDuration,
-    status: 'PENDING_OPPONENT_STAKE',
-    createdAt: Date.now(),
-    creator: {
-      id: creator.id,
-      username: creator.username,
-      codmIgn: creator.codmIgn,
-      codmUid: creator.codmUid,
-      avatar: creator.avatar,
-      staked: false,
-    },
-    chatMessages: [
-      {
-        id: `msg_sys_1`,
-        senderId: 'SYSTEM',
-        senderName: 'CODM Referee Bot',
-        text: `Match challenge #${challengeCode} created with ₦${numStake.toLocaleString()} stake (Pot: ₦${potAmount.toLocaleString()}, Winner Payout: ₦${winnerPayout.toLocaleString()}). Share the invite link with your opponent. When your opponent accepts and sends their stake, you will be prompted to send your matching stake to generate your CODM in-game room number.`,
-        timestamp: Date.now(),
+    const txId = `tx_${Date.now()}_host`;
+    await client.query(`
+      INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+      VALUES (${escapeSql(txId)}, ${escapeSql(creatorId)}, 'ESCROW_LOCK', ${escapeSql(numStake)}, ${escapeSql(`₦${numStake.toLocaleString()} escrow locked for hosting challenge #${challengeCode}`)}, ${escapeSql(matchId)}, ${Date.now()})
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    const newMatch: Match = {
+      id: matchId,
+      challengeCode,
+      roomCode: undefined,
+      gameMode,
+      map,
+      rules,
+      stakeAmount: numStake,
+      potAmount,
+      platformFeePercentage,
+      platformFee,
+      winnerPayout,
+      matchDurationMinutes: numDuration,
+      status: 'PENDING_OPPONENT_STAKE',
+      createdAt: Date.now(),
+      isPublic: Boolean(isPublic),
+      creator: {
+        id: creator.id,
+        username: creator.username,
+        codmIgn: creator.codm_ign,
+        codmUid: creator.codm_uid,
+        avatar: creator.avatar,
+        staked: true,
       },
-    ],
-  };
+      chatMessages: [
+        {
+          id: `msg_sys_1`,
+          senderId: 'SYSTEM',
+          senderName: 'CODM Referee Bot',
+          text: `Match challenge #${challengeCode} created with ₦${numStake.toLocaleString()} stake deducted from host wallet (Pot: ₦${potAmount.toLocaleString()}). Share the invite link with your opponent. You can cancel anytime before opponent accepts to get a 100% full refund.`,
+          timestamp: Date.now(),
+        },
+      ],
+    };
 
-  await saveMatchToDb(newMatch);
-  res.json(newMatch);
+    await saveMatchToDb(newMatch);
+    await client.query('COMMIT');
+    res.json(newMatch);
+  } catch (err: any) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    console.error('Create match error:', err);
+    res.status(500).json({ error: err.message || 'Failed to create match' });
+  } finally {
+    client.release();
+  }
 });
 
 // Opponent accepts challenge and sends stake into escrow directly in database with strict race-condition locking
@@ -4311,9 +4351,9 @@ app.post('/api/matches/:id/cancel', async (req, res) => {
     }
 
     const matchRow = mRes.rows[0];
-    if (matchRow.status !== 'PENDING_OPPONENT_STAKE' && matchRow.status !== 'OPPONENT_STAKED_AWAITING_CREATOR') {
+    if (matchRow.status !== 'PENDING_OPPONENT_STAKE') {
       await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'Cannot cancel match after both players have locked stakes' });
+      return res.status(400).json({ error: 'Cannot cancel match. Opponent has already accepted and staked.' });
     }
 
     await client.query(`UPDATE matches SET status = 'CANCELLED' WHERE id = ${escapeSql(matchId)}`);

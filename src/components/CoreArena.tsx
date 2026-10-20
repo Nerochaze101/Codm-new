@@ -153,10 +153,31 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
 
   const [searchQuery, setSearchQuery] = useState('');
   
-  // Open matches created by others that currentUser can join
+  const [arenaTab, setArenaTab] = useState<'live' | 'active' | 'hosted'>('live');
+  const [cancellingMatchId, setCancellingMatchId] = useState<string | null>(null);
+
+  // Public open challenges created by others that currentUser can join
   const openChallenges = matches.filter(
-    (m) => m.status === 'PENDING_OPPONENT_STAKE' && m.creator.id !== currentUser.id
+    (m) => m.status === 'PENDING_OPPONENT_STAKE' && m.isPublic !== false && m.creator.id !== currentUser.id
   );
+
+  // My hosted bets waiting for opponent
+  const myHostedBets = matches.filter(
+    (m) => m.creator.id === currentUser.id && m.status === 'PENDING_OPPONENT_STAKE'
+  );
+
+  const handleCancelHostedBet = async (matchId: string) => {
+    if (!confirm('Are you sure you want to cancel this hosted bet? Your staked amount will be 100% fully refunded to your wallet immediately.')) return;
+    setCancellingMatchId(matchId);
+    try {
+      await onCancelMatch(matchId);
+      await onRefresh();
+    } catch (err: any) {
+      alert(err.message || 'Failed to cancel match');
+    } finally {
+      setCancellingMatchId(null);
+    }
+  };
 
   const cleanedQuery = searchQuery.trim().replace(/^#/, '').replace(/.*\?join=/, '').toUpperCase();
   const filteredChallenges = openChallenges.filter(m => 
@@ -235,11 +256,52 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 pb-16">
-      {/* ------------------------------------------------------------- */}
-      {/* 1. ACTIVE MATCH ROOM (IF PARTICIPATING IN A WAGER)            */}
-      {/* ------------------------------------------------------------- */}
-      {myActiveMatch && (
-        <div className="relative overflow-hidden rounded-2xl bg-neutral-900 border border-amber-500/40 p-5 sm:p-6 shadow-xl space-y-5 group">
+      {/* ARENA NAVIGATION TABS */}
+      <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-neutral-900 border border-neutral-800 max-w-xl mx-auto">
+        <button
+          type="button"
+          onClick={() => setArenaTab('live')}
+          className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 ${
+            arenaTab === 'live'
+              ? 'bg-amber-400 text-neutral-950 shadow-lg'
+              : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
+          }`}
+        >
+          <Flame className="w-4 h-4" />
+          <span>Live Lobby ({openChallenges.length})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setArenaTab('active')}
+          className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 ${
+            arenaTab === 'active'
+              ? 'bg-amber-400 text-neutral-950 shadow-lg'
+              : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
+          }`}
+        >
+          <Zap className="w-4 h-4" />
+          <span>Active Match ({myActiveMatch ? 1 : 0})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setArenaTab('hosted')}
+          className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 ${
+            arenaTab === 'hosted'
+              ? 'bg-amber-400 text-neutral-950 shadow-lg'
+              : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
+          }`}
+        >
+          <Swords className="w-4 h-4" />
+          <span>Hosted Bets ({myHostedBets.length})</span>
+        </button>
+      </div>
+
+      {/* TAB 1: ACTIVE MATCH ROOM */}
+      {arenaTab === 'active' && (
+        myActiveMatch ? (
+          <div className="relative overflow-hidden rounded-2xl bg-neutral-900 border border-amber-500/40 p-5 sm:p-6 shadow-xl space-y-5 group">
           {/* Authentic Match Room Background Image */}
           <div className="absolute inset-0 z-0">
             <img
@@ -914,12 +976,98 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
             </div>
           )}
         </div>
+        ) : (
+          <div className="p-12 rounded-3xl bg-neutral-900 border border-neutral-800 text-center space-y-4">
+            <div className="w-14 h-14 rounded-2xl bg-neutral-800 text-neutral-400 flex items-center justify-center mx-auto">
+              <Zap className="w-7 h-7" />
+            </div>
+            <div className="text-xl font-bold font-heading text-white">No Active Match Room</div>
+            <p className="text-xs text-neutral-400 max-w-md mx-auto">
+              You are not currently participating in an ongoing match room. Join a live open challenge or host a new bet!
+            </p>
+            <button
+              onClick={() => setArenaTab('live')}
+              className="px-6 py-2.5 rounded-xl bg-amber-400 text-neutral-950 font-black text-xs uppercase cursor-pointer"
+            >
+              Browse Live Lobby
+            </button>
+          </div>
+        )
       )}
 
-      {/* ------------------------------------------------------------- */}
-      {/* 2. STANDARD BATTLE FORMAT CARDS (SOLO 1V1 & SQUAD BATTLES)    */}
-      {/* ------------------------------------------------------------- */}
-      {!myActiveMatch && (
+      {/* TAB 2: MY HOSTED WAGERS */}
+      {arenaTab === 'hosted' && (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-2xl font-black font-heading text-white tracking-wide">MY HOSTED WAGERS</h2>
+              <p className="text-xs text-neutral-400 mt-0.5">Manage your active hosted bet links. Cancel anytime before opponent acceptance for a 100% full refund.</p>
+            </div>
+            <div className="text-xs font-mono font-bold text-amber-400">{myHostedBets.length} Hosted</div>
+          </div>
+
+          {myHostedBets.length === 0 ? (
+            <div className="p-12 rounded-3xl bg-neutral-900 border border-neutral-800 text-center space-y-4">
+              <div className="w-14 h-14 rounded-2xl bg-neutral-800 text-neutral-400 flex items-center justify-center mx-auto">
+                <Swords className="w-7 h-7" />
+              </div>
+              <div className="text-xl font-bold font-heading text-white">No Hosted Bets</div>
+              <p className="text-xs text-neutral-400 max-w-md mx-auto">
+                You haven't hosted any custom wagers yet. Choose a battle format to host your match!
+              </p>
+              <button
+                onClick={() => setArenaTab('live')}
+                className="px-6 py-2.5 rounded-xl bg-amber-400 text-neutral-950 font-black text-xs uppercase cursor-pointer"
+              >
+                Create Hosted Bet
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {myHostedBets.map((m) => (
+                <div key={m.id} className="p-5 rounded-2xl bg-neutral-900 border border-amber-500/40 space-y-4 relative overflow-hidden shadow-lg">
+                  <img src={CODM_IMAGES.combatTacticalBg} className="absolute inset-0 w-full h-full object-cover opacity-10" />
+                  <div className="relative z-10 flex items-center justify-between">
+                    <span className="text-xs font-mono-nums bg-amber-500/15 text-amber-400 border border-amber-500/30 px-2.5 py-1 rounded-lg font-black">
+                      CHALLENGE: #{m.challengeCode}
+                    </span>
+                    <span className="text-sm font-mono-nums font-black text-emerald-400">
+                      ₦{m.stakeAmount.toLocaleString()} Staked
+                    </span>
+                  </div>
+
+                  <div className="relative z-10 space-y-1">
+                    <div className="font-heading font-black text-white text-sm uppercase">{m.gameMode}</div>
+                    <div className="text-xs text-neutral-400">Map: <strong className="text-neutral-200">{m.map}</strong> · Visibility: <strong className="text-amber-300">{m.isPublic !== false ? 'Public' : 'Private'}</strong></div>
+                  </div>
+
+                  <div className="relative z-10 flex items-center gap-2 pt-2 border-t border-neutral-800">
+                    <button
+                      type="button"
+                      onClick={() => copyInviteLink(m.id)}
+                      className="flex-1 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold rounded-xl text-xs uppercase transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>{copiedLink ? 'Copied Link!' : 'Copy Invite Link'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={cancellingMatchId === m.id}
+                      onClick={() => handleCancelHostedBet(m.id)}
+                      className="px-4 py-2.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-bold rounded-xl text-xs uppercase transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      {cancellingMatchId === m.id ? 'Cancelling...' : `Cancel & Refund`}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 3: LIVE LOBBY & FORMAT CARDS */}
+      {arenaTab === 'live' && (
         <div className="space-y-8">
           {/* Section Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">

@@ -94,6 +94,7 @@ export interface Match {
   winnerIgn?: string;
   chatMessages: ChatMessage[];
   resolutionNotes?: string;
+  isPublic?: boolean;
 }
 
 export interface WithdrawalRequest {

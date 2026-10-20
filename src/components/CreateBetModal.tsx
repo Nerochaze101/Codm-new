@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { UserProfile } from '../types';
 import {
   X, Swords, ShieldCheck, AlertCircle, Crosshair, Target, Zap,
-  Flame, Users, Flag, MapPin, Gamepad2, Clock
+  Flame, Users, Flag, MapPin, Gamepad2, Clock, Globe, Lock
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { calculateMatchEconomics } from '../utils/pricing';
@@ -19,6 +19,7 @@ interface CreateBetModalProps {
     map: string;
     rules: string[];
     matchDurationMinutes?: number;
+    isPublic?: boolean;
   }) => Promise<void>;
   onOpenWallet?: () => void;
 }
@@ -38,6 +39,7 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
   const [mapInput, setMapInput] = useState<string>('Shipment');
   const [rulesInput, setRulesInput] = useState<string>('Standard 1v1 rules. No scorestreaks/operators. Screenshot proof required.');
   const [durationInput, setDurationInput] = useState<number>(15);
+  const [isPublic, setIsPublic] = useState<boolean>(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,6 +55,7 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
         setGameModeInput(initialMode);
       }
       setDurationInput(15);
+      setIsPublic(true);
     }
   }, [isOpen, initialMode, initialStake]);
 
@@ -65,6 +68,10 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
   const handleCreate = async () => {
     if (!stakeInput.trim() || isNaN(parsedStake) || parsedStake < 100) {
       setError('Minimum stake amount is ₦100');
+      return;
+    }
+    if (currentUser.balance < parsedStake) {
+      setError(`Insufficient wallet balance (₦${currentUser.balance.toLocaleString()}). Please fund your wallet to host this wager.`);
       return;
     }
     if (!gameModeInput.trim()) {
@@ -89,10 +96,11 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
           'Post-match scoreboard screenshot required for AI verification',
         ],
         matchDurationMinutes: durationInput,
+        isPublic,
       });
       onClose();
     } catch (err: any) {
-      setError(err.message || 'Failed to generate bet link');
+      setError(err.message || 'Failed to create wager');
     } finally {
       setLoading(false);
     }
@@ -129,13 +137,12 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
             </div>
           )}
 
-          {/* 1. Only 2 Card Betting Options: Solo (1v1) & Squad (Team) */}
+          {/* 1. Betting Format */}
           <div>
             <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider block mb-2.5">
               1. Choose Betting Format
             </label>
             <div className="grid grid-cols-2 gap-3">
-              {/* Solo 1v1 Card with Shipment Background */}
               <button
                 type="button"
                 onClick={() => {
@@ -153,12 +160,8 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
                   src={CODM_IMAGES.shipment1v1}
                   alt="Shipment"
                   className="absolute inset-0 w-full h-full object-cover opacity-25 group-hover:scale-105 transition-transform"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).src = CODM_IMAGES.shipment1v1Fallback;
-                  }}
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-neutral-950/70 to-transparent" />
-
                 <div className="relative z-10 flex items-center justify-between">
                   <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${
                     betType === 'solo' ? 'bg-amber-400 text-neutral-950 font-black' : 'bg-neutral-900 text-neutral-400'
@@ -166,19 +169,15 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
                     <Crosshair className="w-3.5 h-3.5" />
                   </div>
                   {betType === 'solo' && (
-                    <span className="w-4 h-4 rounded-full bg-amber-400 text-neutral-950 flex items-center justify-center font-bold text-[9px]">
-                      ✓
-                    </span>
+                    <span className="w-4 h-4 rounded-full bg-amber-400 text-neutral-950 flex items-center justify-center font-bold text-[9px]">✓</span>
                   )}
                 </div>
-
                 <div className="relative z-10">
                   <div className="font-heading font-black text-xs text-white uppercase">Solo (1v1)</div>
                   <div className="text-[10px] text-neutral-400">Shipment 1v1 Duel</div>
                 </div>
               </button>
 
-              {/* Squad Team Card with Squad Background */}
               <button
                 type="button"
                 onClick={() => {
@@ -196,12 +195,8 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
                   src={CODM_IMAGES.squadTactical}
                   alt="Squad"
                   className="absolute inset-0 w-full h-full object-cover opacity-25 group-hover:scale-105 transition-transform"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).src = CODM_IMAGES.squadTacticalFallback;
-                  }}
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-neutral-950/70 to-transparent" />
-
                 <div className="relative z-10 flex items-center justify-between">
                   <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${
                     betType === 'squad' ? 'bg-emerald-400 text-neutral-950 font-black' : 'bg-neutral-900 text-neutral-400'
@@ -209,18 +204,50 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
                     <Users className="w-3.5 h-3.5" />
                   </div>
                   {betType === 'squad' && (
-                    <span className="w-4 h-4 rounded-full bg-emerald-400 text-neutral-950 flex items-center justify-center font-bold text-[9px]">
-                      ✓
-                    </span>
+                    <span className="w-4 h-4 rounded-full bg-emerald-400 text-neutral-950 flex items-center justify-center font-bold text-[9px]">✓</span>
                   )}
                 </div>
-
                 <div className="relative z-10">
                   <div className="font-heading font-black text-xs text-white uppercase">Squad (Team)</div>
                   <div className="text-[10px] text-neutral-400">Team Tactical Match</div>
                 </div>
               </button>
             </div>
+          </div>
+
+          {/* Public / Private Visibility Toggle */}
+          <div className="p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-neutral-200 uppercase flex items-center gap-1.5">
+                {isPublic ? <Globe className="w-3.5 h-3.5 text-amber-400" /> : <Lock className="w-3.5 h-3.5 text-amber-400" />}
+                <span>Match Visibility</span>
+              </span>
+              <div className="flex rounded-lg bg-neutral-900 p-1 border border-neutral-800">
+                <button
+                  type="button"
+                  onClick={() => setIsPublic(true)}
+                  className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                    isPublic ? 'bg-amber-400 text-neutral-950 shadow' : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  Public
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsPublic(false)}
+                  className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                    !isPublic ? 'bg-amber-400 text-neutral-950 shadow' : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  Private
+                </button>
+              </div>
+            </div>
+            <p className="text-[11px] text-neutral-400">
+              {isPublic
+                ? 'Public bets appear in the Live Open Challenges lobby for anyone to accept.'
+                : 'Private bets are hidden from public lobbies and can only be joined via your direct invite link.'}
+            </p>
           </div>
 
           {/* Custom Game Mode Input */}
@@ -233,7 +260,7 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
               type="text"
               value={gameModeInput}
               onChange={(e) => setGameModeInput(e.target.value)}
-              placeholder="e.g. 1v1 Sniper Only, Custom S&D, Trickshot Lobby"
+              placeholder="e.g. 1v1 Sniper Only, Custom S&D"
               className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-sm focus:outline-none focus:border-amber-400 font-medium"
             />
           </div>
@@ -248,51 +275,9 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
               type="text"
               value={mapInput}
               onChange={(e) => setMapInput(e.target.value)}
-              placeholder="e.g. Shipment, Standoff, Killhouse, Nuketown"
+              placeholder="e.g. Shipment, Standoff, Nuketown"
               className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-sm focus:outline-none focus:border-emerald-400 font-medium"
             />
-          </div>
-
-          {/* Custom Rules Input */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider flex items-center gap-1.5">
-              <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-              <span>Match Rules & Conditions</span>
-            </label>
-            <input
-              type="text"
-              value={rulesInput}
-              onChange={(e) => setRulesInput(e.target.value)}
-              placeholder="e.g. No scorestreaks, DL Q33 only, First to 10"
-              className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-neutral-300 text-xs focus:outline-none focus:border-amber-400"
-            />
-          </div>
-
-          {/* Match Duration Selector (15 min minimum) */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Match Duration (15 min Minimum)</span>
-              </label>
-              <span className="text-[10px] text-neutral-400 font-mono">Auto-resolves on expiry</span>
-            </div>
-            <div className="grid grid-cols-5 gap-1.5">
-              {[15, 20, 30, 45, 60].map((mins) => (
-                <button
-                  key={mins}
-                  type="button"
-                  onClick={() => setDurationInput(mins)}
-                  className={`py-2 rounded-xl text-xs font-black font-mono-nums transition-all cursor-pointer border ${
-                    durationInput === mins
-                      ? 'bg-emerald-400 text-neutral-950 border-emerald-400 shadow-md scale-105'
-                      : 'bg-neutral-950 text-neutral-300 border-neutral-800 hover:border-neutral-700'
-                  }`}
-                >
-                  {mins}m
-                </button>
-              ))}
-            </div>
           </div>
 
           {/* Stake Amount Selector */}
@@ -301,8 +286,8 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
               <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider">
                 Stake Amount (₦ Naira)
               </label>
-              <span className="text-xs text-amber-400 font-bold flex items-center gap-1">
-                <span>₦0 Upfront to Generate Link</span>
+              <span className="text-xs text-amber-400 font-bold">
+                Deducted Immediately from Wallet
               </span>
             </div>
 
@@ -326,47 +311,26 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
               ))}
             </div>
 
-            <div className="space-y-2">
-              <div className="relative">
-                <span className="absolute left-3.5 top-2.5 text-xs text-amber-400 font-black font-mono-nums">₦</span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  value={stakeInput}
-                  onChange={(e) => {
-                    const val = e.target.value.replace(/[^0-9]/g, '');
-                    setStakeInput(val);
-                    setError(null);
-                  }}
-                  placeholder="Enter custom stake (e.g. 1500, 3000, 7500)"
-                  className="w-full pl-8 pr-24 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono-nums font-bold text-sm focus:outline-none focus:border-amber-400"
-                />
-              </div>
-
-              {/* Quick Increments */}
-              <div className="flex items-center gap-1.5 text-xs">
-                <span className="text-[10px] text-neutral-400 font-mono">ADD:</span>
-                {[500, 1000, 2000, 5000].map((inc) => (
-                  <button
-                    key={inc}
-                    type="button"
-                    onClick={() => {
-                      const current = isNaN(parsedStake) ? 0 : parsedStake;
-                      setStakeInput((current + inc).toString());
-                      setError(null);
-                    }}
-                    className="px-2 py-1 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-neutral-700 text-neutral-300 font-mono text-[11px] font-bold cursor-pointer"
-                  >
-                    +₦{inc.toLocaleString()}
-                  </button>
-                ))}
-              </div>
+            <div className="relative">
+              <span className="absolute left-3.5 top-2.5 text-xs text-amber-400 font-black font-mono-nums">₦</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={stakeInput}
+                onChange={(e) => {
+                  const val = e.target.value.replace(/[^0-9]/g, '');
+                  setStakeInput(val);
+                  setError(null);
+                }}
+                placeholder="Enter custom stake"
+                className="w-full pl-8 pr-4 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono-nums font-bold text-sm focus:outline-none focus:border-amber-400"
+              />
             </div>
-            <div className="text-[11px] text-neutral-400 mt-1.5">Type any custom amount · Minimum stake is ₦1,000 · Tiered Rake (10% down to 5%)</div>
+            <div className="text-[11px] text-neutral-400 mt-1.5">Minimum stake is ₦100 · Tiered Platform Rake (10% down to 5%)</div>
           </div>
 
-          {/* Escrow Math Preview with Tiered Rake */}
+          {/* Escrow Math Preview */}
           <div className="p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 text-xs space-y-1.5 font-mono-nums">
             <div className="flex items-center justify-between text-neutral-400">
               <span>Total Escrow Pot (2x Stake):</span>
@@ -382,15 +346,15 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
             </div>
           </div>
 
-          {/* On-Demand Escrow Process Note */}
+          {/* Hosting & Refund Policy Note */}
           <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-neutral-300 flex items-start gap-2.5 leading-relaxed">
             <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             <div>
-              <strong className="text-amber-300">How Escrow Staking Works:</strong>
+              <strong className="text-amber-300">Hosting & Cancellation Rules:</strong>
               <div className="text-[11px] text-neutral-400 mt-0.5">
-                1. Generating this bet link is free (₦0 deducted now).<br />
-                2. Your opponent accepts and deposits their ₦{stakeAmount.toLocaleString()} stake to confirm the challenge.<br />
-                3. You will then send your matching ₦{stakeAmount.toLocaleString()} stake to unlock your in-game CODM room number.
+                1. Your ₦{stakeAmount.toLocaleString()} stake is deducted from your wallet immediately upon hosting.<br />
+                2. You can cancel anytime before an opponent accepts to get a <strong>100% full refund</strong>.<br />
+                3. Once accepted by an opponent, the match is locked and cannot be cancelled.
               </div>
             </div>
           </div>
@@ -413,11 +377,11 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
             className="px-6 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 text-xs font-black shadow-lg transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
           >
             {loading ? (
-              <span>Generating Bet Link...</span>
+              <span>Hosting Match...</span>
             ) : (
               <>
                 <Swords className="w-4 h-4 stroke-[2.5]" />
-                <span>Generate Bet Link (₦{stakeAmount.toLocaleString()} Stake)</span>
+                <span>Host & Deduct ₦{stakeAmount.toLocaleString()}</span>
               </>
             )}
           </button>
