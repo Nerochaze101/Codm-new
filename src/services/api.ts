@@ -2,10 +2,37 @@ import { Match, UserProfile, Transaction, WithdrawalRequest, DepositRequest, Opa
 
 export const DEFAULT_USERS: Record<string, UserProfile> = {};
 
+export async function parseResponse<T = any>(res: Response): Promise<T> {
+  let text = '';
+  try {
+    text = await res.text();
+  } catch {
+    text = '';
+  }
+
+  let data: any = {};
+  if (text && text.trim()) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { error: text };
+    }
+  }
+
+  if (!res.ok) {
+    let rawError = data?.error || data?.message || (typeof data === 'string' ? data : '') || res.statusText || 'Request failed';
+    if (typeof rawError === 'string' && (rawError.includes('<!DOCTYPE') || rawError.includes('<html'))) {
+      rawError = `Server error (${res.status} ${res.statusText || 'Internal Server Error'})`;
+    }
+    throw new Error(String(rawError));
+  }
+
+  return data as T;
+}
+
 export async function fetchUser(userId: string): Promise<UserProfile> {
   const res = await fetch(`/api/users/${userId}`);
-  if (res.ok) return await res.json();
-  throw new Error('User not found');
+  return await parseResponse<UserProfile>(res);
 }
 
 export async function signUpUser(data: {
@@ -24,12 +51,7 @@ export async function signUpUser(data: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-  if (res.ok) {
-    return await res.json();
-  } else {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to sign up');
-  }
+  return await parseResponse<UserProfile>(res);
 }
 
 export async function signInUser(data: {
@@ -41,12 +63,7 @@ export async function signInUser(data: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-  if (res.ok) {
-    return await res.json();
-  } else {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to sign in');
-  }
+  return await parseResponse<UserProfile>(res);
 }
 
 export async function createUser(data: Partial<UserProfile> & { initialDeposit?: number }): Promise<UserProfile> {
@@ -55,12 +72,7 @@ export async function createUser(data: Partial<UserProfile> & { initialDeposit?:
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-  if (res.ok) {
-    return await res.json();
-  } else {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to create user');
-  }
+  return await parseResponse<UserProfile>(res);
 }
 
 export async function depositWallet(
@@ -75,11 +87,7 @@ export async function depositWallet(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ amount, method, reference, transactionId }),
   });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to deposit funds');
-  }
-  return await res.json();
+  return await parseResponse(res);
 }
 
 export async function withdrawWallet(
@@ -98,16 +106,12 @@ export async function withdrawWallet(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ amount, ...bankDetails }),
   });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to process withdrawal');
-  }
-  return await res.json();
+  return await parseResponse(res);
 }
 
 export async function testPandascrowConnection() {
   const res = await fetch('/api/pandascrow/test-connection');
-  return await res.json();
+  return await parseResponse(res);
 }
 
 export async function initializePandascrowTransaction(data: {
@@ -122,40 +126,31 @@ export async function initializePandascrowTransaction(data: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to initialize Pandascrow transaction');
-  }
-  return await res.json();
+  return await parseResponse(res);
 }
 
 export async function testFlutterwaveConnection() {
   const res = await fetch('/api/flutterwave/test-connection');
-  return await res.json();
+  return await parseResponse(res);
 }
 
 export async function testPaystackConnection() {
   const res = await fetch('/api/paystack/test-connection');
-  return await res.json();
+  return await parseResponse(res);
 }
 
 export async function fetchMatches(): Promise<Match[]> {
   try {
     const res = await fetch('/api/matches');
-    if (res.ok) return await res.json();
+    return await parseResponse<Match[]>(res);
   } catch (e) {
-    // fallback
+    return [];
   }
-  return [];
 }
 
 export async function fetchMatch(matchId: string): Promise<Match> {
   const res = await fetch(`/api/matches/${matchId}`);
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Match not found');
-  }
-  return await res.json();
+  return await parseResponse<Match>(res);
 }
 
 export async function createMatch(data: {
@@ -172,11 +167,7 @@ export async function createMatch(data: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to create match wager');
-  }
-  return await res.json();
+  return await parseResponse<Match>(res);
 }
 
 export async function joinMatch(matchId: string, opponentId: string): Promise<Match> {
@@ -185,11 +176,7 @@ export async function joinMatch(matchId: string, opponentId: string): Promise<Ma
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ opponentId }),
   });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to join match');
-  }
-  return await res.json();
+  return await parseResponse<Match>(res);
 }
 
 export async function opponentStakeMatch(
@@ -201,11 +188,7 @@ export async function opponentStakeMatch(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to lock opponent stake in escrow');
-  }
-  return await res.json();
+  return await parseResponse<Match>(res);
 }
 
 export async function creatorStakeMatch(
@@ -217,11 +200,7 @@ export async function creatorStakeMatch(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to lock matching host stake in escrow');
-  }
-  return await res.json();
+  return await parseResponse<Match>(res);
 }
 
 export async function sendMatchChat(matchId: string, senderId: string, text: string) {
@@ -230,31 +209,21 @@ export async function sendMatchChat(matchId: string, senderId: string, text: str
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ senderId, text }),
   });
-  if (!res.ok) {
-    throw new Error('Failed to send message');
-  }
-  return await res.json();
+  return await parseResponse(res);
 }
 
 export async function clearMatchChat(matchId: string) {
   const res = await fetch(`/api/matches/${matchId}/clear-chat`, {
     method: 'POST',
   });
-  if (!res.ok) {
-    throw new Error('Failed to clear match chat');
-  }
-  return await res.json();
+  return await parseResponse(res);
 }
 
 export async function cancelMatch(matchId: string): Promise<Match> {
   const res = await fetch(`/api/matches/${matchId}/cancel`, {
     method: 'POST',
   });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to cancel match');
-  }
-  return await res.json();
+  return await parseResponse<Match>(res);
 }
 
 export async function abandonMatch(matchId: string, reason?: string): Promise<{ success: boolean; match: Match; data: any }> {
@@ -263,11 +232,7 @@ export async function abandonMatch(matchId: string, reason?: string): Promise<{ 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ reason }),
   });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to settle abandoned match');
-  }
-  return await res.json();
+  return await parseResponse<{ success: boolean; match: Match; data: any }>(res);
 }
 
 export async function adminAbandonMatch(matchId: string, adminUserId: string, reason?: string): Promise<{ success: boolean; match: Match; data: any }> {
@@ -276,11 +241,7 @@ export async function adminAbandonMatch(matchId: string, adminUserId: string, re
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ userId: adminUserId, reason }),
   });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to settle abandoned match as admin');
-  }
-  return await res.json();
+  return await parseResponse<{ success: boolean; match: Match; data: any }>(res);
 }
 
 export async function submitMatchResult(matchId: string, payload: {
@@ -293,11 +254,7 @@ export async function submitMatchResult(matchId: string, payload: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to submit match screenshot');
-  }
-  return await res.json();
+  return await parseResponse<Match>(res);
 }
 
 export async function updateUser(userId: string, data: Partial<UserProfile>): Promise<UserProfile> {

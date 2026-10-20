@@ -90,11 +90,24 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
 
     const connectWs = () => {
       try {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        if (typeof window === 'undefined' || typeof WebSocket === 'undefined') return;
         const host = window.location.host;
-        const wsUrl = `${protocol}//${host}/ws?matchId=${encodeURIComponent(matchId)}&userId=${encodeURIComponent(currentUser.id)}&userName=${encodeURIComponent(currentUser.codmIgn)}`;
+        if (!host || host.trim() === '') return;
 
-        const ws = new WebSocket(wsUrl);
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const safeMatchId = encodeURIComponent(matchId || '');
+        const safeUserId = encodeURIComponent(currentUser?.id || 'guest');
+        const safeUserName = encodeURIComponent(currentUser?.codmIgn || 'Gamer');
+        const wsUrl = `${protocol}//${host}/ws?matchId=${safeMatchId}&userId=${safeUserId}&userName=${safeUserName}`;
+
+        let ws: WebSocket;
+        try {
+          ws = new WebSocket(wsUrl);
+        } catch (wsErr) {
+          console.warn('WebSocket init warning:', wsErr);
+          return;
+        }
+
         wsRef.current = ws;
 
         ws.onopen = () => {
@@ -105,6 +118,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
         ws.onmessage = async (event) => {
           if (!isMounted) return;
           try {
+            if (!event.data) return;
             const data = JSON.parse(event.data);
             if (data.type === 'chat') {
               setMessages((prev) => {
@@ -154,7 +168,9 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       isMounted = false;
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (wsRef.current) {
-        wsRef.current.close();
+        try {
+          wsRef.current.close();
+        } catch (_) {}
       }
       stopAudio();
     };
@@ -164,60 +180,76 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   const initPeerConnection = () => {
     if (pcRef.current) return pcRef.current;
 
-    const pc = new RTCPeerConnection(RTC_CONFIG);
-    pcRef.current = pc;
+    try {
+      const pc = new RTCPeerConnection(RTC_CONFIG);
+      pcRef.current = pc;
 
-    pc.onicecandidate = (event) => {
-      if (event.candidate && wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({
-          type: 'signal',
-          signal: { candidate: event.candidate }
-        }));
+      pc.onicecandidate = (event) => {
+        if (event.candidate && event.candidate.candidate && wsRef.current?.readyState === WebSocket.OPEN) {
+          try {
+            wsRef.current.send(JSON.stringify({
+              type: 'signal',
+              signal: { candidate: event.candidate.toJSON ? event.candidate.toJSON() : event.candidate }
+            }));
+          } catch (_) {}
+        }
+      };
+
+      pc.ontrack = (event) => {
+        if (remoteAudioRef.current && event.streams[0]) {
+          remoteAudioRef.current.srcObject = event.streams[0];
+          setOpponentMicConnected(true);
+        }
+      };
+
+      // Add local tracks if stream already active
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach((track) => {
+          try {
+            pc.addTrack(track, localStreamRef.current!);
+          } catch (_) {}
+        });
       }
-    };
 
-    pc.ontrack = (event) => {
-      if (remoteAudioRef.current && event.streams[0]) {
-        remoteAudioRef.current.srcObject = event.streams[0];
-        setOpponentMicConnected(true);
-      }
-    };
-
-    // Add local tracks if stream already active
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => {
-        pc.addTrack(track, localStreamRef.current!);
-      });
+      return pc;
+    } catch (e) {
+      console.warn('RTCPeerConnection init notice:', e);
+      return null as any;
     }
-
-    return pc;
   };
 
   const handleWebRtcSignal = async (signal: any) => {
     try {
+      if (!signal) return;
       const pc = initPeerConnection();
+      if (!pc) return;
 
       if (signal.sdp) {
-        await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-        if (signal.sdp.type === 'offer') {
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({
-              type: 'signal',
-              signal: { sdp: pc.localDescription }
-            }));
-          }
-        }
-      } else if (signal.candidate) {
         try {
-          await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
-        } catch (e) {
-          console.warn('Failed to add ICE candidate:', e);
+          // Pass the description dictionary directly
+          await pc.setRemoteDescription(signal.sdp);
+          if (signal.sdp.type === 'offer') {
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            if (wsRef.current?.readyState === WebSocket.OPEN && pc.localDescription) {
+              wsRef.current.send(JSON.stringify({
+                type: 'signal',
+                signal: { sdp: pc.localDescription }
+              }));
+            }
+          }
+        } catch (sdpErr) {
+          console.warn('WebRTC SDP notice:', sdpErr);
+        }
+      } else if (signal.candidate && signal.candidate.candidate) {
+        try {
+          await pc.addIceCandidate(signal.candidate);
+        } catch (candidateErr) {
+          console.warn('WebRTC ICE notice:', candidateErr);
         }
       }
     } catch (err) {
-      console.warn('WebRTC signal handling error:', err);
+      console.warn('WebRTC signal handling notice:', err);
     }
   };
 
@@ -280,27 +312,42 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       }
 
       // Add to WebRTC connection and send offer to opponent
-      const pc = initPeerConnection();
-      stream.getTracks().forEach((track) => {
-        pc.addTrack(track, stream);
-      });
+      try {
+        const pc = initPeerConnection();
+        if (pc) {
+          stream.getTracks().forEach((track) => {
+            try {
+              pc.addTrack(track, stream);
+            } catch (_) {}
+          });
 
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({
-          type: 'signal',
-          signal: { sdp: pc.localDescription }
-        }));
-        wsRef.current.send(JSON.stringify({
-          type: 'mic_state',
-          isMuted: false,
-          isSpeaking: false
-        }));
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          if (wsRef.current?.readyState === WebSocket.OPEN && pc.localDescription) {
+            wsRef.current.send(JSON.stringify({
+              type: 'signal',
+              signal: { sdp: pc.localDescription }
+            }));
+            wsRef.current.send(JSON.stringify({
+              type: 'mic_state',
+              isMuted: false,
+              isSpeaking: false
+            }));
+          }
+        }
+      } catch (peerErr) {
+        console.warn('WebRTC peer negotiation warning:', peerErr);
       }
     } catch (err: any) {
-      console.error('Microphone access failed:', err);
-      setAudioError(err.message || 'Microphone access denied. Please allow mic in browser settings.');
+      console.error('Microphone access notice:', err);
+      const msg = String(err?.message || '');
+      if (msg.includes('pattern') || msg.includes('SyntaxError') || msg.includes('DOMException')) {
+        setAudioError('Microphone permission or secure audio context is needed. Text chat is active!');
+      } else if (msg.includes('NotAllowedError') || msg.includes('Permission') || msg.includes('denied')) {
+        setAudioError('Microphone permission was denied. Please allow microphone access in your browser settings.');
+      } else {
+        setAudioError(err?.message || 'Microphone access failed. Please check browser settings.');
+      }
       setIsMicEnabled(false);
     }
   };
