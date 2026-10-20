@@ -1,4 +1,6 @@
 import express from 'express';
+import http from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -184,6 +186,180 @@ function generateRoomCode(mapName: string): string {
   const num = Math.floor(1000 + Math.random() * 9000);
   const suffix = mapName.slice(0, 3).toUpperCase();
   return `CODM-${num}-${suffix}`;
+}
+
+interface MatchWsClient extends WebSocket {
+  matchId?: string;
+  userId?: string;
+  userName?: string;
+  isAlive?: boolean;
+}
+
+const matchRooms = new Map<string, Set<MatchWsClient>>();
+
+export function broadcastToMatchRoom(matchId: string, payload: any, excludeClient?: WebSocket) {
+  const room = matchRooms.get(matchId);
+  if (!room) return;
+  const msg = JSON.stringify(payload);
+  for (const client of room) {
+    if (client.readyState === WebSocket.OPEN && client !== excludeClient) {
+      try {
+        client.send(msg);
+      } catch (e) {
+        console.error('Error sending ws message:', e);
+      }
+    }
+  }
+}
+
+export async function clearMatchChatInDb(matchId: string) {
+  try {
+    await pool.query(`
+      UPDATE matches 
+      SET chat_messages = '[]'::jsonb
+      WHERE id = ${escapeSql(matchId)}
+    `);
+    broadcastToMatchRoom(matchId, { type: 'chat_cleared', matchId });
+    console.log(`[Chat Purge] Chat messages successfully purged from database for match ${matchId}`);
+  } catch (err) {
+    console.error(`Error clearing chat in DB for match ${matchId}:`, err);
+  }
+}
+
+function initWebSocketServer(server: http.Server) {
+  const wss = new WebSocketServer({ server, path: '/ws' });
+
+  wss.on('connection', (ws: MatchWsClient, req) => {
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
+
+    const host = req.headers.host || 'localhost';
+    const parsedUrl = new URL(req.url || '', `http://${host}`);
+    const matchId = parsedUrl.searchParams.get('matchId') || '';
+    const userId = parsedUrl.searchParams.get('userId') || '';
+    const userName = parsedUrl.searchParams.get('userName') || 'Gamer';
+
+    if (!matchId) {
+      ws.close(1008, 'Missing matchId');
+      return;
+    }
+
+    ws.matchId = matchId;
+    ws.userId = userId;
+    ws.userName = userName;
+
+    if (!matchRooms.has(matchId)) {
+      matchRooms.set(matchId, new Set());
+    }
+    const room = matchRooms.get(matchId)!;
+    room.add(ws);
+
+    // Send initial presence confirmation
+    const activeUsers = Array.from(room).map(c => ({ userId: c.userId, userName: c.userName }));
+    try {
+      ws.send(JSON.stringify({
+        type: 'presence',
+        activeUsers,
+        matchId,
+      }));
+    } catch (_) {}
+
+    // Broadcast user joined to other room participants
+    broadcastToMatchRoom(matchId, {
+      type: 'user_joined',
+      userId,
+      userName,
+      activeUsers,
+      matchId,
+    }, ws);
+
+    ws.on('message', async (data) => {
+      try {
+        const payload = JSON.parse(data.toString());
+        if (payload.type === 'chat') {
+          const text = (payload.text || '').trim();
+          if (!text) return;
+          const newMsg = {
+            id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+            senderId: ws.userId || 'unknown',
+            senderName: ws.userName || 'Gamer',
+            text,
+            timestamp: Date.now(),
+          };
+
+          // Save message to database
+          try {
+            await pool.query(`
+              UPDATE matches 
+              SET chat_messages = COALESCE(chat_messages, '[]'::jsonb) || ${escapeSql([newMsg])}::jsonb
+              WHERE id = ${escapeSql(matchId)}
+            `);
+          } catch (dbErr) {
+            console.error('Failed to persist chat message in DB:', dbErr);
+          }
+
+          // Broadcast to everyone in the room (including sender)
+          const currRoom = matchRooms.get(matchId);
+          if (currRoom) {
+            const out = JSON.stringify({ type: 'chat', message: newMsg, matchId });
+            for (const c of currRoom) {
+              if (c.readyState === WebSocket.OPEN) {
+                c.send(out);
+              }
+            }
+          }
+        } else if (payload.type === 'signal') {
+          // WebRTC signal relay (offer, answer, candidate) to opponent
+          broadcastToMatchRoom(matchId, {
+            type: 'signal',
+            from: ws.userId,
+            signal: payload.signal,
+          }, ws);
+        } else if (payload.type === 'mic_state') {
+          // Live audio mic status (speaking/muted)
+          broadcastToMatchRoom(matchId, {
+            type: 'mic_state',
+            userId: ws.userId,
+            isMuted: payload.isMuted,
+            isSpeaking: payload.isSpeaking,
+          }, ws);
+        }
+      } catch (err) {
+        console.error('Error processing ws message:', err);
+      }
+    });
+
+    ws.on('close', () => {
+      const currRoom = matchRooms.get(matchId);
+      if (currRoom) {
+        currRoom.delete(ws);
+        if (currRoom.size === 0) {
+          matchRooms.delete(matchId);
+        } else {
+          const activeUsers = Array.from(currRoom).map(c => ({ userId: c.userId, userName: c.userName }));
+          broadcastToMatchRoom(matchId, {
+            type: 'user_left',
+            userId: ws.userId,
+            userName: ws.userName,
+            activeUsers,
+            matchId,
+          });
+        }
+      }
+    });
+  });
+
+  const interval = setInterval(() => {
+    wss.clients.forEach((ws: any) => {
+      if (ws.isAlive === false) return ws.terminate();
+      ws.isAlive = false;
+      ws.ping();
+    });
+  }, 30000);
+
+  wss.on('close', () => {
+    clearInterval(interval);
+  });
 }
 
 // ==========================================
@@ -4333,7 +4509,19 @@ app.post('/api/matches/:id/chat', async (req, res) => {
 
   match.chatMessages.push(newMsg);
   await saveMatchToDb(match);
+  broadcastToMatchRoom(match.id, { type: 'chat', message: newMsg, matchId: match.id });
   res.json(newMsg);
+});
+
+// Clear match chat messages explicitly
+app.post('/api/matches/:id/clear-chat', async (req, res) => {
+  try {
+    const matchId = req.params.id;
+    await clearMatchChatInDb(matchId);
+    res.json({ success: true, message: 'Match chat cleared from database' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to clear chat' });
+  }
 });
 
 // Cancel match directly in database
@@ -4356,7 +4544,7 @@ app.post('/api/matches/:id/cancel', async (req, res) => {
       return res.status(400).json({ error: 'Cannot cancel match. Opponent has already accepted and staked.' });
     }
 
-    await client.query(`UPDATE matches SET status = 'CANCELLED' WHERE id = ${escapeSql(matchId)}`);
+    await client.query(`UPDATE matches SET status = 'CANCELLED', chat_messages = '[]'::jsonb WHERE id = ${escapeSql(matchId)}`);
 
     const creatorData = matchRow.creator_data || {};
     const opponentData = matchRow.opponent_data || {};
@@ -4395,6 +4583,7 @@ app.post('/api/matches/:id/cancel', async (req, res) => {
     }
 
     await client.query('COMMIT');
+    await clearMatchChatInDb(matchId);
     const updatedMatch = await getMatchFromDb(matchId);
     res.json(updatedMatch);
   } catch (err: any) {
@@ -4657,13 +4846,8 @@ Respond strictly in valid JSON format:
       }
 
       match.resolutionNotes = `Match resolved! Winner is ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} credited to winner's wallet. Ready for instant cashout!`;
-      match.chatMessages.push({
-        id: `msg_${Date.now()}_settle`,
-        senderId: 'SYSTEM',
-        senderName: 'CODM Referee Bot',
-        text: `🏆 MATCH CONCLUDED! Winner: ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} winning payout has been added to their wallet balance and is ready for instant cashout!`,
-        timestamp: Date.now(),
-      });
+      match.chatMessages = [];
+      await clearMatchChatInDb(match.id);
     }
   } else if (resolveWinner === 'dispute') {
     match.status = 'DISPUTED';
@@ -4773,14 +4957,8 @@ app.post('/api/matches/:id/admin-resolve', async (req, res) => {
   await updatePlatformFinance(platformFee - (bonusPerReferrer * [...new Set(referrers)].length));
   
   match.resolutionNotes = `Referee adjudicated in favor of ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} paid out to winner. Bonus distributed.`;
-
-  match.chatMessages.push({
-    id: `msg_${Date.now()}`,
-    senderId: 'SYSTEM',
-    senderName: 'CODM Referee Bot',
-    text: `⚖️ Referee resolved match #${match.roomCode}. Winner: ${winnerObj.codmIgn}. Payout: ₦${match.winnerPayout.toLocaleString()}.`,
-    timestamp: Date.now(),
-  });
+  match.chatMessages = [];
+  await clearMatchChatInDb(match.id);
 
   await saveMatchToDb(match);
   res.json(match);
@@ -4892,10 +5070,11 @@ async function settleAbandonedMatch(matchId: string, reason: string = 'Inactivit
       UPDATE matches 
       SET status = 'ABANDONED_AND_SETTLED',
           resolution_notes = ${escapeSql(resolutionNotes)},
-          chat_messages = ${escapeSql(chatMsgs)},
+          chat_messages = '[]'::jsonb,
           settled_at = ${now}
       WHERE id = ${escapeSql(matchId)}
     `);
+    broadcastToMatchRoom(matchId, { type: 'chat_cleared', matchId });
 
     await client.query('COMMIT');
     const updatedMatch = await getMatchFromDb(matchId);
@@ -5288,8 +5467,11 @@ async function startServer() {
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[CODM Stake 1v1] Server running on port ${PORT}`);
+  const server = http.createServer(app);
+  initWebSocketServer(server);
+
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`[CODM Stake 1v1] Server running on port ${PORT} with WebSockets enabled`);
   });
 }
 

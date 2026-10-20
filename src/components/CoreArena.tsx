@@ -10,6 +10,7 @@ import {
 import { CODM_IMAGES } from '../assets/images';
 import { SkeletonLoader } from './SkeletonLoader';
 import { StakePaymentModal } from './StakePaymentModal';
+import { MatchLobbyChat } from './MatchLobbyChat';
 import { calculateAbandonedMatchRefund } from '../utils/feeCalculator';
 
 // Helper for card background
@@ -24,27 +25,11 @@ const CardBackground = () => (
   </div>
 );
 
-// ... (rest of the file content)
-// Update lines 810-814
-// Original:
-// 810:             <div
-// 811:               className="relative overflow-hidden rounded-3xl p-6 sm:p-8 border-2 border-amber-500/50 hover:border-amber-400 bg-neutral-900 shadow-2xl transition-all flex flex-col justify-between min-h-[260px] group"
-// 812:             >
-// 813:               {/* Background Shipment Image */}
-//
-// New:
-// 810:             <div
-// 811:               className="relative overflow-hidden rounded-3xl p-6 sm:p-8 border-2 border-amber-500/50 hover:border-amber-400 bg-neutral-900 shadow-2xl transition-all flex flex-col justify-between min-h-[260px] group"
-// 812:             >
-// 813:               <CardBackground />
-// 814:               {/* Background Shipment Image */}
-
-
 interface CoreArenaProps {
   currentUser: UserProfile;
   matches: Match[];
   isMatchesLoading?: boolean;
-  onCreateBet: (data: { stakeAmount: number; gameMode: string; map: string; rules: string[] }) => Promise<void>;
+  onCreateBet: (data: { stakeAmount: number; gameMode: string; map: string; rules: string[]; matchDurationMinutes?: number; isPublic?: boolean }) => Promise<void>;
   onOpenCreateBet?: (mode?: string, stake?: number) => void;
   onJoinMatch: (matchId: string, opponentId: string) => Promise<void>;
   onOpponentStake?: (matchId: string, paymentMethod: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance' | 'flutterwave') => Promise<void>;
@@ -153,7 +138,15 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
 
   const [searchQuery, setSearchQuery] = useState('');
   
-  const [arenaTab, setArenaTab] = useState<'live' | 'active' | 'hosted'>('live');
+  const [arenaTab, setArenaTab] = useState<'live' | 'active' | 'hosted'>(() => {
+    return (myActiveMatch && myActiveMatch.status !== 'SETTLED' && myActiveMatch.status !== 'ABANDONED') ? 'active' : 'live';
+  });
+
+  useEffect(() => {
+    if (myActiveMatch && ['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(myActiveMatch.status)) {
+      setArenaTab('active');
+    }
+  }, [myActiveMatch?.status]);
   const [cancellingMatchId, setCancellingMatchId] = useState<string | null>(null);
 
   // Public open challenges created by others that currentUser can join
@@ -975,6 +968,28 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
               </button>
             </div>
           )}
+
+          {/* REAL-TIME MATCH LOBBY CHAT & LIVE AUDIO COMMS */}
+          <div className="relative z-10 pt-4 border-t border-neutral-800/80 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="text-xs font-black uppercase tracking-wider text-white font-heading">
+                  Match Lobby Voice & Tactical Chat
+                </span>
+              </div>
+              <span className="text-[10px] text-neutral-400 font-mono">
+                🔒 Live Comms · Auto-Purged on Settlement
+              </span>
+            </div>
+            <MatchLobbyChat
+              matchId={myActiveMatch.id}
+              currentUser={currentUser}
+              opponentName={isCreatorOfActive ? (myActiveMatch.opponent?.codmIgn || 'Opponent') : myActiveMatch.creator.codmIgn}
+              initialMessages={myActiveMatch.chatMessages || []}
+              isSettled={['SETTLED', 'ABANDONED', 'ABANDONED_AND_SETTLED', 'CANCELLED'].includes(myActiveMatch.status)}
+            />
+          </div>
         </div>
         ) : (
           <div className="p-12 rounded-3xl bg-neutral-900 border border-neutral-800 text-center space-y-4">
@@ -1069,6 +1084,34 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
       {/* TAB 3: LIVE LOBBY & FORMAT CARDS */}
       {arenaTab === 'live' && (
         <div className="space-y-8">
+          {/* Active match in progress indicator banner */}
+          {myActiveMatch && (
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/20 via-neutral-900 to-amber-500/10 border-2 border-amber-400 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-3 animate-in fade-in">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-400 text-neutral-950 flex items-center justify-center font-black shrink-0">
+                  <Zap className="w-5 h-5 fill-current" />
+                </div>
+                <div>
+                  <div className="text-xs font-black text-amber-400 uppercase tracking-wider flex items-center gap-2">
+                    <span>Active Match In Progress · {myActiveMatch.gameMode}</span>
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  </div>
+                  <p className="text-xs sm:text-sm font-bold text-white mt-0.5">
+                    {isCreatorOfActive ? `Vs ${myActiveMatch.opponent?.codmIgn || 'Opponent'}` : `Vs Host ${myActiveMatch.creator.codmIgn}`} · Pot: ₦{myActiveMatch.potAmount.toLocaleString()} · Room #{myActiveMatch.roomCode || myActiveMatch.challengeCode}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setArenaTab('active')}
+                className="w-full sm:w-auto px-5 py-2.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs uppercase tracking-wide transition-all shadow-md cursor-pointer flex items-center justify-center gap-2 shrink-0"
+              >
+                <span>Open Match Room & Voice Comms</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
           {/* Section Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>

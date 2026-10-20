@@ -6,6 +6,7 @@ import {
   Lock, Share2, UserCheck, Zap, Shield, XCircle
 } from 'lucide-react';
 import { StakePaymentModal } from './StakePaymentModal';
+import { MatchLobbyChat } from './MatchLobbyChat';
 
 interface MatchRoomProps {
   match: Match;
@@ -989,83 +990,13 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
 
         {/* Right Column: Live Match Chat & Referee Feed */}
         <div className="space-y-4">
-          <div className="p-5 rounded-2xl bg-neutral-900 border border-neutral-800 flex flex-col h-[520px]">
-            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
-              <div className="flex items-center gap-2">
-                <MessageSquare className="w-4 h-4 text-amber-400" />
-                <h3 className="text-sm font-bold font-heading text-white">Live Match Chat</h3>
-              </div>
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            </div>
-
-            {/* Chat Messages Log */}
-            <div className="flex-1 overflow-y-auto py-3 space-y-3">
-              {match.chatMessages.map((msg) => {
-                const isSys = msg.senderId === 'SYSTEM';
-                const isMe = msg.senderId === currentUser.id;
-
-                if (isSys) {
-                  return (
-                    <div key={msg.id} className="p-2.5 rounded-lg bg-neutral-950/70 border border-neutral-800/80 text-[11px] text-neutral-300">
-                      <span className="font-bold text-amber-400 block mb-0.5">{msg.senderName}</span>
-                      <span>{msg.text}</span>
-                    </div>
-                  );
-                }
-
-                return (
-                  <div
-                    key={msg.id}
-                    className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}
-                  >
-                    <div className="text-[10px] text-neutral-400 mb-0.5">
-                      {isMe ? 'You' : msg.senderName}
-                    </div>
-                    <div
-                      className={`p-2.5 rounded-xl text-xs max-w-[85%] break-words ${
-                        isMe
-                          ? 'bg-amber-400 text-neutral-950 font-medium'
-                          : 'bg-neutral-800 text-neutral-200'
-                      }`}
-                    >
-                      {msg.text}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Quick Chat Prompts */}
-            <div className="flex flex-wrap gap-1.5 py-2 border-t border-neutral-800 text-[10px]">
-              {['I created the private room', 'Invite sent in CODM', 'Ready to start!', 'GG!'].map((prompt) => (
-                <button
-                  key={prompt}
-                  type="button"
-                  onClick={() => onSendChat(prompt)}
-                  className="px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 transition-colors cursor-pointer"
-                >
-                  {prompt}
-                </button>
-              ))}
-            </div>
-
-            {/* Input Bar */}
-            <form onSubmit={handleSendMessage} className="pt-2 flex items-center gap-2">
-              <input
-                type="text"
-                placeholder="Message opponent..."
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                className="flex-1 px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-xs focus:border-amber-400 focus:outline-none"
-              />
-              <button
-                type="submit"
-                className="p-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 transition-colors cursor-pointer"
-              >
-                <Send className="w-4 h-4" />
-              </button>
-            </form>
-          </div>
+          <MatchLobbyChat
+            matchId={match.id}
+            currentUser={currentUser}
+            opponentName={isCreator ? (match.opponent?.codmIgn || 'Opponent') : match.creator.codmIgn}
+            initialMessages={match.chatMessages || []}
+            isSettled={['SETTLED', 'ABANDONED', 'CANCELLED'].includes(match.status)}
+          />
         </div>
       </div>
 

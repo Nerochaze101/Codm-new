@@ -165,6 +165,7 @@ export async function createMatch(data: {
   map?: string;
   rules?: string[];
   matchDurationMinutes?: number;
+  isPublic?: boolean;
 }): Promise<Match> {
   const res = await fetch('/api/matches', {
     method: 'POST',
@@ -231,6 +232,16 @@ export async function sendMatchChat(matchId: string, senderId: string, text: str
   });
   if (!res.ok) {
     throw new Error('Failed to send message');
+  }
+  return await res.json();
+}
+
+export async function clearMatchChat(matchId: string) {
+  const res = await fetch(`/api/matches/${matchId}/clear-chat`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    throw new Error('Failed to clear match chat');
   }
   return await res.json();
 }

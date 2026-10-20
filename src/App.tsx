@@ -142,6 +142,7 @@ function MainApp() {
     map: string;
     rules: string[];
     matchDurationMinutes?: number;
+    isPublic?: boolean;
   }) => {
     await createMatch({
       creatorId: currentUser.id,
@@ -150,6 +151,7 @@ function MainApp() {
       map: data.map,
       rules: data.rules,
       matchDurationMinutes: data.matchDurationMinutes,
+      isPublic: data.isPublic,
     });
 
     const updatedUser = await fetchUser(currentUser.id);
