@@ -89,7 +89,7 @@ function MainApp() {
   else if (pathname === '/referrals') currentTab = 'referrals';
   else if (pathname === '/wallet') currentTab = 'wallet';
   else if (pathname === '/profile') currentTab = 'profile';
-  else if (pathname === '/admin') currentTab = 'admin';
+  else if (pathname === '/msksksnuwje') currentTab = 'admin';
 
   // Initial Data Fetch & URL Deep Link Check
   useEffect(() => {
@@ -524,7 +524,7 @@ function MainApp() {
             }
           />
           <Route
-            path="/admin"
+            path="/msksksnuwje"
             element={
               <AdminDashboard
                 currentUser={currentUser}

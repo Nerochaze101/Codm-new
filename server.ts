@@ -751,7 +751,7 @@ app.post('/api/inbound-email', express.json({ limit: '5mb' }), async (req, res) 
 });
 
 // REST API ROUTES
-app.post('/api/admin/withdraw', async (req, res) => {
+app.post('/api/msksksnuwje/withdraw', async (req, res) => {
   const { userId, amount } = req.body;
   const numAmount = Number(amount);
   if (!numAmount || numAmount <= 0) {
@@ -796,7 +796,7 @@ app.post('/api/admin/withdraw', async (req, res) => {
   }
 });
 
-app.get('/api/admin/finance', async (req, res) => {
+app.get('/api/msksksnuwje/finance', async (req, res) => {
   try {
     const { userId } = req.query;
     const user = await getUserFromDb(userId as string);
@@ -883,7 +883,7 @@ app.get('/api/admin/finance', async (req, res) => {
 });
 
 // Fetch withdrawal requests for Admin Dashboard
-app.get('/api/admin/withdrawals', async (req, res) => {
+app.get('/api/msksksnuwje/withdrawals', async (req, res) => {
   try {
     const { userId, status } = req.query;
     const user = await getUserFromDb(userId as string);
@@ -1080,7 +1080,7 @@ app.post(['/api/webhooks/opay-payout', '/api/webhooks/opay', '/api/webhooks/with
 });
 
 // Admin Approve Withdrawal: Triggers OPay Payout Webhook, Deducts Money Instantly, and Redirects to OPay
-app.post('/api/admin/withdrawals/:id/approve', async (req, res) => {
+app.post('/api/msksksnuwje/withdrawals/:id/approve', async (req, res) => {
   try {
     const { id } = req.params;
     const { adminUserId } = req.body;
@@ -1160,7 +1160,7 @@ app.post('/api/admin/withdrawals/:id/approve', async (req, res) => {
 });
 
 // Admin Reject Withdrawal
-app.post('/api/admin/withdrawals/:id/reject', async (req, res) => {
+app.post('/api/msksksnuwje/withdrawals/:id/reject', async (req, res) => {
   try {
     const { id } = req.params;
     const { adminUserId, reason = 'Bank details mismatch / Invalid request' } = req.body;
@@ -1228,7 +1228,7 @@ app.post('/api/admin/withdrawals/:id/reject', async (req, res) => {
 });
 
 // Admin Users List for Assigning and Managing Admins
-app.get('/api/admin/users', async (req, res) => {
+app.get('/api/msksksnuwje/users', async (req, res) => {
   try {
     const { userId, search } = req.query;
     const adminUser = await getUserFromDb(userId as string);
@@ -1266,7 +1266,7 @@ app.get('/api/admin/users', async (req, res) => {
 });
 
 // Assign Admin Role endpoint
-app.post('/api/admin/assign-role', async (req, res) => {
+app.post('/api/msksksnuwje/assign-role', async (req, res) => {
   try {
     const { adminUserId, targetUserId, identifier, role = 'admin' } = req.body;
     const adminUser = await getUserFromDb(adminUserId);
@@ -1307,7 +1307,7 @@ app.post('/api/admin/assign-role', async (req, res) => {
 });
 
 // Admin Adjust User Balance
-app.post('/api/admin/users/:id/adjust-balance', async (req, res) => {
+app.post('/api/msksksnuwje/users/:id/adjust-balance', async (req, res) => {
   try {
     const { adminUserId, amount, type = 'credit', reason = '' } = req.body;
     const targetUserId = req.params.id;
@@ -1363,7 +1363,7 @@ app.post('/api/admin/users/:id/adjust-balance', async (req, res) => {
 });
 
 // Bootstrap / Claim Admin (for owner/creator access)
-app.post('/api/admin/claim-admin', async (req, res) => {
+app.post('/api/msksksnuwje/claim-admin', async (req, res) => {
   try {
     const { userId, passcode } = req.body;
     const user = await getUserFromDb(userId);
@@ -2023,7 +2023,7 @@ app.post(['/api/webhooks/macrodroid-opay', '/api/webhooks/opay-sms'], async (req
 });
 
 // 4. Admin: Fetch OPay SMS Alerts
-app.get(['/api/admin/opay/alerts', '/api/admin/sms-alerts'], async (req, res) => {
+app.get(['/api/msksksnuwje/opay/alerts', '/api/msksksnuwje/sms-alerts'], async (req, res) => {
   try {
     const { userId, status } = req.query;
     const adminUser = await getUserFromDb(userId as string);
@@ -2061,7 +2061,7 @@ app.get(['/api/admin/opay/alerts', '/api/admin/sms-alerts'], async (req, res) =>
 });
 
 // 5. Admin: Manually Assign an Unmatched Alert to a Player
-app.post(['/api/admin/opay/alerts/:id/assign', '/api/admin/sms-alerts/:id/assign'], async (req, res) => {
+app.post(['/api/msksksnuwje/opay/alerts/:id/assign', '/api/msksksnuwje/sms-alerts/:id/assign'], async (req, res) => {
   try {
     const { id } = req.params;
     const { adminUserId, targetUserId } = req.body;
@@ -2129,7 +2129,7 @@ app.post(['/api/admin/opay/alerts/:id/assign', '/api/admin/sms-alerts/:id/assign
 // 📧 ADMIN MAILBOX API (`codstake@detailr.online`)
 // ==========================================
 // Get Mailbox Messages (from admin_emails & IMAP sync)
-app.get('/api/admin/mailbox', async (req, res) => {
+app.get('/api/msksksnuwje/mailbox', async (req, res) => {
   try {
     const { userId } = req.query;
     const adminUser = await getUserFromDb(userId as string);
@@ -2178,7 +2178,7 @@ app.get('/api/admin/mailbox', async (req, res) => {
 });
 
 // Clean up verified mails older than 3 minutes on demand
-app.post('/api/admin/mailbox/cleanup-verified', async (req, res) => {
+app.post('/api/msksksnuwje/mailbox/cleanup-verified', async (req, res) => {
   try {
     const { userId } = req.body;
     const adminUser = await getUserFromDb(userId);
@@ -2192,7 +2192,7 @@ app.post('/api/admin/mailbox/cleanup-verified', async (req, res) => {
   }
 });
 
-app.post('/api/admin/mailbox/send', async (req, res) => {
+app.post('/api/msksksnuwje/mailbox/send', async (req, res) => {
   try {
     const { userId, recipientEmail, subject, body } = req.body;
     const adminUser = await getUserFromDb(userId);
@@ -2234,7 +2234,7 @@ app.post('/api/admin/mailbox/send', async (req, res) => {
 });
 
 // Simulate / Receive Incoming Email (for testing Hostinger DNS / Webhook inbox)
-app.post('/api/admin/mailbox/simulate', async (req, res) => {
+app.post('/api/msksksnuwje/mailbox/simulate', async (req, res) => {
   try {
     const { userId, senderEmail, senderName, subject, body } = req.body;
     const adminUser = await getUserFromDb(userId);
@@ -2273,7 +2273,7 @@ app.post('/api/admin/mailbox/simulate', async (req, res) => {
 
 
 // 6. Admin: Test / Simulate SMS Parsing
-app.post(['/api/admin/opay/test-sms', '/api/admin/test-sms-parser'], async (req, res) => {
+app.post(['/api/msksksnuwje/opay/test-sms', '/api/msksksnuwje/test-sms-parser'], async (req, res) => {
   try {
     const { userId, smsText, shouldCredit = false } = req.body;
     const adminUser = await getUserFromDb(userId);
@@ -2301,7 +2301,7 @@ app.post(['/api/admin/opay/test-sms', '/api/admin/test-sms-parser'], async (req,
 });
 
 // 7. Admin: MacroDroid Settings & Diagnostics
-app.get('/api/admin/opay/settings', async (req, res) => {
+app.get('/api/msksksnuwje/opay/settings', async (req, res) => {
   try {
     const { userId } = req.query;
     const adminUser = await getUserFromDb(userId as string);
@@ -3694,7 +3694,7 @@ app.get('/api/paystack/banks', async (req, res) => {
 
 
 // Direct Payout / Cashout Tester Endpoint (runs real payout against selected gateway)
-app.post('/api/admin/test-cashout', async (req, res) => {
+app.post('/api/msksksnuwje/test-cashout', async (req, res) => {
   const {
     amount = 100,
     bankName = 'OPay',
@@ -5191,7 +5191,7 @@ app.post('/api/matches/:id/abandon', async (req, res) => {
 });
 
 // Admin: Settle abandoned match explicitly
-app.post('/api/admin/matches/:id/abandon', async (req, res) => {
+app.post('/api/msksksnuwje/matches/:id/abandon', async (req, res) => {
   try {
     const matchId = req.params.id;
     const { userId, reason = 'Admin settled as abandoned' } = req.body || {};
@@ -5214,7 +5214,7 @@ app.post('/api/admin/matches/:id/abandon', async (req, res) => {
 });
 
 // Admin: Fetch all matches (with filter for active/disputed/abandoned)
-app.get('/api/admin/matches', async (req, res) => {
+app.get('/api/msksksnuwje/matches', async (req, res) => {
   try {
     const { userId, status } = req.query;
     const adminUser = await getUserFromDb(userId as string);
@@ -5262,7 +5262,7 @@ app.get('/api/admin/matches', async (req, res) => {
 // ==========================================
 
 // Get current Gmail integration status & config
-app.get('/api/admin/gmail/config', async (req, res) => {
+app.get('/api/msksksnuwje/gmail/config', async (req, res) => {
   try {
     const { userId } = req.query;
     const user = await getUserFromDb(userId as string);
@@ -5288,7 +5288,7 @@ app.get('/api/admin/gmail/config', async (req, res) => {
 });
 
 // Save or connect a new Gmail account (with test check)
-app.post('/api/admin/gmail/config', async (req, res) => {
+app.post('/api/msksksnuwje/gmail/config', async (req, res) => {
   try {
     const { userId, gmailAddress, appPassword, autoSync } = req.body;
     const user = await getUserFromDb(userId);
@@ -5327,7 +5327,7 @@ app.post('/api/admin/gmail/config', async (req, res) => {
 });
 
 // Test connection on demand
-app.post('/api/admin/gmail/test', async (req, res) => {
+app.post('/api/msksksnuwje/gmail/test', async (req, res) => {
   try {
     const { userId, gmailAddress, appPassword } = req.body;
     const user = await getUserFromDb(userId);
@@ -5347,7 +5347,7 @@ app.post('/api/admin/gmail/test', async (req, res) => {
 });
 
 // Trigger manual mail sync
-app.post('/api/admin/gmail/sync', async (req, res) => {
+app.post('/api/msksksnuwje/gmail/sync', async (req, res) => {
   try {
     const { userId } = req.body;
     const user = await getUserFromDb(userId);
@@ -5368,7 +5368,7 @@ app.post('/api/admin/gmail/sync', async (req, res) => {
 });
 
 // Disconnect Gmail
-app.post('/api/admin/gmail/disconnect', async (req, res) => {
+app.post('/api/msksksnuwje/gmail/disconnect', async (req, res) => {
   try {
     const { userId } = req.body;
     const user = await getUserFromDb(userId);
@@ -5384,7 +5384,7 @@ app.post('/api/admin/gmail/disconnect', async (req, res) => {
 });
 
 // Mark email as read
-app.patch('/api/admin/mailbox/:id/read', async (req, res) => {
+app.patch('/api/msksksnuwje/mailbox/:id/read', async (req, res) => {
   try {
     const { id } = req.params;
     const { userId, isRead = true } = req.body;
@@ -5401,7 +5401,7 @@ app.patch('/api/admin/mailbox/:id/read', async (req, res) => {
 });
 
 // Delete email
-app.delete('/api/admin/mailbox/:id', async (req, res) => {
+app.delete('/api/msksksnuwje/mailbox/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { userId } = req.body;
@@ -5418,7 +5418,7 @@ app.delete('/api/admin/mailbox/:id', async (req, res) => {
 });
 
 // Inbound Mail Webhook (works on Render: https://codm-new.onrender.com/api/inbound-mail)
-app.post(['/api/inbound-mail', '/api/admin/mail/webhook'], async (req, res) => {
+app.post(['/api/inbound-mail', '/api/msksksnuwje/mail/webhook'], async (req, res) => {
   try {
     console.log('📬 Inbound Mail Webhook Received:', req.body);
     const { sender, from, subject, body, text, recipient, to } = req.body || {};

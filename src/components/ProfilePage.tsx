@@ -886,7 +886,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
         
         {currentUser.role === 'admin' && (
           <div
-            onClick={() => window.location.href = '/admin'}
+            onClick={() => window.location.href = '/msksksnuwje'}
             className="p-5 rounded-2xl bg-neutral-900 border border-neutral-800 hover:border-amber-400/60 transition-all cursor-pointer group space-y-2.5"
           >
             <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center font-bold">

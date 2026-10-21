@@ -959,13 +959,22 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                 <span>Your refund has been credited directly to your available wallet balance.</span>
               </div>
 
-              <button
-                type="button"
-                onClick={() => handleReturnToLobby(myActiveMatch.id)}
-                className="px-6 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wide transition-all shadow-md cursor-pointer"
-              >
-                Return to Battle Lobby
-              </button>
+              <div className="flex justify-center gap-3">
+                <button
+                    type="button"
+                    onClick={() => handleReturnToLobby(myActiveMatch.id)}
+                    className="px-6 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wide transition-all shadow-md cursor-pointer"
+                >
+                    Return to Battle Lobby
+                </button>
+                <button
+                    type="button"
+                    onClick={() => console.log('TODO: Implement Hide Match')}
+                    className="px-6 py-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-bold text-xs uppercase tracking-wide transition-all cursor-pointer"
+                >
+                    Dismiss
+                </button>
+              </div>
             </div>
           )}
 
