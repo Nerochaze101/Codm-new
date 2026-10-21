@@ -49,25 +49,32 @@ function MainApp() {
 
   useEffect(() => {
     socket.on('matchCreated', (newMatch) => {
-      setMatches((prev) => [newMatch, ...prev]);
+      if (!newMatch || !newMatch.id) return;
+      setMatches((prev) => {
+        if (prev.some((m) => m.id === newMatch.id)) return prev;
+        return [newMatch, ...prev];
+      });
     });
     
     socket.on('matchUpdated', (updatedMatch) => {
+      if (!updatedMatch || !updatedMatch.id) return;
       setMatches((prev) => prev.map((m) => m.id === updatedMatch.id ? updatedMatch : m));
     });
     
     socket.on('matchJoined', (updatedMatch) => {
+      if (!updatedMatch || !updatedMatch.id) return;
       setMatches((prev) => prev.map((m) => m.id === updatedMatch.id ? updatedMatch : m));
     });
     
     socket.on('balanceUpdated', (updatedUser) => {
-      if (updatedUser.id === currentUser.id) {
+      if (updatedUser && updatedUser.id === currentUser.id) {
         setCurrentUser(updatedUser);
       }
     });
     
     return () => {
       socket.off('matchCreated');
+      socket.off('matchUpdated');
       socket.off('matchJoined');
       socket.off('balanceUpdated');
     };

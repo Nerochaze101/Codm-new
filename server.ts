@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import { GoogleGenAI } from '@google/genai';
-import { initDatabase, pool, runDatabaseDiagnostics } from './db.js';
+import { initDatabase, pool, runDatabaseDiagnostics } from './db';
 import {
   initGmailTables,
   getGmailConfig,
@@ -20,7 +20,7 @@ import {
   syncGmailEmails,
   startGmailAutoSyncService,
   cleanupVerifiedMails,
-} from './gmailService.js';
+} from './gmailService';
 
 dotenv.config();
 
@@ -5503,30 +5503,97 @@ async function startServer() {
   const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
   
   (app as any).io = io;
-  
-  // initWebSocketServer(server); // Removed, using Socket.io
-  
+
   io.on('connection', (socket) => {
-    console.log('Socket.io connected:', socket.id);
-    
-    socket.on('chat', (data) => {
-      io.to(data.matchId).emit('chat', data);
+    // Client joins match room
+    socket.on('joinMatch', (data) => {
+      const matchId = typeof data === 'string' ? data : data?.matchId;
+      if (matchId) {
+        socket.join(matchId);
+      }
     });
-    
+
+    // Authoritative in-match chat handler with PostgreSQL persistence
+    socket.on('chat', async (data) => {
+      try {
+        if (!data || !data.matchId || !data.text || !data.text.trim()) return;
+        
+        const newMsg = {
+          id: data.id || `msg_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+          senderId: data.senderId || 'unknown',
+          senderName: data.senderName || 'Player',
+          text: data.text.trim(),
+          timestamp: data.timestamp || Date.now(),
+        };
+
+        // Persist message to match record in PostgreSQL
+        try {
+          await pool.query(`
+            UPDATE matches 
+            SET chat_messages = COALESCE(chat_messages, '[]'::jsonb) || ${escapeSql([newMsg])}::jsonb
+            WHERE id = ${escapeSql(data.matchId)}
+          `);
+        } catch (dbErr) {
+          console.error('Failed to persist socket chat message in DB:', dbErr);
+        }
+
+        // Broadcast to all clients in the match room with guaranteed unique id
+        io.to(data.matchId).emit('chat', { ...newMsg, matchId: data.matchId });
+      } catch (err) {
+        console.error('Error processing socket chat message:', err);
+      }
+    });
+
+    // Real-time audio stream relay: broadcast only to the opponent (exclude sender)
+    socket.on('audio_stream', (data) => {
+      if (data && data.matchId && data.pcm) {
+        socket.to(data.matchId).emit('audio_stream', {
+          userId: data.userId,
+          pcm: data.pcm,
+          sampleRate: data.sampleRate || 16000,
+        });
+      }
+    });
+
+    // Microphone state (speaking/muted) relay
+    socket.on('mic_state', (data) => {
+      if (data && data.matchId) {
+        socket.to(data.matchId).emit('mic_state', {
+          userId: data.userId,
+          isMuted: data.isMuted,
+          isSpeaking: data.isSpeaking,
+        });
+      }
+    });
+
+    // Clear chat handler
+    socket.on('clear_chat', async (data) => {
+      const matchId = typeof data === 'string' ? data : data?.matchId;
+      if (matchId) {
+        try {
+          await clearMatchChatInDb(matchId);
+          io.to(matchId).emit('chat_cleared', { matchId });
+        } catch (err) {
+          console.error('Error clearing chat via socket:', err);
+        }
+      }
+    });
+
     socket.on('createMatch', (data) => {
       io.emit('matchCreated', data);
     });
-    
-    socket.on('joinMatch', (data) => {
-      socket.join(data.matchId);
-      io.to(data.matchId).emit('matchJoined', data);
+
+    socket.on('matchUpdated', (data) => {
+      io.emit('matchUpdated', data);
     });
-    
+
     socket.on('updateBalance', (data) => {
       io.emit('balanceUpdated', data);
     });
-    
-    socket.on('disconnect', () => { console.log('Socket.io disconnected:', socket.id); });
+
+    socket.on('disconnect', () => {
+      // socket disconnected
+    });
   });
 
   server.listen(PORT, '0.0.0.0', () => {
