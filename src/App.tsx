@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+import { io } from 'socket.io-client';
 import { UserProfile, Match } from './types';
 import {
   fetchUser, fetchMatches, fetchMatch, createMatch, joinMatch,
@@ -22,6 +23,8 @@ import { ReferralPage } from './components/ReferralPage';
 import { WalletPage } from './components/WalletPage';
 import { AdminDashboard } from './components/AdminDashboard';
 
+const socket = io('/');
+
 function MainApp() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -43,6 +46,28 @@ function MainApp() {
     transactions: [],
   });
   const [matches, setMatches] = useState<Match[]>([]);
+
+  useEffect(() => {
+    socket.on('matchCreated', (newMatch) => {
+      setMatches((prev) => [newMatch, ...prev]);
+    });
+    
+    socket.on('matchJoined', (updatedMatch) => {
+      setMatches((prev) => prev.map((m) => m.id === updatedMatch.id ? updatedMatch : m));
+    });
+    
+    socket.on('balanceUpdated', (updatedUser) => {
+      if (updatedUser.id === currentUser.id) {
+        setCurrentUser(updatedUser);
+      }
+    });
+    
+    return () => {
+      socket.off('matchCreated');
+      socket.off('matchJoined');
+      socket.off('balanceUpdated');
+    };
+  }, [currentUser.id]);
   const [isMatchesLoading, setIsMatchesLoading] = useState<boolean>(true);
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signup');
 

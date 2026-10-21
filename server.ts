@@ -5486,7 +5486,19 @@ async function startServer() {
   
   io.on('connection', (socket) => {
     console.log('Socket.io connected:', socket.id);
-    socket.on('join-match', (matchId) => { socket.join(matchId); });
+    
+    socket.on('createMatch', (data) => {
+      io.emit('matchCreated', data);
+    });
+    
+    socket.on('joinMatch', (data) => {
+      io.to(data.matchId).emit('matchJoined', data);
+    });
+    
+    socket.on('updateBalance', (data) => {
+      io.emit('balanceUpdated', data);
+    });
+    
     socket.on('disconnect', () => { console.log('Socket.io disconnected:', socket.id); });
   });
 
