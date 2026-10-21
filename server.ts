@@ -5103,7 +5103,30 @@ async function settleAbandonedMatch(matchId: string, reason: string = 'Inactivit
 }
 
 // Background auto-sweep for abandoned matches (runs on boot and every 3 minutes)
+async function expirePendingMatches() {
+  try {
+    const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000);
+    const staleRes = await pool.query(`
+      SELECT id, creator_id, stake_amount 
+      FROM matches 
+      WHERE status = 'PENDING_OPPONENT_STAKE' 
+        AND created_at < ${twentyFourHoursAgo}
+    `);
+
+    for (const row of staleRes.rows) {
+      await pool.query('BEGIN');
+      await pool.query(`UPDATE users SET balance = balance + ${row.stake_amount}, escrow_balance = escrow_balance - ${row.stake_amount} WHERE id = ${escapeSql(row.creator_id)}`);
+      await pool.query(`UPDATE matches SET status = 'EXPIRED' WHERE id = ${escapeSql(row.id)}`);
+      await pool.query('COMMIT');
+      console.log(`🧹 [Expired Match Sweep] Expired match ${row.id} and refunded creator ${row.creator_id}`);
+    }
+  } catch (err: any) {
+    console.error('⚠️ [Expired Match Sweep] Error:', err.message);
+  }
+}
+
 async function sweepAbandonedMatches() {
+  await expirePendingMatches();
   await checkUnconfirmedResultMatches();
   try {
     const oneHourAgo = Date.now() - (60 * 60 * 1000); // 1 hour threshold for match creation
