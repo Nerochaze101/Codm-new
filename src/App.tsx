@@ -52,6 +52,10 @@ function MainApp() {
       setMatches((prev) => [newMatch, ...prev]);
     });
     
+    socket.on('matchUpdated', (updatedMatch) => {
+      setMatches((prev) => prev.map((m) => m.id === updatedMatch.id ? updatedMatch : m));
+    });
+    
     socket.on('matchJoined', (updatedMatch) => {
       setMatches((prev) => prev.map((m) => m.id === updatedMatch.id ? updatedMatch : m));
     });
