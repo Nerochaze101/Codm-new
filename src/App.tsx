@@ -462,6 +462,9 @@ function MainApp() {
                   setOnboardingTargetMatch(targetMatch || null);
                   setIsOnboardingModalOpen(true);
                 }}
+                onDismissMatch={(matchId) => {
+                  setMatches(matches.filter(m => m.id !== matchId));
+                }}
               />
             }
           />
@@ -559,6 +562,9 @@ function MainApp() {
                 onOpenNewUserOnboarding={(targetMatch) => {
                   setOnboardingTargetMatch(targetMatch || null);
                   setIsOnboardingModalOpen(true);
+                }}
+                onDismissMatch={(matchId) => {
+                  setMatches(matches.filter(m => m.id !== matchId));
                 }}
               />
             }

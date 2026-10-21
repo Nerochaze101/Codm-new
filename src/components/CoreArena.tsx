@@ -38,6 +38,7 @@ interface CoreArenaProps {
   onSubmitResult: (matchId: string, claim: 'VICTORY' | 'DEFEAT' | 'DRAW', screenshotBase64?: string) => Promise<void>;
   onCancelMatch: (matchId: string) => Promise<void>;
   onAbandonMatch?: (matchId: string, reason?: string) => Promise<any>;
+  onDismissMatch: (matchId: string) => void;
   onOpenWallet?: () => void;
   onRefresh: () => Promise<void>;
   onOpenNewUserOnboarding: (match?: Match) => void;
@@ -64,6 +65,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   onSubmitResult,
   onCancelMatch,
   onAbandonMatch,
+  onDismissMatch,
   onOpenWallet,
   onRefresh,
   onOpenNewUserOnboarding,
@@ -969,7 +971,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                 </button>
                 <button
                     type="button"
-                    onClick={() => console.log('TODO: Implement Hide Match')}
+                    onClick={() => onDismissMatch(myActiveMatch.id)}
                     className="px-6 py-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-bold text-xs uppercase tracking-wide transition-all cursor-pointer"
                 >
                     Dismiss
