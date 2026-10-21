@@ -159,7 +159,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
 
   const handleSendMessage = async () => {
     if (!socketRef.current || !inputText.trim()) return;
-    socketRef.current.emit('chat', { text: inputText });
+    socketRef.current.emit('chat', { text: inputText, matchId, senderId: currentUser.id, senderName: currentUser.codmIgn, timestamp: Date.now() });
     setInputText('');
   };
 
