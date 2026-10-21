@@ -1,6 +1,7 @@
 import express from 'express';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
+import { Server } from 'socket.io';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -5476,7 +5477,18 @@ async function startServer() {
   }
 
   const server = http.createServer(app);
+  const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
+  
+  // Make io available globally or attach to app
+  (app as any).io = io;
+  
   initWebSocketServer(server);
+  
+  io.on('connection', (socket) => {
+    console.log('Socket.io connected:', socket.id);
+    socket.on('join-match', (matchId) => { socket.join(matchId); });
+    socket.on('disconnect', () => { console.log('Socket.io disconnected:', socket.id); });
+  });
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[CODM Stake 1v1] Server running on port ${PORT} with WebSockets enabled`);
