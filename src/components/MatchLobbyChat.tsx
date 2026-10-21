@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { UserProfile, ChatMessage } from '../types';
 import {
   MessageSquare, Send, Mic, MicOff, Volume2, VolumeX,
-  Radio, Shield, Clock, Sparkles, Check, AlertCircle, RefreshCw, Trash2
+  Radio, Shield, Clock, Sparkles, Check, AlertCircle, RefreshCw, Trash2, Headphones
 } from 'lucide-react';
 import { sendMatchChat, clearMatchChat } from '../services/api';
 
@@ -23,13 +23,54 @@ const TACTICAL_SHORTCUTS = [
   "Good Game! 🏆"
 ];
 
-// STUN servers for WebRTC audio peer connection
+// Expanded STUN servers for WebRTC audio peer connection
 const RTC_CONFIG: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' }
-  ]
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' }
+  ],
+  iceCandidatePoolSize: 10
 };
+
+// Helper: Convert Float32Array to 16-bit PCM Int16Array
+function floatTo16BitPCM(input: Float32Array): Int16Array {
+  const output = new Int16Array(input.length);
+  for (let i = 0; i < input.length; i++) {
+    const s = Math.max(-1, Math.min(1, input[i]));
+    output[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  }
+  return output;
+}
+
+// Helper: Convert Int16Array to Base64
+function int16ToBase64(int16Array: Int16Array): string {
+  const uint8 = new Uint8Array(int16Array.buffer, int16Array.byteOffset, int16Array.byteLength);
+  let binary = '';
+  const len = uint8.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(uint8[i]);
+  }
+  return btoa(binary);
+}
+
+// Helper: Convert Base64 to Float32Array
+function base64ToFloat32(base64: string): Float32Array {
+  const binary = atob(base64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  const int16Array = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
+  const float32 = new Float32Array(int16Array.length);
+  for (let i = 0; i < int16Array.length; i++) {
+    float32[i] = int16Array[i] / (int16Array[i] < 0 ? 0x8000 : 0x7FFF);
+  }
+  return float32;
+}
 
 export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   matchId,
@@ -51,16 +92,25 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   const [myVolumeLevel, setMyVolumeLevel] = useState(0);
   const [opponentMicConnected, setOpponentMicConnected] = useState(false);
   const [opponentSpeaking, setOpponentSpeaking] = useState(false);
+  const [opponentVolumeLevel, setOpponentVolumeLevel] = useState(0);
   const [audioError, setAudioError] = useState<string | null>(null);
+  const [speakerTested, setSpeakerTested] = useState(false);
+  const [outputVolume, setOutputVolume] = useState(1.0);
 
   const wsRef = useRef<WebSocket | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const silentLoopAudioRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const playbackAudioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
+  const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const nextPlayTimeRef = useRef<number>(0);
+  const isPoliteRef = useRef<boolean>(false);
+  const opponentSpeakingTimerRef = useRef<any>(null);
 
   // Scroll to bottom when new messages arrive
   useEffect(() => {
@@ -74,7 +124,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
     }
   }, [initialMessages]);
 
-  // If match becomes settled, clear local messages
+  // If match becomes settled, clear local messages and stop voice
   useEffect(() => {
     if (isSettled) {
       setMessages([]);
@@ -82,6 +132,40 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       stopAudio();
     }
   }, [isSettled]);
+
+  // Ensure AudioContext is kept awake when tab goes to background or user switches apps
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' || document.visibilityState === 'hidden') {
+        if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+          audioContextRef.current.resume().catch(() => {});
+        }
+        if (playbackAudioCtxRef.current && playbackAudioCtxRef.current.state === 'suspended') {
+          playbackAudioCtxRef.current.resume().catch(() => {});
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleVisibilityChange);
+    };
+  }, []);
+
+  // Helper to ensure playback AudioContext is created and running
+  const getPlaybackAudioContext = () => {
+    if (!playbackAudioCtxRef.current || playbackAudioCtxRef.current.state === 'closed') {
+      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+      playbackAudioCtxRef.current = new AudioCtxClass();
+    }
+    if (playbackAudioCtxRef.current.state === 'suspended') {
+      playbackAudioCtxRef.current.resume().catch(() => {});
+    }
+    return playbackAudioCtxRef.current;
+  };
 
   // 1. WebSocket Connection Setup
   useEffect(() => {
@@ -131,6 +215,11 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
             } else if (data.type === 'presence' || data.type === 'user_joined' || data.type === 'user_left') {
               if (data.activeUsers) {
                 setActiveUsers(data.activeUsers);
+                // Determine polite peer role based on userId comparison for perfect WebRTC negotiation
+                const other = data.activeUsers.find((u: any) => u.userId !== currentUser.id);
+                if (other) {
+                  isPoliteRef.current = currentUser.id < other.userId;
+                }
               }
             } else if (data.type === 'signal') {
               handleWebRtcSignal(data.signal);
@@ -138,6 +227,11 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
               if (data.userId !== currentUser.id) {
                 setOpponentMicConnected(!data.isMuted);
                 setOpponentSpeaking(Boolean(data.isSpeaking));
+              }
+            } else if (data.type === 'audio_stream') {
+              // Direct real-time audio chunk from opponent (NAT-penetrating fallback & parallel engine)
+              if (data.userId !== currentUser.id && data.pcm) {
+                handleIncomingAudioChunk(data.pcm, data.sampleRate || 16000);
               }
             }
           } catch (e) {
@@ -176,7 +270,56 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
     };
   }, [matchId, currentUser.id, isSettled]);
 
-  // 2. WebRTC Live Voice Signaling & Connection
+  // 2. Play incoming audio chunks via Web Audio API with zero latency
+  const handleIncomingAudioChunk = (base64Pcm: string, sampleRate: number) => {
+    try {
+      const audioCtx = getPlaybackAudioContext();
+      const float32Samples = base64ToFloat32(base64Pcm);
+      if (float32Samples.length === 0) return;
+
+      // Calculate opponent volume level for visual meter
+      let sum = 0;
+      for (let i = 0; i < float32Samples.length; i++) {
+        sum += Math.abs(float32Samples[i]);
+      }
+      const avg = sum / float32Samples.length;
+      const volumeLevel = Math.min(100, Math.round(avg * 400));
+      setOpponentVolumeLevel(volumeLevel);
+      setOpponentMicConnected(true);
+
+      if (volumeLevel > 5) {
+        setOpponentSpeaking(true);
+        if (opponentSpeakingTimerRef.current) clearTimeout(opponentSpeakingTimerRef.current);
+        opponentSpeakingTimerRef.current = setTimeout(() => {
+          setOpponentSpeaking(false);
+          setOpponentVolumeLevel(0);
+        }, 350);
+      }
+
+      // Create audio buffer and schedule playback
+      const audioBuffer = audioCtx.createBuffer(1, float32Samples.length, sampleRate);
+      audioBuffer.getChannelData(0).set(float32Samples);
+
+      const source = audioCtx.createBufferSource();
+      source.buffer = audioBuffer;
+
+      // Gain node for user volume slider control
+      const gainNode = audioCtx.createGain();
+      gainNode.gain.value = outputVolume;
+
+      source.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+
+      const now = audioCtx.currentTime;
+      const startTime = Math.max(now, nextPlayTimeRef.current);
+      source.start(startTime);
+      nextPlayTimeRef.current = startTime + audioBuffer.duration;
+    } catch (chunkErr) {
+      console.warn('Error playing live audio chunk:', chunkErr);
+    }
+  };
+
+  // 3. WebRTC Peer Connection & ICE Handling
   const initPeerConnection = () => {
     if (pcRef.current) return pcRef.current;
 
@@ -185,7 +328,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       pcRef.current = pc;
 
       pc.onicecandidate = (event) => {
-        if (event.candidate && event.candidate.candidate && wsRef.current?.readyState === WebSocket.OPEN) {
+        if (event.candidate && wsRef.current?.readyState === WebSocket.OPEN) {
           try {
             wsRef.current.send(JSON.stringify({
               type: 'signal',
@@ -196,9 +339,15 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       };
 
       pc.ontrack = (event) => {
-        if (remoteAudioRef.current && event.streams[0]) {
-          remoteAudioRef.current.srcObject = event.streams[0];
-          setOpponentMicConnected(true);
+        setOpponentMicConnected(true);
+        const stream = event.streams[0] || new MediaStream([event.track]);
+        if (remoteAudioRef.current) {
+          remoteAudioRef.current.srcObject = stream;
+          remoteAudioRef.current.muted = false;
+          remoteAudioRef.current.volume = outputVolume;
+          remoteAudioRef.current.play().catch((playErr) => {
+            console.warn('Remote audio autoplay waiting for gesture:', playErr);
+          });
         }
       };
 
@@ -214,7 +363,20 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       return pc;
     } catch (e) {
       console.warn('RTCPeerConnection init notice:', e);
-      return null as any;
+      return null;
+    }
+  };
+
+  const drainPendingIceCandidates = async (pc: RTCPeerConnection) => {
+    while (pendingCandidatesRef.current.length > 0) {
+      const candidate = pendingCandidatesRef.current.shift();
+      if (candidate) {
+        try {
+          await pc.addIceCandidate(candidate);
+        } catch (e) {
+          console.warn('Error adding queued ICE candidate:', e);
+        }
+      }
     }
   };
 
@@ -226,8 +388,9 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
 
       if (signal.sdp) {
         try {
-          // Pass the description dictionary directly
-          await pc.setRemoteDescription(signal.sdp);
+          await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+          await drainPendingIceCandidates(pc);
+
           if (signal.sdp.type === 'offer') {
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
@@ -239,11 +402,16 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
             }
           }
         } catch (sdpErr) {
-          console.warn('WebRTC SDP notice:', sdpErr);
+          console.warn('WebRTC SDP negotiation notice:', sdpErr);
         }
-      } else if (signal.candidate && signal.candidate.candidate) {
+      } else if (signal.candidate) {
         try {
-          await pc.addIceCandidate(signal.candidate);
+          const iceCandidate = new RTCIceCandidate(signal.candidate);
+          if (pc.remoteDescription && pc.remoteDescription.type) {
+            await pc.addIceCandidate(iceCandidate);
+          } else {
+            pendingCandidatesRef.current.push(signal.candidate);
+          }
         } catch (candidateErr) {
           console.warn('WebRTC ICE notice:', candidateErr);
         }
@@ -253,9 +421,38 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
     }
   };
 
+  // 4. Start Live Audio & Mobile Background Session
   const startAudio = async () => {
     try {
       setAudioError(null);
+
+      // A. Unlock browser audio playback context with user gesture
+      const playbackCtx = getPlaybackAudioContext();
+      if (playbackCtx.state === 'suspended') {
+        await playbackCtx.resume();
+      }
+
+      // B. Start silent loop audio track to keep mobile OS background audio alive
+      try {
+        if (silentLoopAudioRef.current) {
+          silentLoopAudioRef.current.volume = 0.01;
+          await silentLoopAudioRef.current.play().catch(() => {});
+        }
+      } catch (_) {}
+
+      // C. Register MediaSession for mobile lockscreen/background persistence
+      if ('mediaSession' in navigator && (window as any).MediaMetadata) {
+        try {
+          navigator.mediaSession.metadata = new (window as any).MediaMetadata({
+            title: `CODM Battle Comms - Room #${matchId.slice(-4).toUpperCase()}`,
+            artist: `Speaking with ${opponentName}`,
+            album: 'SafeEscrow Realtime Arena',
+          });
+          navigator.mediaSession.playbackState = 'playing';
+        } catch (_) {}
+      }
+
+      // D. Acquire microphone audio stream
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -267,17 +464,19 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       setIsMicEnabled(true);
       setIsMicMuted(false);
 
-      // Web Audio API for animated volume waveform
+      // E. Setup AudioContext capture & Real-time Live Audio Streaming Engine
       try {
-        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-        const audioCtx = new AudioContextClass();
-        audioContextRef.current = audioCtx;
-        const source = audioCtx.createMediaStreamSource(stream);
-        const analyser = audioCtx.createAnalyser();
+        const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+        const captureCtx = new AudioCtxClass();
+        audioContextRef.current = captureCtx;
+
+        const source = captureCtx.createMediaStreamSource(stream);
+        const analyser = captureCtx.createAnalyser();
         analyser.fftSize = 64;
         source.connect(analyser);
         analyserRef.current = analyser;
 
+        // Visual waveform checking
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
         let speakingDebounce = false;
 
@@ -292,7 +491,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
           const level = Math.min(100, Math.round((avg / 128) * 100));
           setMyVolumeLevel(level);
 
-          const isSpeakingNow = level > 15;
+          const isSpeakingNow = level > 12;
           if (isSpeakingNow !== speakingDebounce) {
             speakingDebounce = isSpeakingNow;
             if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -307,11 +506,33 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
           animFrameRef.current = requestAnimationFrame(checkVolume);
         };
         checkVolume();
+
+        // Real-Time Audio Chunk Streaming over WebSocket (NAT-Penetrating)
+        // Uses ScriptProcessorNode with bufferSize = 2048 to stream audio chunks
+        const scriptProcessor = captureCtx.createScriptProcessor(2048, 1, 1);
+        source.connect(scriptProcessor);
+        scriptProcessor.connect(captureCtx.destination);
+
+        scriptProcessor.onaudioprocess = (e) => {
+          if (localStreamRef.current && !isMicMuted) {
+            const inputChannel = e.inputBuffer.getChannelData(0);
+            const pcm16 = floatTo16BitPCM(inputChannel);
+            const base64Pcm = int16ToBase64(pcm16);
+
+            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({
+                type: 'audio_stream',
+                pcm: base64Pcm,
+                sampleRate: captureCtx.sampleRate || 16000
+              }));
+            }
+          }
+        };
       } catch (audioCtxErr) {
-        console.warn('Web Audio API not supported:', audioCtxErr);
+        console.warn('Web Audio capture API note:', audioCtxErr);
       }
 
-      // Add to WebRTC connection and send offer to opponent
+      // F. Setup WebRTC PeerConnection Offer
       try {
         const pc = initPeerConnection();
         if (pc) {
@@ -386,12 +607,56 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       pcRef.current.close();
       pcRef.current = null;
     }
+    if (silentLoopAudioRef.current) {
+      try {
+        silentLoopAudioRef.current.pause();
+      } catch (_) {}
+    }
     setIsMicEnabled(false);
     setIsMicMuted(false);
     setMyVolumeLevel(0);
+    setOpponentSpeaking(false);
+    setOpponentVolumeLevel(0);
   };
 
-  // 3. Send Text Message
+  // Test Speaker / Output Unmute helper
+  const handleTestSpeaker = () => {
+    try {
+      const audioCtx = getPlaybackAudioContext();
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+
+      // Play short clean double-beep chime
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(587.33, audioCtx.currentTime); // D5
+      osc.frequency.setValueAtTime(880, audioCtx.currentTime + 0.1); // A5
+
+      gain.gain.setValueAtTime(0, audioCtx.currentTime);
+      gain.gain.linearRampToValueAtTime(0.25 * outputVolume, audioCtx.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.35);
+
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.35);
+
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.volume = outputVolume;
+        remoteAudioRef.current.play().catch(() => {});
+      }
+
+      setSpeakerTested(true);
+      setTimeout(() => setSpeakerTested(false), 3000);
+    } catch (e) {
+      console.warn('Speaker test error:', e);
+    }
+  };
+
+  // 5. Send Text Message
   const handleSendMessage = async (textToSend?: string) => {
     const content = (textToSend || inputText).trim();
     if (!content || isSending) return;
@@ -441,14 +706,27 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   const isOpponentInRoom = activeUsers.some((u) => u.userId !== currentUser.id);
 
   return (
-    <div className="relative overflow-hidden rounded-2xl bg-neutral-900 border border-neutral-800 shadow-xl flex flex-col h-[480px]">
-      {/* Invisible audio element for opponent voice output */}
-      <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
+    <div className="relative overflow-hidden rounded-2xl bg-neutral-900 border border-neutral-800 shadow-xl flex flex-col h-[520px]">
+      {/* Invisible but active audio elements positioned off-screen to avoid mobile autoplay throttle */}
+      <audio
+        ref={remoteAudioRef}
+        autoPlay
+        playsInline
+        style={{ position: 'fixed', top: -9999, left: -9999, width: 1, height: 1, opacity: 0.01, pointerEvents: 'none' }}
+      />
+      {/* Silent 1-second WAV audio loop for mobile background execution */}
+      <audio
+        ref={silentLoopAudioRef}
+        loop
+        playsInline
+        src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"
+        style={{ position: 'fixed', top: -9999, left: -9999, width: 1, height: 1, opacity: 0.01, pointerEvents: 'none' }}
+      />
 
       {/* 1. Header Bar with Presence & Voice Controls */}
-      <div className="p-3.5 bg-neutral-950 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center">
+      <div className="p-3 bg-neutral-950 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-2.5">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center shrink-0">
             <MessageSquare className="w-4 h-4" />
           </div>
           <div>
@@ -472,20 +750,35 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
           </div>
         </div>
 
-        {/* Live Audio / Mic Bar */}
-        <div className="flex items-center gap-2">
+        {/* Live Audio / Mic Bar & Speaker Tools */}
+        <div className="flex items-center flex-wrap gap-1.5">
+          {/* Test Speaker Button */}
+          <button
+            type="button"
+            onClick={handleTestSpeaker}
+            className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1 border ${
+              speakerTested
+                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 ring-1 ring-emerald-400/50'
+                : 'bg-neutral-800/80 hover:bg-neutral-700 text-neutral-300 border-neutral-700'
+            }`}
+            title="Click to test your speaker output or unlock browser audio"
+          >
+            <Headphones className="w-3 h-3 text-amber-400" />
+            <span>{speakerTested ? 'Speaker Sounding Good! 🔊' : 'Test Audio'}</span>
+          </button>
+
           {!isMicEnabled ? (
             <button
               type="button"
               onClick={startAudio}
-              className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 hover:text-white text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 border border-neutral-700 shadow-sm"
-              title="Start real-time audio communication with opponent"
+              className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 shadow-md uppercase tracking-wider"
+              title="Start real-time voice communication with opponent"
             >
-              <Mic className="w-3.5 h-3.5 text-amber-400" />
+              <Mic className="w-3.5 h-3.5 text-neutral-950" />
               <span>Enable Voice Mic</span>
             </button>
           ) : (
-            <div className="flex items-center gap-1.5 p-1 rounded-xl bg-neutral-900 border border-neutral-700">
+            <div className="flex items-center gap-1 p-1 rounded-xl bg-neutral-900 border border-neutral-700">
               <button
                 type="button"
                 onClick={toggleMute}
@@ -502,7 +795,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
 
               {/* Animated Volume Waveform Bars */}
               {!isMicMuted && (
-                <div className="flex items-end gap-0.5 px-2 h-4" title={`Volume level: ${myVolumeLevel}%`}>
+                <div className="flex items-end gap-0.5 px-1.5 h-4" title={`Your mic volume: ${myVolumeLevel}%`}>
                   {[0.4, 0.7, 1.0, 0.6, 0.3].map((heightMulti, idx) => {
                     const activeHeight = Math.max(3, Math.round((myVolumeLevel / 100) * 16 * heightMulti));
                     return (
@@ -527,18 +820,6 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
             </div>
           )}
 
-          {/* Opponent Voice Indicator */}
-          {opponentMicConnected && (
-            <div className={`px-2.5 py-1 rounded-xl text-[10px] font-mono font-bold flex items-center gap-1.5 border ${
-              opponentSpeaking
-                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 animate-pulse'
-                : 'bg-neutral-800 text-neutral-300 border-neutral-700'
-            }`}>
-              <Volume2 className="w-3 h-3 text-emerald-400" />
-              <span>{opponentSpeaking ? 'Opponent Speaking...' : 'Opponent Mic Live'}</span>
-            </div>
-          )}
-
           {/* Manual clear chat */}
           {messages.length > 0 && !isSettled && (
             <button
@@ -550,6 +831,52 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
               <Trash2 className="w-3.5 h-3.5" />
             </button>
           )}
+        </div>
+      </div>
+
+      {/* Opponent Live Voice Status Ribbon */}
+      <div className="px-3.5 py-1.5 bg-neutral-950/90 border-b border-neutral-800 flex items-center justify-between text-[11px]">
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            <Volume2 className={`w-3.5 h-3.5 ${opponentSpeaking ? 'text-emerald-400 animate-bounce' : 'text-neutral-500'}`} />
+            <span className="text-neutral-400">{opponentName}'s Voice:</span>
+            {opponentSpeaking ? (
+              <span className="text-emerald-400 font-bold flex items-center gap-1">
+                <span>Speaking Live</span>
+                <span className="flex items-end gap-0.5 h-3">
+                  {[0.5, 1.0, 0.7, 0.3].map((h, i) => (
+                    <span
+                      key={i}
+                      className="w-1 bg-emerald-400 rounded-full animate-pulse"
+                      style={{ height: `${Math.max(4, Math.round((opponentVolumeLevel / 100) * 12 * h))}px` }}
+                    />
+                  ))}
+                </span>
+              </span>
+            ) : opponentMicConnected ? (
+              <span className="text-neutral-300 font-medium">Mic Active (Listening)</span>
+            ) : (
+              <span className="text-neutral-500">Connecting / Standby</span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1.5 text-neutral-400">
+          <span className="text-[10px] uppercase font-mono">Vol:</span>
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            value={outputVolume}
+            onChange={(e) => {
+              const val = parseFloat(e.target.value);
+              setOutputVolume(val);
+              if (remoteAudioRef.current) remoteAudioRef.current.volume = val;
+            }}
+            className="w-16 h-1.5 accent-amber-400 cursor-pointer bg-neutral-800 rounded-lg"
+            title={`Voice Volume: ${Math.round(outputVolume * 100)}%`}
+          />
         </div>
       </div>
 
@@ -583,7 +910,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
               Lobby Comms Channel Open
             </div>
             <p className="text-[11px] text-neutral-400 max-w-xs leading-relaxed">
-              Coordinate in-game room invite, rules, and match start time with {opponentName}. Live voice and chat are automatically wiped once settled.
+              Coordinate in-game room invite, rules, and match start time with {opponentName}. Live voice and chat work continuously even if you switch apps to Call of Duty: Mobile.
             </p>
           </div>
         )}

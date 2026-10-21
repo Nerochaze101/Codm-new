@@ -323,6 +323,14 @@ function initWebSocketServer(server: http.Server) {
             isMuted: payload.isMuted,
             isSpeaking: payload.isSpeaking,
           }, ws);
+        } else if (payload.type === 'audio_stream') {
+          // Live real-time audio chunk stream relay (carrier-grade NAT fallback)
+          broadcastToMatchRoom(matchId, {
+            type: 'audio_stream',
+            userId: ws.userId,
+            pcm: payload.pcm,
+            sampleRate: payload.sampleRate || 16000,
+          }, ws);
         }
       } catch (err) {
         console.error('Error processing ws message:', err);
