@@ -454,13 +454,12 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
-          sampleRate: 16000,
         },
       });
       localStreamRef.current = stream;
 
       const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      const audioCtx = new AudioCtxClass({ sampleRate: 16000 });
+      const audioCtx = new AudioCtxClass();
       audioContextRef.current = audioCtx;
       if (audioCtx.state === 'suspended') {
         await audioCtx.resume();
