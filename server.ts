@@ -198,20 +198,9 @@ interface MatchWsClient extends WebSocket {
   isAlive?: boolean;
 }
 
-const matchRooms = new Map<string, Set<MatchWsClient>>();
-
-export function broadcastToMatchRoom(matchId: string, payload: any, excludeClient?: WebSocket) {
-  const room = matchRooms.get(matchId);
-  if (!room) return;
-  const msg = JSON.stringify(payload);
-  for (const client of room) {
-    if (client.readyState === WebSocket.OPEN && client !== excludeClient) {
-      try {
-        client.send(msg);
-      } catch (e) {
-        console.error('Error sending ws message:', e);
-      }
-    }
+export function broadcastToMatchRoom(matchId: string, payload: any) {
+  if (globalIo) {
+    globalIo.to(matchId).emit('payload', payload);
   }
 }
 
@@ -222,155 +211,13 @@ export async function clearMatchChatInDb(matchId: string) {
       SET chat_messages = '[]'::jsonb
       WHERE id = ${escapeSql(matchId)}
     `);
-    broadcastToMatchRoom(matchId, { type: 'chat_cleared', matchId });
+    if (globalIo) {
+      globalIo.to(matchId).emit('chat_cleared', { matchId });
+    }
     console.log(`[Chat Purge] Chat messages successfully purged from database for match ${matchId}`);
   } catch (err) {
     console.error(`Error clearing chat in DB for match ${matchId}:`, err);
   }
-}
-
-function initWebSocketServer(server: http.Server) {
-  const wss = new WebSocketServer({ server, path: '/ws' });
-
-  wss.on('connection', (ws: MatchWsClient, req) => {
-    ws.isAlive = true;
-    ws.on('pong', () => { ws.isAlive = true; });
-
-    const host = req.headers.host || 'localhost';
-    const parsedUrl = new URL(req.url || '', `http://${host}`);
-    const matchId = parsedUrl.searchParams.get('matchId') || '';
-    const userId = parsedUrl.searchParams.get('userId') || '';
-    const userName = parsedUrl.searchParams.get('userName') || 'Gamer';
-
-    if (!matchId) {
-      ws.close(1008, 'Missing matchId');
-      return;
-    }
-
-    ws.matchId = matchId;
-    ws.userId = userId;
-    ws.userName = userName;
-
-    if (!matchRooms.has(matchId)) {
-      matchRooms.set(matchId, new Set());
-    }
-    const room = matchRooms.get(matchId)!;
-    room.add(ws);
-
-    // Send initial presence confirmation
-    const activeUsers = Array.from(room).map(c => ({ userId: c.userId, userName: c.userName }));
-    try {
-      ws.send(JSON.stringify({
-        type: 'presence',
-        activeUsers,
-        matchId,
-      }));
-    } catch (_) {}
-
-    // Broadcast user joined to other room participants
-    broadcastToMatchRoom(matchId, {
-      type: 'user_joined',
-      userId,
-      userName,
-      activeUsers,
-      matchId,
-    }, ws);
-
-    ws.on('message', async (data) => {
-      try {
-        const payload = JSON.parse(data.toString());
-        if (payload.type === 'chat') {
-          const text = (payload.text || '').trim();
-          if (!text) return;
-          const newMsg = {
-            id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
-            senderId: ws.userId || 'unknown',
-            senderName: ws.userName || 'Gamer',
-            text,
-            timestamp: Date.now(),
-          };
-
-          // Save message to database
-          try {
-            await pool.query(`
-              UPDATE matches 
-              SET chat_messages = COALESCE(chat_messages, '[]'::jsonb) || ${escapeSql([newMsg])}::jsonb
-              WHERE id = ${escapeSql(matchId)}
-            `);
-          } catch (dbErr) {
-            console.error('Failed to persist chat message in DB:', dbErr);
-          }
-
-          // Broadcast to everyone in the room (including sender)
-          const currRoom = matchRooms.get(matchId);
-          if (currRoom) {
-            const out = JSON.stringify({ type: 'chat', message: newMsg, matchId });
-            for (const c of currRoom) {
-              if (c.readyState === WebSocket.OPEN) {
-                c.send(out);
-              }
-            }
-          }
-        } else if (payload.type === 'signal') {
-          // WebRTC signal relay (offer, answer, candidate) to opponent
-          broadcastToMatchRoom(matchId, {
-            type: 'signal',
-            from: ws.userId,
-            signal: payload.signal,
-          }, ws);
-        } else if (payload.type === 'mic_state') {
-          // Live audio mic status (speaking/muted)
-          broadcastToMatchRoom(matchId, {
-            type: 'mic_state',
-            userId: ws.userId,
-            isMuted: payload.isMuted,
-            isSpeaking: payload.isSpeaking,
-          }, ws);
-        } else if (payload.type === 'audio_stream') {
-          // Live real-time audio chunk stream relay (carrier-grade NAT fallback)
-          broadcastToMatchRoom(matchId, {
-            type: 'audio_stream',
-            userId: ws.userId,
-            pcm: payload.pcm,
-            sampleRate: payload.sampleRate || 16000,
-          }, ws);
-        }
-      } catch (err) {
-        console.error('Error processing ws message:', err);
-      }
-    });
-
-    ws.on('close', () => {
-      const currRoom = matchRooms.get(matchId);
-      if (currRoom) {
-        currRoom.delete(ws);
-        if (currRoom.size === 0) {
-          matchRooms.delete(matchId);
-        } else {
-          const activeUsers = Array.from(currRoom).map(c => ({ userId: c.userId, userName: c.userName }));
-          broadcastToMatchRoom(matchId, {
-            type: 'user_left',
-            userId: ws.userId,
-            userName: ws.userName,
-            activeUsers,
-            matchId,
-          });
-        }
-      }
-    });
-  });
-
-  const interval = setInterval(() => {
-    wss.clients.forEach((ws: any) => {
-      if (ws.isAlive === false) return ws.terminate();
-      ws.isAlive = false;
-      ws.ping();
-    });
-  }, 30000);
-
-  wss.on('close', () => {
-    clearInterval(interval);
-  });
 }
 
 // ==========================================
@@ -5598,15 +5445,17 @@ async function startServer() {
           timestamp: data.timestamp || Date.now(),
         };
 
-        // Persist message to match record in PostgreSQL
-        try {
-          await pool.query(`
-            UPDATE matches 
-            SET chat_messages = COALESCE(chat_messages, '[]'::jsonb) || ${escapeSql([newMsg])}::jsonb
-            WHERE id = ${escapeSql(data.matchId)}
-          `);
-        } catch (dbErr) {
-          console.error('Failed to persist socket chat message in DB:', dbErr);
+        // Persist message to match record in PostgreSQL (skip for world chat)
+        if (data.matchId !== 'lobby_global') {
+          try {
+            await pool.query(`
+              UPDATE matches 
+              SET chat_messages = COALESCE(chat_messages, '[]'::jsonb) || ${escapeSql([newMsg])}::jsonb
+              WHERE id = ${escapeSql(data.matchId)}
+            `);
+          } catch (dbErr) {
+            console.error('Failed to persist socket chat message in DB:', dbErr);
+          }
         }
 
         // Broadcast to all clients in the match room with guaranteed unique id

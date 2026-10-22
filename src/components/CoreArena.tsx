@@ -5,7 +5,7 @@ import {
   ArrowRight, AlertCircle, CheckCircle2, MessageCircle, Wallet,
   UserCheck, RefreshCw, Sparkles, Crosshair, Target, X, Plus,
   Flame, Zap, Users, Flag, Shield, Sliders, ChevronRight, Gamepad2, MapPin,
-  TrendingUp, Award, Clock, Lock, AlertTriangle, XCircle, Bell
+  TrendingUp, Award, Clock, Lock, AlertTriangle, XCircle, Bell, Info
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { SkeletonLoader } from './SkeletonLoader';
@@ -15,14 +15,9 @@ import { calculateAbandonedMatchRefund } from '../utils/feeCalculator';
 import { requestNotificationPermission, getNotificationPermission, isIOS, isStandalone } from '../services/notificationService';
 import { IOSNotificationGuideModal } from './IOSNotificationGuideModal';
 
-// Helper for card background
 const CardBackground = () => (
   <div className="absolute inset-0 z-0 opacity-10">
-    <img
-      src={CODM_IMAGES.cardBgSubtle}
-      alt="Card Background"
-      className="w-full h-full object-cover"
-    />
+    <img src={CODM_IMAGES.cardBgSubtle} alt="" className="w-full h-full object-cover" />
     <div className="absolute inset-0 bg-neutral-900/60" />
   </div>
 );
@@ -44,35 +39,12 @@ interface CoreArenaProps {
   onOpenWallet?: () => void;
   onRefresh: () => Promise<void>;
   onOpenNewUserOnboarding: (match?: Match) => void;
-  onCashOut?: (
-    amount: number,
-    bankDetails: {
-      bankName: string;
-      accountNumber: string;
-      accountName: string;
-      gateway?: 'flutterwave' | 'paystack';
-    }
-  ) => Promise<void>;
+  onCashOut?: (amount: number, bankDetails: { bankName: string; accountNumber: string; accountName: string; gateway?: 'flutterwave' | 'paystack' }) => Promise<void>;
 }
 
 export const CoreArena: React.FC<CoreArenaProps> = ({
-  currentUser,
-  matches,
-  isMatchesLoading,
-  onCreateBet,
-  onJoinMatch,
-  onOpponentStake,
-  onCreatorStake,
-  onSimulateOpponentStake,
-  onSubmitResult,
-  onCancelMatch,
-  onAbandonMatch,
-  onDismissMatch,
-  onOpenWallet,
-  onRefresh,
-  onOpenNewUserOnboarding,
-  onOpenCreateBet,
-  onCashOut,
+  currentUser, matches, isMatchesLoading, onCreateBet, onJoinMatch, onOpponentStake, onCreatorStake,
+  onSubmitResult, onCancelMatch, onAbandonMatch, onDismissMatch, onRefresh, onOpenNewUserOnboarding, onOpenCreateBet, onCashOut
 }) => {
   const [selectedClaim, setSelectedClaim] = useState<'VICTORY' | 'DEFEAT' | 'DRAW'>('VICTORY');
   const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
@@ -88,56 +60,23 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   const [showNotificationPrompt, setShowNotificationPrompt] = useState(true);
   const [showIOSGuideModal, setShowIOSGuideModal] = useState(false);
   const [activeMatchSubTab, setActiveMatchSubTab] = useState<'game' | 'chat'>('game');
-
-  // Listen for iOS PWA guide trigger
-  useEffect(() => {
-    const handleIOSGuide = () => setShowIOSGuideModal(true);
-    window.addEventListener('codm_show_ios_pwa_guide', handleIOSGuide);
-    return () => window.removeEventListener('codm_show_ios_pwa_guide', handleIOSGuide);
-  }, []);
-
-  // Staking Modal state
+  const [searchQuery, setSearchQuery] = useState('');
   const [stakeTargetMatch, setStakeTargetMatch] = useState<Match | null>(null);
   const [stakeRole, setStakeRole] = useState<'opponent' | 'creator'>('opponent');
   const [isStakeModalOpen, setIsStakeModalOpen] = useState(false);
-
-  const [dismissedMatchIds, setDismissedMatchIds] = useState<string[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem('codm_dismissed_matches') || '[]');
-    } catch {
-      return [] as string[];
-    }
-  });
-
-  const handleReturnToLobby = async (matchId: string) => {
-    const updated = [...dismissedMatchIds, matchId];
-    setDismissedMatchIds(updated);
-    try {
-      localStorage.setItem('codm_dismissed_matches', JSON.stringify(updated));
-    } catch {}
-    await onRefresh();
-  };
-
-  // Find active match where currentUser is a participant (creator or opponent)
-  const myActiveMatch = matches.find(
-    (m) =>
-      (m.creator.id === currentUser.id || m.opponent?.id === currentUser.id) &&
-      m.status !== 'CANCELLED' &&
-      !dismissedMatchIds.includes(m.id)
-  );
-
   const [timeLeft, setTimeLeft] = useState<string>('');
   const [isExpired, setIsExpired] = useState<boolean>(false);
-
-
   const [serverTimeOffset, setServerTimeOffset] = useState<number>(0);
 
+  const [dismissedMatchIds, setDismissedMatchIds] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('codm_dismissed_matches') || '[]'); } catch { return []; }
+  });
+
+  const myActiveMatch = matches.find(m => (m.creator.id === currentUser.id || m.opponent?.id === currentUser.id) && m.status !== 'CANCELLED' && !dismissedMatchIds.includes(m.id));
+  const [arenaTab, setArenaTab] = useState<'live' | 'active' | 'hosted'>(() => (myActiveMatch && myActiveMatch.status !== 'SETTLED' && myActiveMatch.status !== 'ABANDONED') ? 'active' : 'live');
+
   useEffect(() => {
-    fetch('/api/server-time')
-      .then(res => res.json())
-      .then(data => {
-        setServerTimeOffset(data.serverTime - Date.now());
-      });
+    fetch('/api/server-time').then(res => res.json()).then(data => setServerTimeOffset(data.serverTime - Date.now())).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -145,1063 +84,276 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
     const targetTime = myActiveMatch.roomGeneratedAt + (myActiveMatch.matchDurationMinutes * 60 * 1000);
     const updateTimer = () => {
       const diff = targetTime - (Date.now() + serverTimeOffset);
-      if (diff <= 0) {
-        setTimeLeft('00:00');
-        setIsExpired(true);
-      } else {
+      if (diff <= 0) { setTimeLeft('00:00'); setIsExpired(true); } 
+      else {
         const mins = Math.floor(diff / (1000 * 60));
         const secs = Math.floor((diff % (1000 * 60)) / 1000);
         setTimeLeft(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
         setIsExpired(false);
       }
     };
-
     updateTimer();
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
   }, [myActiveMatch, serverTimeOffset]);
 
-
-  const [searchQuery, setSearchQuery] = useState('');
-  
-  const [arenaTab, setArenaTab] = useState<'live' | 'active' | 'hosted'>(() => {
-    return (myActiveMatch && myActiveMatch.status !== 'SETTLED' && myActiveMatch.status !== 'ABANDONED') ? 'active' : 'live';
-  });
-
   useEffect(() => {
-    if (myActiveMatch && ['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(myActiveMatch.status)) {
-      setArenaTab('active');
-    }
+    if (myActiveMatch && ['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(myActiveMatch.status)) setArenaTab('active');
   }, [myActiveMatch?.status]);
-  const [cancellingMatchId, setCancellingMatchId] = useState<string | null>(null);
 
-  // Public open challenges in lobby
-  const openChallenges = matches.filter(
-    (m) => m.status === 'PENDING_OPPONENT_STAKE' && m.isPublic !== false
-  );
-
-  // My hosted bets waiting for opponent
-  const myHostedBets = matches.filter(
-    (m) => m.creator.id === currentUser.id && m.status === 'PENDING_OPPONENT_STAKE'
-  );
-
-  const handleCancelHostedBet = async (matchId: string) => {
-    if (!confirm('Are you sure you want to cancel this hosted bet? Your staked amount will be 100% fully refunded to your wallet immediately.')) return;
-    setCancellingMatchId(matchId);
-    try {
-      await onCancelMatch(matchId);
-      await onRefresh();
-    } catch (err: any) {
-      alert(err.message || 'Failed to cancel match');
-    } finally {
-      setCancellingMatchId(null);
-    }
-  };
-
-  const cleanedQuery = searchQuery.trim().replace(/^#/, '').replace(/.*\?join=/, '').toUpperCase();
-  const filteredChallenges = openChallenges.filter(m => 
-    cleanedQuery === '' ||
-    m.challengeCode.toUpperCase().includes(cleanedQuery) ||
-    m.id.toUpperCase().includes(cleanedQuery) ||
-    (m.roomCode && m.roomCode.toUpperCase().includes(cleanedQuery))
-  );
-  
+  const openChallenges = matches.filter(m => m.status === 'PENDING_OPPONENT_STAKE' && m.isPublic !== false);
+  const myHostedBets = matches.filter(m => m.creator.id === currentUser.id && m.status === 'PENDING_OPPONENT_STAKE');
   const isCreatorOfActive = myActiveMatch?.creator.id === currentUser.id;
+  const filteredChallenges = openChallenges.filter(m => searchQuery.trim() === '' || m.challengeCode.toUpperCase().includes(searchQuery.trim().toUpperCase()));
 
-  const copyCode = (code: string) => {
-    navigator.clipboard.writeText(code);
-    setCopiedCode(true);
-    setTimeout(() => setCopiedCode(false), 2000);
-  };
-
-  const copyInviteLink = (matchId: string) => {
-    const url = `${window.location.origin}/?join=${matchId}`;
-    navigator.clipboard.writeText(url);
-    setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 2000);
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        setScreenshotPreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
+  const copyCode = (code: string) => { navigator.clipboard.writeText(code); setCopiedCode(true); setTimeout(() => setCopiedCode(false), 2000); };
+  const copyInviteLink = (matchId: string) => { navigator.clipboard.writeText(`${window.location.origin}/?join=${matchId}`); setCopiedLink(true); setTimeout(() => setCopiedLink(false), 2000); };
 
   const handleResultSubmit = async (matchId: string, directClaim?: 'VICTORY' | 'DEFEAT' | 'DRAW') => {
-    const claimToSubmit = directClaim || selectedClaim;
-    const isConflict = myActiveMatch?.status === 'DISPUTED';
-
-    if (isConflict && !screenshotPreview) {
-      setSubmitError('Conflict Detected: Please attach or select your scoreboard screenshot proof to resolve the dispute.');
-      return;
-    }
-
-    setIsSubmitting(true);
-    setSubmitError(null);
-    try {
-      await onSubmitResult(matchId, claimToSubmit, screenshotPreview || undefined);
-      if (isConflict) {
-        setScreenshotPreview(null);
-      }
-    } catch (err: any) {
-      setSubmitError(err.message || 'Submission failed');
-    } finally {
-      setIsSubmitting(false);
-    }
+    const claim = directClaim || selectedClaim;
+    if (myActiveMatch?.status === 'DISPUTED' && !screenshotPreview) { setSubmitError('Screenshot required for dispute.'); return; }
+    setIsSubmitting(true); setSubmitError(null);
+    try { await onSubmitResult(matchId, claim, screenshotPreview || undefined); if (myActiveMatch?.status === 'DISPUTED') setScreenshotPreview(null); } 
+    catch (err: any) { setSubmitError(err.message || 'Submission failed'); } 
+    finally { setIsSubmitting(false); }
   };
 
-  const handleConfirmStake = async (method: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance' | 'flutterwave') => {
+  const handleConfirmStake = async (method: any) => {
     if (!stakeTargetMatch) return;
-    if (stakeRole === 'opponent' && onOpponentStake) {
-      await onOpponentStake(stakeTargetMatch.id, method);
-    } else if (stakeRole === 'creator' && onCreatorStake) {
-      await onCreatorStake(stakeTargetMatch.id, method);
-    }
+    if (stakeRole === 'opponent' && onOpponentStake) await onOpponentStake(stakeTargetMatch.id, method);
+    else if (stakeRole === 'creator' && onCreatorStake) await onCreatorStake(stakeTargetMatch.id, method);
     await onRefresh();
   };
 
-  if (isMatchesLoading) {
-    return (
-      <div className="max-w-6xl mx-auto space-y-8 pb-16">
-        <SkeletonLoader count={3} />
-      </div>
-    );
-  }
+  const handleReturnToLobby = async (matchId: string) => {
+    const updated = [...dismissedMatchIds, matchId];
+    setDismissedMatchIds(updated);
+    localStorage.setItem('codm_dismissed_matches', JSON.stringify(updated));
+    await onRefresh();
+  };
+
+  if (isMatchesLoading) return <div className="max-w-6xl mx-auto space-y-8 pb-16"><SkeletonLoader count={3} /></div>;
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 pb-16">
-      {/* PHONE & BROWSER ALERT PROMPT BANNER */}
-      {showNotificationPrompt && typeof window !== 'undefined' && (
-        ('Notification' in window && getNotificationPermission() === 'default') ||
-        (isIOS() && !isStandalone())
-      ) && (
-        <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-neutral-900 to-neutral-900 border border-amber-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xl">
+      {/* 1. Alert Banner */}
+      {showNotificationPrompt && typeof window !== 'undefined' && (('Notification' in window && getNotificationPermission() === 'default') || (isIOS() && !isStandalone())) && (
+        <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 to-neutral-900 border border-amber-500/30 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xl">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-amber-400 text-neutral-950 flex items-center justify-center font-bold shrink-0 shadow">
-              <Bell className="w-5 h-5 animate-pulse" />
-            </div>
+            <div className="w-10 h-10 rounded-xl bg-amber-400 text-neutral-950 flex items-center justify-center font-bold shrink-0"><Bell className="w-6 h-6 animate-pulse" /></div>
             <div>
-              <div className="text-xs font-bold text-white flex items-center gap-2">
-                <span>{isIOS() ? 'iPhone Lock-Screen Alerts' : 'Enable Phone & Browser Notifications'}</span>
-                <span className="text-[10px] bg-amber-400/20 text-amber-300 px-1.5 py-0.5 rounded font-mono uppercase tracking-wider">
-                  {isIOS() && !isStandalone() ? 'iOS Setup' : 'Mobile Lock Screen'}
-                </span>
-              </div>
-              <p className="text-[11px] text-neutral-300 mt-0.5 leading-relaxed">
-                {isIOS() && !isStandalone()
-                  ? 'Add CODM 1v1 to your iPhone Home Screen to receive instant lock-screen alerts & keep voice comms active!'
-                  : 'Receive instant mobile alerts when a rival joins your challenge, stakes lock into escrow, or your in-game room starts!'}
-              </p>
+              <div className="text-sm font-bold text-white uppercase tracking-wide">Enable Match Alerts</div>
+              <p className="text-xs text-neutral-400">Get notified when a rival joins or match starts.</p>
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
-            <button
-              onClick={async () => {
-                if (isIOS() && !isStandalone()) {
-                  setShowIOSGuideModal(true);
-                  setShowNotificationPrompt(false);
-                  return;
-                }
-                await requestNotificationPermission();
-                setShowNotificationPrompt(false);
-              }}
-              className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wide rounded-xl transition-all shadow cursor-pointer active:scale-95"
-            >
-              {isIOS() && !isStandalone() ? 'Setup on iPhone' : 'Enable Alerts'}
-            </button>
-            <button
-              onClick={() => setShowNotificationPrompt(false)}
-              className="p-1.5 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer"
-              title="Dismiss"
-            >
-              <X size={15} />
-            </button>
+          <div className="flex items-center gap-2">
+            <button onClick={async () => { if (isIOS() && !isStandalone()) setShowIOSGuideModal(true); else await requestNotificationPermission(); setShowNotificationPrompt(false); }} className="px-4 py-2 bg-amber-400 text-neutral-950 font-black text-xs uppercase rounded-xl">Enable</button>
+            <button onClick={() => setShowNotificationPrompt(false)} className="p-2 text-neutral-500 hover:text-white"><X size={18} /></button>
           </div>
         </div>
       )}
 
-      {/* ARENA NAVIGATION TABS */}
+      {/* 2. Tab Switcher */}
       <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-neutral-900 border border-neutral-800 max-w-xl mx-auto">
-        <button
-          type="button"
-          onClick={() => setArenaTab('live')}
-          className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 ${
-            arenaTab === 'live'
-              ? 'bg-amber-400 text-neutral-950 shadow-lg'
-              : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
-          }`}
-        >
-          <Flame className="w-4 h-4" />
-          <span>Live Lobby ({openChallenges.length})</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setArenaTab('active')}
-          className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 ${
-            arenaTab === 'active'
-              ? 'bg-amber-400 text-neutral-950 shadow-lg'
-              : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
-          }`}
-        >
-          <Zap className="w-4 h-4" />
-          <span>Active Match ({myActiveMatch ? 1 : 0})</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setArenaTab('hosted')}
-          className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 ${
-            arenaTab === 'hosted'
-              ? 'bg-amber-400 text-neutral-950 shadow-lg'
-              : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
-          }`}
-        >
-          <Swords className="w-4 h-4" />
-          <span>Hosted Bets ({myHostedBets.length})</span>
-        </button>
+        {(['live', 'active', 'hosted'] as const).map(tab => (
+          <button key={tab} onClick={() => setArenaTab(tab)} className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 ${arenaTab === tab ? 'bg-amber-400 text-neutral-950 shadow-lg' : 'text-neutral-400 hover:text-white'}`}>
+            {tab === 'live' && <Flame size={16} />} {tab === 'active' && <Zap size={16} />} {tab === 'hosted' && <Swords size={16} />}
+            <span className="capitalize">{tab} {tab === 'active' ? '' : `(${tab === 'live' ? openChallenges.length : myHostedBets.length})`}</span>
+          </button>
+        ))}
       </div>
 
-      {/* TAB 1: ACTIVE MATCH ROOM */}
+      {/* 3. Live Lobby Tab */}
+      {arenaTab === 'live' && (
+        <div className="space-y-6">
+          {myActiveMatch && (
+            <div className="p-4 rounded-2xl bg-neutral-900 border-2 border-amber-400 flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-400 text-neutral-950 flex items-center justify-center font-black"><Zap size={20} /></div>
+                <div>
+                  <div className="text-xs font-black text-amber-400 uppercase tracking-widest">Active Battle In Progress</div>
+                  <p className="text-sm font-bold text-white">Vs {isCreatorOfActive ? (myActiveMatch.opponent?.codmIgn || 'Opponent') : myActiveMatch.creator.codmIgn}</p>
+                </div>
+              </div>
+              <button onClick={() => setArenaTab('active')} className="w-full sm:w-auto px-6 py-2.5 bg-amber-400 text-neutral-950 font-black rounded-xl text-xs uppercase flex items-center justify-center gap-2">Open Match Room <ArrowRight size={16} /></button>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div className="lg:col-span-2 space-y-8">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="relative overflow-hidden rounded-3xl p-6 border-2 border-amber-500/50 hover:border-amber-400 bg-neutral-900 shadow-xl transition-all flex flex-col justify-between min-h-[220px] group">
+                   <div className="absolute inset-0 z-0 opacity-20"><img src={CODM_IMAGES.shipment1v1} className="w-full h-full object-cover" alt="" /></div>
+                   <div className="relative z-10">
+                     <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center mb-4"><Crosshair className="text-amber-400" /></div>
+                     <h3 className="text-xl font-black text-white font-heading uppercase">SOLO 1V1 DUEL</h3>
+                     <p className="text-xs text-neutral-400 mt-1">Snipers only or Gunfight on Shipment.</p>
+                   </div>
+                   <button onClick={() => onOpenCreateBet?.('1v1 Sniper Only', 1000)} className="relative z-10 mt-4 py-2.5 bg-amber-400 text-neutral-950 font-black rounded-xl text-xs uppercase">Generate Link</button>
+                </div>
+                <div className="relative overflow-hidden rounded-3xl p-6 border-2 border-emerald-500/50 hover:border-emerald-400 bg-neutral-900 shadow-xl transition-all flex flex-col justify-between min-h-[220px] group">
+                   <div className="absolute inset-0 z-0 opacity-20"><img src={CODM_IMAGES.squadTactical} className="w-full h-full object-cover" alt="" /></div>
+                   <div className="relative z-10">
+                     <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center mb-4"><Users className="text-emerald-400" /></div>
+                     <h3 className="text-xl font-black text-white font-heading uppercase">SQUAD BATTLE</h3>
+                     <p className="text-xs text-neutral-400 mt-1">Tactical Search & Destroy or Hardpoint.</p>
+                   </div>
+                   <button onClick={() => onOpenCreateBet?.('Search & Destroy (S&D)', 1000)} className="relative z-10 mt-4 py-2.5 bg-emerald-500 text-neutral-950 font-black rounded-xl text-xs uppercase">Generate Link</button>
+                </div>
+              </div>
+
+              <div className="space-y-4 pt-4 border-t border-neutral-800">
+                <div className="flex items-center justify-between"><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-neutral-400"><Flame size={16} className="text-amber-400" /><span>Lobby Challenges</span></div><input type="text" placeholder="Search #Code" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="bg-neutral-950 border border-neutral-800 rounded-lg py-1.5 px-3 text-xs text-white" /></div>
+                {filteredChallenges.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {filteredChallenges.map(m => (
+                      <div key={m.id} className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 hover:border-amber-400/40 transition-all flex flex-col justify-between shadow-lg">
+                        <div className="flex items-center justify-between mb-3"><span className="text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded border border-amber-500/20">#{m.challengeCode}</span><span className="text-xs font-black text-emerald-400">₦{m.stakeAmount.toLocaleString()}</span></div>
+                        <div className="flex items-center gap-2.5"><img src={m.creator.avatar} alt="" className="w-8 h-8 rounded-lg bg-neutral-800" /><div className="min-w-0 flex-1"><div className="text-xs font-bold text-white truncate">{m.creator.codmIgn}</div><div className="text-[10px] text-neutral-400 truncate">{m.gameMode} · {m.map}</div></div></div>
+                        <button onClick={() => { setStakeTargetMatch(m); setStakeRole('opponent'); setIsStakeModalOpen(true); }} className="w-full mt-3 py-2 bg-neutral-800 hover:bg-neutral-700 text-amber-400 font-black rounded-lg text-[10px] uppercase">Accept Duel</button>
+                      </div>
+                    ))}
+                  </div>
+                ) : <div className="p-10 rounded-2xl bg-neutral-950 border border-dashed border-neutral-800 text-center text-neutral-500 text-xs italic">No open challenges.</div>}
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div className="p-4 rounded-3xl bg-neutral-900 border border-neutral-800 space-y-3 sticky top-6">
+                <div className="flex items-center gap-2 pb-2"><MessageCircle size={18} className="text-emerald-400" /><span className="text-xs font-black uppercase tracking-widest text-white">World Chat</span></div>
+                <div className="relative h-[550px] rounded-2xl overflow-hidden shadow-inner border border-white/5"><MatchLobbyChat matchId="lobby_global" currentUser={currentUser} opponentName="World Arena" initialMessages={[]} isSettled={false} /></div>
+                <div className="text-[10px] text-neutral-500 flex gap-2"><Info size={12} className="text-amber-500 shrink-0" /><span>Find opponents or coordinate rules here.</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. Active Match Tab */}
       {arenaTab === 'active' && (
         myActiveMatch ? (
           <div className="relative overflow-hidden rounded-2xl bg-neutral-900 border border-amber-500/40 p-5 sm:p-6 shadow-xl space-y-5 group">
-          {/* Authentic Match Room Background Image */}
-          <div className="absolute inset-0 z-0">
-            <img
-              src={CODM_IMAGES.matchRoomBg}
-              alt="Active Match Room"
-              className="w-full h-full object-cover opacity-25 group-hover:scale-105 transition-transform duration-700"
-              referrerPolicy="no-referrer"
-              onError={(e) => {
-                (e.target as HTMLImageElement).src = CODM_IMAGES.matchRoomBgFallback;
-              }}
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-neutral-950/85 to-neutral-950/90" />
-            <div className="absolute inset-0 bg-radial from-transparent to-neutral-950/95" />
-          </div>
-
-          {/* Header Bar */}
-          <div className="relative z-10 flex flex-wrap items-center justify-between gap-3 pb-3.5 border-b border-neutral-800/80">
-            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-400 text-xs font-mono font-bold">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                <span>{myActiveMatch.status.replace(/_/g, ' ')}</span>
-              </div>
-              <span className="text-xs font-bold text-white font-heading tracking-wide">
-                {myActiveMatch.gameMode}
-              </span>
-              <span className="text-xs text-neutral-400 font-mono">
-                Map: <strong className="text-neutral-200">{myActiveMatch.map}</strong>
-              </span>
+            <div className="absolute inset-0 z-0 opacity-20"><img src={CODM_IMAGES.matchRoomBg} className="w-full h-full object-cover" alt="" /><div className="absolute inset-0 bg-neutral-950/80" /></div>
+            
+            <div className="relative z-10 flex flex-wrap items-center justify-between gap-3 pb-3.5 border-b border-neutral-800/80">
+              <div className="flex items-center gap-3"><div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-bold uppercase"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /><span>{myActiveMatch.status.replace(/_/g, ' ')}</span></div><span className="text-xs font-bold text-white">{myActiveMatch.gameMode}</span></div>
+              <div className="flex items-center gap-2"><div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-black border border-neutral-800"><span className="text-[10px] text-neutral-400 font-mono">CODE:</span><span className="text-xs font-black text-amber-400">{myActiveMatch.roomCode || myActiveMatch.challengeCode}</span><button onClick={() => copyCode(myActiveMatch.roomCode || myActiveMatch.challengeCode)} className="text-neutral-500 ml-1 hover:text-white"><Copy size={12} /></button></div><div className="px-3 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 text-xs font-bold">Pot: ₦{myActiveMatch.potAmount.toLocaleString()}</div></div>
             </div>
 
-            <div className="flex items-center gap-2">
-              {/* Room Code or Challenge Code Pill */}
-              <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-neutral-950/90 border border-neutral-800">
-                <span className="text-[10px] text-neutral-400 font-mono">
-                  {myActiveMatch.roomCode ? 'ROOM:' : 'CHALLENGE:'}
-                </span>
-                <span className="text-xs sm:text-sm font-black font-mono-nums text-amber-400">
-                  {myActiveMatch.roomCode || myActiveMatch.challengeCode}
-                </span>
-                <button
-                  onClick={() => copyCode(myActiveMatch.roomCode || myActiveMatch.challengeCode)}
-                  className="text-neutral-400 hover:text-white transition-colors ml-1 p-0.5 cursor-pointer"
-                  title="Copy code"
-                >
-                  {copiedCode ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                </button>
-              </div>
-
-              {/* Pot Chip */}
-              <div className="px-3 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-xs font-mono-nums text-emerald-400 font-bold">
-                Pot: ₦{myActiveMatch.potAmount.toLocaleString()}
-              </div>
+            <div className="relative z-10 flex lg:hidden rounded-xl bg-neutral-950 p-1 border border-neutral-800">
+              <button onClick={() => setActiveMatchSubTab('game')} className={`flex-1 py-2 text-xs font-black uppercase rounded-lg ${activeMatchSubTab === 'game' ? 'bg-amber-400 text-neutral-950' : 'text-neutral-400'}`}>🎮 Game</button>
+              <button onClick={() => setActiveMatchSubTab('chat')} className={`flex-1 py-2 text-xs font-black uppercase rounded-lg ${activeMatchSubTab === 'chat' ? 'bg-amber-400 text-neutral-950' : 'text-neutral-400'}`}>💬 Chat</button>
             </div>
-          </div>
 
-          {/* Active Match Sub-Tabs: Game Arena vs Match Chat */}
-          <div className="relative z-10 flex rounded-xl bg-neutral-950 p-1 border border-neutral-800 my-4">
-            <button
-              type="button"
-              onClick={() => setActiveMatchSubTab('game')}
-              className={`flex-1 py-2.5 text-xs font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer flex items-center justify-center gap-2 ${
-                activeMatchSubTab === 'game'
-                  ? 'bg-amber-400 text-neutral-950 shadow-md'
-                  : 'text-neutral-400 hover:text-white'
-              }`}
-            >
-              <Swords className="w-4 h-4" />
-              <span>🎮 Game Arena & Match Room</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveMatchSubTab('chat')}
-              className={`flex-1 py-2.5 text-xs font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer flex items-center justify-center gap-2 relative ${
-                activeMatchSubTab === 'chat'
-                  ? 'bg-amber-400 text-neutral-950 shadow-md'
-                  : 'text-neutral-400 hover:text-white'
-              }`}
-            >
-              <MessageCircle className="w-4 h-4" />
-              <span>💬 Match Chat & Voice Comms</span>
-              {myActiveMatch.chatMessages && myActiveMatch.chatMessages.length > 0 && (
-                <span className="w-5 h-5 rounded-full bg-emerald-500 text-neutral-950 text-[10px] font-black flex items-center justify-center">
-                  {myActiveMatch.chatMessages.length}
-                </span>
-              )}
-            </button>
-          </div>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 relative z-10">
+              <div className={`lg:col-span-2 space-y-4 ${activeMatchSubTab === 'chat' ? 'hidden lg:block' : 'block'}`}>
+                 <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-bold text-amber-400 flex justify-between items-center">
+                    <div className="flex items-center gap-2"><Clock size={16} className="animate-pulse" /><span>{isCreatorOfActive ? 'Host View: Awaiting Opponent' : 'Rival View: Stake & Play'}</span></div>
+                    <span className="text-emerald-400">Payout: ₦{myActiveMatch.winnerPayout.toLocaleString()}</span>
+                 </div>
 
-          {activeMatchSubTab === 'chat' ? (
-            <div className="space-y-4 pt-2">
-              <div className="p-4 rounded-2xl bg-neutral-900 border border-neutral-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-                    <span className="text-xs font-black uppercase tracking-wider text-white font-heading">
-                      Match Lobby Voice & Tactical Chat
-                    </span>
-                  </div>
-                  <span className="text-[10px] text-neutral-400 font-mono">
-                    🔒 Live Comms · Auto-Purged on Settlement
-                  </span>
-                </div>
-                <MatchLobbyChat
-                  matchId={myActiveMatch.id}
-                  currentUser={currentUser}
-                  opponentName={isCreatorOfActive ? (myActiveMatch.opponent?.codmIgn || 'Opponent') : myActiveMatch.creator.codmIgn}
-                  initialMessages={myActiveMatch.chatMessages || []}
-                  isSettled={['SETTLED', 'ABANDONED', 'ABANDONED_AND_SETTLED', 'CANCELLED'].includes(myActiveMatch.status)}
-                />
-              </div>
-            </div>
-          ) : (
-            <div className="relative z-10 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs">
-                <div className="flex items-center gap-2 text-amber-400 font-bold">
-                  <Clock className="w-4 h-4 shrink-0 animate-pulse" />
-                  <span>
-                    {isCreatorOfActive
-                      ? `Challenge Created (₦0 Upfront) · Awaiting Opponent to Stake ₦${myActiveMatch.stakeAmount.toLocaleString()}`
-                      : `Challenged to ₦${myActiveMatch.stakeAmount.toLocaleString()} Duel!`}
-                  </span>
-                </div>
-                <div className="text-[11px] text-neutral-400 font-mono-nums">
-                  Winner Payout: <strong className="text-emerald-400">₦{myActiveMatch.winnerPayout.toLocaleString()}</strong>
-                </div>
-              </div>
+                 <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 space-y-3">
+                   <div className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest">Share Invite Link</div>
+                   <div className="flex gap-2"><input type="text" readOnly value={`${window.location.origin}/?join=${myActiveMatch.id}`} className="flex-1 bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-xs text-neutral-400" /><button onClick={() => copyInviteLink(myActiveMatch.id)} className="px-4 py-2 bg-amber-400 text-neutral-950 font-black text-[10px] rounded-lg uppercase">Copy</button></div>
+                 </div>
 
-              {/* Invite Link & WhatsApp Share */}
-              <div className="p-4 rounded-xl bg-neutral-950/90 border border-neutral-800/90 space-y-2.5">
-                <label className="text-[11px] font-bold text-neutral-300 uppercase tracking-wider block font-mono">
-                  Share Challenge Link With Opponent
-                </label>
-                <div className="flex flex-col sm:flex-row items-center gap-2">
-                  <input
-                    type="text"
-                    readOnly
-                    value={`${window.location.origin}/?join=${myActiveMatch.id}`}
-                    className="w-full px-3.5 py-2.5 rounded-lg bg-neutral-900 border border-neutral-700 text-neutral-300 font-mono-nums text-xs truncate focus:outline-none"
-                  />
-                  <div className="flex gap-2 w-full sm:w-auto">
-                    <button
-                      onClick={() => copyInviteLink(myActiveMatch.id)}
-                      className="flex-1 sm:flex-none px-4 py-2.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs rounded-lg transition-all cursor-pointer whitespace-nowrap flex items-center justify-center gap-1.5 uppercase"
-                    >
-                      {copiedLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                      <span>{copiedLink ? 'Copied' : 'Copy Link'}</span>
-                    </button>
-
-                    <a
-                      href={`https://wa.me/?text=${encodeURIComponent(`⚔️ CODM STAKE 1V1 CHALLENGE!\nI created a ₦${myActiveMatch.stakeAmount.toLocaleString()} challenge in CODM (${myActiveMatch.gameMode} on ${myActiveMatch.map}).\nAccept & send your stake to unlock the room: ${window.location.origin}/?join=${myActiveMatch.id}`)}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex-1 sm:flex-none py-2.5 px-3.5 rounded-lg bg-emerald-600/20 border border-emerald-500/40 hover:bg-emerald-600/30 text-emerald-400 text-xs font-bold transition-colors text-center flex items-center justify-center gap-1.5 whitespace-nowrap"
-                    >
-                      <MessageCircle className="w-3.5 h-3.5" />
-                      <span>WhatsApp</span>
-                    </a>
-                  </div>
-                </div>
-                <p className="text-[11px] text-neutral-400">
-                  When your opponent clicks this link and deposits their ₦{myActiveMatch.stakeAmount.toLocaleString()} stake, you will be prompted to send your matching stake and the system will immediately generate the CODM in-game room number.
-                </p>
-              </div>
-
-              {/* Action row: Simulate & Cancel */}
-              <div className="flex flex-wrap items-center justify-between gap-3 pt-1 text-xs">
-                {/* Simulated Opponent button removed */}
-
-                {!isCreatorOfActive && (
-                  <button
-                    onClick={() => {
-                      setStakeTargetMatch(myActiveMatch);
-                      setStakeRole('opponent');
-                      setIsStakeModalOpen(true);
-                    }}
-                    className="px-5 py-2.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs transition-all cursor-pointer shadow-lg flex items-center gap-1.5 uppercase"
-                  >
-                    <Lock className="w-4 h-4" />
-                    <span>Accept & Send ₦{myActiveMatch.stakeAmount.toLocaleString()} Stake</span>
-                  </button>
-                )}
-
-                {isCreatorOfActive && (
-                  <button
-                    onClick={() => {
-                      if (confirm(`Cancel this wager challenge?`)) {
-                        onCancelMatch(myActiveMatch.id);
-                      }
-                    }}
-                    className="text-rose-400 hover:text-rose-300 transition-colors text-xs font-medium cursor-pointer ml-auto"
-                  >
-                    Cancel Challenge
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* STEP 2: Opponent has staked -> Host must send matching stake */}
-          {myActiveMatch.status === 'OPPONENT_STAKED_AWAITING_CREATOR' && (
-            <div className="relative z-10 p-5 rounded-2xl bg-neutral-950 border-2 border-emerald-500/60 space-y-4 animate-in fade-in">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
-                    <CheckCircle2 className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <div className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
-                      Opponent {myActiveMatch.opponent?.codmIgn} Has Deposited Stake!
+                 {myActiveMatch.status === 'OPPONENT_STAKED_AWAITING_CREATOR' && (
+                    <div className="p-5 rounded-xl bg-emerald-500/10 border-2 border-emerald-500/40 space-y-4 animate-in fade-in">
+                       <div className="flex justify-between items-center"><div className="flex items-center gap-2"><CheckCircle2 className="text-emerald-400" /><div><div className="text-xs font-bold text-white uppercase">{myActiveMatch.opponent?.codmIgn} Joined!</div><div className="text-[10px] text-neutral-400">Match stake to unlock room.</div></div></div><div className="text-right font-black text-amber-400">₦{myActiveMatch.stakeAmount.toLocaleString()}</div></div>
+                       {isCreatorOfActive && <button onClick={() => { setStakeTargetMatch(myActiveMatch); setStakeRole('creator'); setIsStakeModalOpen(true); }} className="w-full py-3 bg-amber-400 text-neutral-950 font-black rounded-xl text-xs uppercase shadow-xl">Send Host Stake & Reveal Room #</button>}
                     </div>
-                    <div className="text-sm font-semibold text-white">
-                      {isCreatorOfActive
-                        ? `Send your matching ₦${myActiveMatch.stakeAmount.toLocaleString()} stake now to unlock the CODM room number.`
-                        : `Your ₦${myActiveMatch.stakeAmount.toLocaleString()} stake is secured. Waiting for host to send matching stake.`}
-                    </div>
-                  </div>
-                </div>
+                 )}
 
-                <div className="text-right font-mono-nums">
-                  <span className="text-[10px] text-neutral-400 uppercase block">Host Stake</span>
-                  <span className="text-lg font-black text-amber-400">₦{myActiveMatch.stakeAmount.toLocaleString()}</span>
-                </div>
+                 {['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(myActiveMatch.status) && (
+                   <div className="space-y-4">
+                     {myActiveMatch.roomGeneratedAt && (
+                       <div className="flex items-center justify-between p-3 rounded-xl bg-black border border-neutral-800">
+                         <div className="flex items-center gap-2 text-neutral-400 text-[10px] font-bold uppercase tracking-wider"><Clock size={14} className="text-amber-400" /><span>Match Timer:</span><span className={`font-mono text-xs ${isExpired ? 'text-rose-500' : 'text-amber-400'}`}>{timeLeft}</span></div>
+                         <button onClick={() => { setAbandonError(null); setShowAbandonModal(true); }} className="text-neutral-500 text-[9px] hover:text-white uppercase font-bold underline cursor-pointer">Settle Abandoned</button>
+                       </div>
+                     )}
+                     {myActiveMatch.roomCode && (
+                       <div className="p-5 rounded-2xl bg-amber-500/10 border-2 border-amber-400/40 text-center space-y-2">
+                         <div className="text-[10px] text-neutral-400 uppercase font-mono font-bold tracking-tighter">CODM Private Room #</div>
+                         <div className="flex items-center justify-center gap-3"><span className="text-4xl font-black text-amber-400 font-mono tracking-widest">{myActiveMatch.roomCode}</span><button onClick={() => copyCode(myActiveMatch.roomCode!)} className="p-2 rounded-lg bg-neutral-800 text-white shadow-lg"><Copy size={18} /></button></div>
+                         <p className="text-[10px] text-neutral-400 italic">Enter code in CODM Multiplayer &gt; Private Match</p>
+                       </div>
+                     )}
+
+                     {myActiveMatch.status === 'DISPUTED' ? (
+                       <div className="p-5 rounded-2xl bg-rose-950/40 border-2 border-rose-500/60 space-y-4 animate-in zoom-in-95">
+                         <div className="flex gap-3"><div className="w-10 h-10 rounded-xl bg-rose-500/20 flex items-center justify-center shrink-0"><AlertTriangle className="text-rose-400" /></div><div><div className="text-sm font-black text-white uppercase">Dispute Detected!</div><p className="text-[11px] text-neutral-400">Conflicting scores. Upload scoreboard screenshot to resolve.</p></div></div>
+                         <div className="space-y-3"><input type="file" accept="image/*" className="w-full text-xs text-neutral-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:bg-rose-500 file:text-white" onChange={e => { const f = e.target.files?.[0]; if(f){ const r=new FileReader(); r.onload=()=>setScreenshotPreview(r.result as string); r.readAsDataURL(f); } }} />{screenshotPreview && <div className="h-40 rounded-xl overflow-hidden border border-rose-500/50 bg-black"><img src={screenshotPreview} className="w-full h-full object-contain" alt="" /></div>}<button onClick={() => handleResultSubmit(myActiveMatch.id)} disabled={isSubmitting || !screenshotPreview} className="w-full py-3 bg-rose-500 text-white font-black rounded-xl text-xs uppercase shadow-xl">{isSubmitting ? 'Verifying...' : 'Submit Proof & Resolve'}</button></div>
+                       </div>
+                     ) : (
+                       <div className="p-5 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-4">
+                         <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-widest text-neutral-400"><span>Match Ended? Confirm Result</span><span className="text-amber-400">Winner: ₦{myActiveMatch.winnerPayout.toLocaleString()}</span></div>
+                         <div className="grid grid-cols-3 gap-2">
+                           {(['VICTORY', 'DEFEAT', 'DRAW'] as const).map(claim => (
+                             <button key={claim} onClick={() => setSelectedClaim(claim)} className={`py-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedClaim === claim ? 'bg-amber-400 text-neutral-950 border-amber-400 shadow-lg' : 'bg-neutral-900 border-neutral-800 text-neutral-400'}`}>{claim === 'VICTORY' ? 'I Won' : claim === 'DEFEAT' ? 'I Lost' : 'Draw'}</button>
+                           ))}
+                         </div>
+                         <button onClick={() => handleResultSubmit(myActiveMatch.id)} disabled={isSubmitting} className="w-full py-3.5 bg-amber-400 text-neutral-950 font-black rounded-xl text-xs uppercase shadow-xl transition-all active:scale-95">{isSubmitting ? 'Confirming...' : `Submit "${selectedClaim}" Confirmation`}</button>
+                       </div>
+                     )}
+                   </div>
+                 )}
+
+                 {myActiveMatch.status === 'SETTLED' && (
+                   <div className="p-6 rounded-2xl bg-gradient-to-b from-amber-500/20 to-neutral-950 border border-amber-500/40 text-center space-y-4">
+                     <div className="w-12 h-12 rounded-full bg-amber-400/20 border border-amber-400/40 text-amber-400 flex items-center justify-center mx-auto"><Trophy size={24} /></div>
+                     <div className="text-xl font-black text-white uppercase font-heading">{myActiveMatch.winnerIgn?.includes('DRAW') ? 'Result: DRAW' : `Winner: ${myActiveMatch.winnerIgn}`}</div>
+                     <div className="flex justify-center gap-3"><button onClick={() => handleReturnToLobby(myActiveMatch.id)} className="px-5 py-2 bg-amber-400 text-neutral-950 font-black rounded-xl text-[10px] uppercase">Back to Lobby</button><button onClick={() => onDismissMatch(myActiveMatch.id)} className="px-5 py-2 bg-neutral-800 text-white font-bold rounded-xl text-[10px] uppercase">Dismiss</button></div>
+                   </div>
+                 )}
+                 
+                 {myActiveMatch.status === 'ABANDONED' && (
+                   <div className="p-6 rounded-2xl bg-rose-950/20 border border-rose-500/40 text-center space-y-3">
+                     <div className="w-10 h-10 rounded-full bg-rose-500/10 text-rose-500 flex items-center justify-center mx-auto"><AlertTriangle /></div>
+                     <div className="text-sm font-black text-white uppercase">Match Abandoned</div>
+                     <p className="text-[10px] text-neutral-400">Stake refunded minus platform fee.</p>
+                     <div className="flex justify-center gap-2 pt-2"><button onClick={() => handleReturnToLobby(myActiveMatch.id)} className="px-4 py-1.5 bg-amber-400 text-neutral-950 font-bold rounded-lg text-[10px] uppercase">Lobby</button><button onClick={() => onDismissMatch(myActiveMatch.id)} className="px-4 py-1.5 bg-neutral-800 text-white font-bold rounded-lg text-[10px] uppercase">Clear</button></div>
+                   </div>
+                 )}
               </div>
 
-              {isCreatorOfActive && (
-                <div className="space-y-4 pt-4 border-t border-neutral-800">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setStakeTargetMatch(myActiveMatch);
-                      setStakeRole('creator');
-                      setIsStakeModalOpen(true);
-                    }}
-                    className="w-full py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm transition-all cursor-pointer shadow-xl flex items-center justify-center gap-2 uppercase tracking-wide"
-                  >
-                    <Lock className="w-4 h-4 stroke-[2.5]" />
-                    <span>Send Matching ₦{myActiveMatch.stakeAmount.toLocaleString()} Stake (Unlock Room #)</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (confirm(`Cancel this wager challenge?`)) {
-                        onCancelMatch(myActiveMatch.id);
-                      }
-                    }}
-                    className="w-full text-rose-400 hover:text-rose-300 transition-colors text-xs font-medium cursor-pointer"
-                  >
-                    Cancel Challenge
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* STEP 3: Room code generated & Gameplay / Submit results state */}
-          {/* STEP 3: Room code generated & Gameplay / Submit results state */}
-          {['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(myActiveMatch.status) && (
-            <div className="relative z-10 space-y-4">
-              {/* Live Countdown Timer Banner */}
-              {myActiveMatch.roomGeneratedAt && (
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 text-xs shadow-inner">
-                  <div className="flex items-center gap-2 text-neutral-300">
-                    <Clock className="w-4 h-4 text-amber-400 animate-pulse" />
-                    <span>Match Countdown ({myActiveMatch.matchDurationMinutes || 15}m):</span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className={`font-mono font-black text-sm px-3 py-1 rounded-lg ${isExpired ? 'bg-rose-500/20 text-rose-400 animate-bounce' : 'bg-amber-500/20 text-amber-400'}`}>
-                      {timeLeft || '15:00'}
-                    </span>
-                    {onAbandonMatch && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAbandonError(null);
-                          setShowAbandonModal(true);
-                        }}
-                        className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white border border-neutral-700 font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
-                        title="Settle match as abandoned and refund stakes minus platform fee + 10% penalty fee"
-                      >
-                        <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Settle Abandoned</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Inactivity / Expiration Alert */}
-              {isExpired && onAbandonMatch && (
-                <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs animate-in fade-in">
-                  <div className="flex items-start sm:items-center gap-2.5 text-rose-300">
-                    <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5 sm:mt-0" />
-                    <span>Match time expired! Opponent went AFK? Settle this match as abandoned to recover your stake minus platform fee & 10% penalty fee.</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAbandonError(null);
-                      setShowAbandonModal(true);
-                    }}
-                    className="px-3.5 py-1.5 rounded-lg bg-rose-500 hover:bg-rose-400 text-white font-bold text-xs uppercase tracking-wider shrink-0 transition-all cursor-pointer shadow whitespace-nowrap"
-                  >
-                    Settle & Refund
-                  </button>
-                </div>
-              )}
-
-              {/* Room Code Revealed Banner */}
-              {myActiveMatch.roomCode && (
-                <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/40 text-center space-y-1">
-                  <div className="text-[10px] text-neutral-400 uppercase font-mono tracking-widest">
-                    Official In-Game CODM Room Number
-                  </div>
-                  <div className="flex items-center justify-center gap-2">
-                    <span className="text-2xl sm:text-4xl font-black font-mono-nums text-amber-400">
-                      {myActiveMatch.roomCode}
-                    </span>
-                    <button
-                      onClick={() => copyCode(myActiveMatch.roomCode!)}
-                      className="p-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 transition-colors cursor-pointer"
-                    >
-                      {copiedCode ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                    </button>
-                  </div>
-                  <p className="text-[11px] text-neutral-300">
-                    Both stakes confirmed in escrow! Open CODM &gt; Private Match &gt; Join #{myActiveMatch.roomCode}.
-                  </p>
-                </div>
-              )}
-
-              {/* VS Calling Bar */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="p-3 rounded-xl bg-neutral-950/90 border border-amber-500/40 flex items-center gap-3">
-                  <img src={myActiveMatch.creator.avatar} alt={myActiveMatch.creator.codmIgn} className="w-10 h-10 rounded-lg object-cover bg-neutral-800" referrerPolicy="no-referrer" />
-                  <div>
-                    <div className="text-[9px] text-amber-400 font-mono font-bold">HOST</div>
-                    <div className="font-bold text-white text-xs sm:text-sm">{myActiveMatch.creator.codmIgn}</div>
-                    <div className="text-[10px] text-emerald-400 font-mono-nums">🔒 ₦{myActiveMatch.stakeAmount.toLocaleString()} Locked</div>
-                  </div>
-                </div>
-
-                <div className="p-3 rounded-xl bg-neutral-950/90 border border-amber-500/40 flex items-center gap-3">
-                  <img src={myActiveMatch.opponent?.avatar || CODM_IMAGES.trophyPot} alt="Opponent" className="w-10 h-10 rounded-lg object-cover bg-neutral-800" referrerPolicy="no-referrer" />
-                  <div>
-                    <div className="text-[9px] text-amber-400 font-mono font-bold">OPPONENT</div>
-                    <div className="font-bold text-white text-xs sm:text-sm">{myActiveMatch.opponent?.codmIgn || 'Rival Connected'}</div>
-                    <div className="text-[10px] text-emerald-400 font-mono-nums">🔒 ₦{myActiveMatch.stakeAmount.toLocaleString()} Locked</div>
-                  </div>
-                </div>
-              </div>
-
-              {submitError && (
-                <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>{submitError}</span>
-                </div>
-              )}
-
-              {/* CONFLICT DETECTED SECTION - SCREENSHOT REQUIRED ONLY HERE */}
-              {myActiveMatch.status === 'DISPUTED' ? (
-                <div className="p-5 rounded-2xl bg-rose-950/40 border-2 border-rose-500/60 space-y-4">
-                  <div className="flex items-start gap-3">
-                    <div className="p-2.5 rounded-xl bg-rose-500/20 text-rose-400 shrink-0">
-                      <AlertTriangle className="w-6 h-6" />
-                    </div>
-                    <div>
-                      <div className="text-sm font-black text-rose-300 font-heading uppercase tracking-wide">
-                        ⚠️ Conflict Detected: Disputed Match Result!
-                      </div>
-                      <p className="text-xs text-neutral-300 mt-1">
-                        Both players claimed conflicting match results. The <strong>₦{myActiveMatch.potAmount.toLocaleString()}</strong> escrow pot is safely frozen.
-                      </p>
-                      <p className="text-xs text-amber-400 font-semibold mt-1">
-                        📸 Please upload your post-match CODM scoreboard screenshot proof to resolve the conflict and release your winnings.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Screenshot upload proof form */}
-                  <div className="space-y-3 pt-2 border-t border-rose-500/20">
-                    <div className="flex flex-col sm:flex-row items-center gap-2">
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={handleFileUpload}
-                        className="w-full sm:w-auto text-xs text-neutral-400 file:mr-2 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-rose-500 file:text-white cursor-pointer"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setScreenshotPreview('/src/assets/images/codm_score_victory_1791303464940.jpg')}
-                        className="w-full sm:w-auto px-3.5 py-2 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs font-bold rounded-xl transition-colors cursor-pointer whitespace-nowrap"
-                      >
-                        Use Demo Victory Scoreboard
-                      </button>
-                    </div>
-
-                    {screenshotPreview && (
-                      <div className="h-44 rounded-xl overflow-hidden border border-rose-500/50 relative bg-black">
-                        <img
-                          src={screenshotPreview}
-                          alt="Scoreboard Preview"
-                          className="w-full h-full object-contain"
-                        />
-                        <div className="absolute top-2 right-2 px-2.5 py-1 rounded bg-black/90 text-[10px] text-emerald-400 font-bold border border-emerald-500/40 font-mono">
-                          PROOF READY FOR REFEREE REVIEW
-                        </div>
-                      </div>
-                    )}
-
-                    <button
-                      onClick={() => handleResultSubmit(myActiveMatch.id, isCreatorOfActive ? myActiveMatch.creator.resultClaim || 'VICTORY' : myActiveMatch.opponent?.resultClaim || 'VICTORY')}
-                      disabled={isSubmitting || !screenshotPreview}
-                      className="w-full py-3.5 bg-rose-500 hover:bg-rose-400 text-white font-black rounded-xl text-xs sm:text-sm transition-all shadow-lg cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2 uppercase tracking-wide"
-                    >
-                      {isSubmitting ? (
-                        <span>Referee & AI Verifying Scoreboard...</span>
-                      ) : (
-                        <>
-                          <ShieldCheck className="w-4 h-4" />
-                          <span>Submit Scoreboard Proof & Release Payout</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              ) : (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) ? (
-                /* USER ALREADY CONFIRMED RESULT - WAITING FOR OPPONENT */
-                <div className="p-5 rounded-2xl bg-neutral-950/95 border border-neutral-800 space-y-3.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-black text-emerald-400 flex items-center gap-2 uppercase">
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>
-                        Your Confirmation: {
-                          (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) === 'VICTORY'
-                            ? 'I Won 🏆'
-                            : (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) === 'DEFEAT'
-                            ? 'I Lost ❌'
-                            : 'Draw ⚖️'
-                        }
-                      </span>
-                    </span>
-                    <span className="text-xs text-amber-400 font-mono font-bold">₦{myActiveMatch.winnerPayout.toLocaleString()} Wager</span>
-                  </div>
-
-                  <div className="p-4 rounded-xl bg-neutral-900/80 border border-neutral-800 text-xs text-neutral-300 space-y-1.5">
-                    <div className="font-semibold text-white">
-                      ⏳ Waiting for {isCreatorOfActive ? (myActiveMatch.opponent?.codmIgn || 'Opponent') : myActiveMatch.creator.codmIgn} to confirm...
-                    </div>
-                    <p className="text-neutral-400 text-[11px]">
-                      ⚡ Instant automated settlement! Once your opponent confirms, the payout will be released immediately to the winner's wallet without any screenshot delay.
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                /* 3-BUTTON RESULT CONFIRMATION - NO SCREENSHOT REQUIRED */
-                <div className="p-5 rounded-2xl bg-neutral-950/95 border border-neutral-800 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-black text-white font-heading uppercase flex items-center gap-2">
-                      <Zap className="w-4 h-4 text-amber-400" />
-                      <span>Game Ended: Confirm Winner</span>
-                    </span>
-                    <span className="text-xs text-amber-400 font-mono font-bold">Winner: ₦{myActiveMatch.winnerPayout.toLocaleString()}</span>
-                  </div>
-
-                  {/* Notification if opponent already submitted their claim */}
-                  {(isCreatorOfActive ? myActiveMatch.opponent?.resultClaim : myActiveMatch.creator.resultClaim) && (
-                    <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2.5">
-                      <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
-                      <span>
-                        <strong>{isCreatorOfActive ? (myActiveMatch.opponent?.codmIgn || 'Opponent') : myActiveMatch.creator.codmIgn}</strong> declared: <strong className="text-amber-300 underline">
-                          {(isCreatorOfActive ? myActiveMatch.opponent?.resultClaim : myActiveMatch.creator.resultClaim) === 'VICTORY'
-                            ? 'I Won 🏆'
-                            : (isCreatorOfActive ? myActiveMatch.opponent?.resultClaim : myActiveMatch.creator.resultClaim) === 'DEFEAT'
-                            ? 'I Lost ❌'
-                            : 'Draw ⚖️'}
-                        </strong>. Confirm below to settle immediately!
-                      </span>
-                    </div>
-                  )}
-
-                  <p className="text-[11px] text-neutral-400">
-                    ⚡ <strong>Instant Payout:</strong> Tap one of the 3 buttons below to confirm. No screenshot required for agreed matches!
-                  </p>
-
-                  <div className="grid grid-cols-3 gap-2.5">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedClaim('VICTORY')}
-                      className={`py-3.5 px-2 rounded-xl text-xs font-black transition-all cursor-pointer border flex flex-col sm:flex-row items-center justify-center gap-1.5 uppercase ${
-                        selectedClaim === 'VICTORY'
-                          ? 'bg-emerald-500/25 border-emerald-400 text-emerald-400 shadow-lg ring-2 ring-emerald-400/50'
-                          : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:text-neutral-200 hover:border-neutral-700'
-                      }`}
-                    >
-                      <Trophy className="w-4 h-4 text-emerald-400" />
-                      <span>I Won</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setSelectedClaim('DEFEAT')}
-                      className={`py-3.5 px-2 rounded-xl text-xs font-black transition-all cursor-pointer border flex flex-col sm:flex-row items-center justify-center gap-1.5 uppercase ${
-                        selectedClaim === 'DEFEAT'
-                          ? 'bg-rose-500/25 border-rose-400 text-rose-400 shadow-lg ring-2 ring-rose-400/50'
-                          : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:text-neutral-200 hover:border-neutral-700'
-                      }`}
-                    >
-                      <XCircle className="w-4 h-4 text-rose-400" />
-                      <span>I Lost</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setSelectedClaim('DRAW')}
-                      className={`py-3.5 px-2 rounded-xl text-xs font-black transition-all cursor-pointer border flex flex-col sm:flex-row items-center justify-center gap-1.5 uppercase ${
-                        selectedClaim === 'DRAW'
-                          ? 'bg-amber-500/25 border-amber-400 text-amber-400 shadow-lg ring-2 ring-amber-400/50'
-                          : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:text-neutral-200 hover:border-neutral-700'
-                      }`}
-                    >
-                      <Shield className="w-4 h-4 text-amber-400" />
-                      <span>Draw</span>
-                    </button>
-                  </div>
-
-                  <button
-                    onClick={() => handleResultSubmit(myActiveMatch.id)}
-                    disabled={isSubmitting}
-                    className="w-full py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm transition-all shadow-lg cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2 uppercase tracking-wide"
-                  >
-                    {isSubmitting ? (
-                      <span>Submitting Confirmation...</span>
-                    ) : selectedClaim === 'VICTORY' ? (
-                      <>
-                        <Trophy className="w-4 h-4" />
-                        <span>Confirm "I Won" & Claim ₦{myActiveMatch.winnerPayout.toLocaleString()}</span>
-                      </>
-                    ) : selectedClaim === 'DEFEAT' ? (
-                      <>
-                        <XCircle className="w-4 h-4" />
-                        <span>Confirm "I Lost" (Concede & Settle Wager)</span>
-                      </>
-                    ) : (
-                      <>
-                        <Shield className="w-4 h-4" />
-                        <span>Confirm "Draw" & Request Rematch</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Settled State */}
-          {myActiveMatch.status === 'SETTLED' && (
-            <div className="relative z-10 p-5 rounded-xl bg-gradient-to-b from-amber-500/15 to-neutral-950 border border-amber-500/40 text-center space-y-4">
-              <div className="w-10 h-10 rounded-full bg-amber-400/20 border border-amber-400/40 text-amber-400 flex items-center justify-center mx-auto">
-                <Trophy className="w-5 h-5" />
-              </div>
-
-              <div className="text-lg sm:text-xl font-black text-white font-heading uppercase">
-                {myActiveMatch.winnerIgn?.includes('DRAW') ? (
-                  <span>MATCH CONCLUDED · <span className="text-amber-400">DRAW / TIE</span></span>
-                ) : (
-                  <span>MATCH CONCLUDED · WINNER: <span className="text-amber-400">{myActiveMatch.winnerIgn}</span></span>
-                )}
-              </div>
-
-              <p className="text-xs text-neutral-300 max-w-md mx-auto">
-                {myActiveMatch.winnerIgn?.includes('DRAW')
-                  ? `⚖️ Match ended in a draw. 100% of your ₦${myActiveMatch.stakeAmount.toLocaleString()} stake has been refunded to your wallet!`
-                  : myActiveMatch.winnerId === currentUser.id
-                  ? `🏆 Congratulations! You won ₦${myActiveMatch.winnerPayout.toLocaleString()}!`
-                  : `Match concluded. Winner received ₦${myActiveMatch.winnerPayout.toLocaleString()} payout.`}
-              </p>
-
-              {/* Immediate Cash Out Form for Winner if balance > 0 */}
-              {myActiveMatch.winnerId === currentUser.id && currentUser.balance > 0 && (
-                <div className="p-4 rounded-xl bg-neutral-900 border border-emerald-500/40 space-y-3 text-left max-w-md mx-auto">
-                  <div className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
-                    <Zap className="w-4 h-4 fill-current" />
-                    <span>Mandatory Cash Out Winnings (Platform Holds ₦0)</span>
-                  </div>
-                  <p className="text-[11px] text-neutral-300">
-                    Winnings must be cashed out immediately to your Nigerian bank account:
-                  </p>
-
-                  <div className="space-y-2">
-                    <input
-                      type="text"
-                      placeholder="Bank Name (e.g. OPay, GTBank, Kuda)"
-                      defaultValue={currentUser.bankName || ''}
-                      id="arenaCashOutBankName"
-                      className="w-full px-3 py-2 rounded-lg bg-neutral-950 border border-neutral-700 text-white text-xs focus:border-amber-400 focus:outline-none"
-                    />
-                    <input
-                      type="text"
-                      placeholder="Account Number (10 digits)"
-                      defaultValue={currentUser.accountNumber || ''}
-                      id="arenaCashOutAccountNumber"
-                      className="w-full px-3 py-2 rounded-lg bg-neutral-950 border border-neutral-700 text-white text-xs font-mono-nums focus:border-amber-400 focus:outline-none"
-                    />
-                    <input
-                      type="text"
-                      placeholder="Account Name (e.g. John Doe)"
-                      defaultValue={currentUser.accountName || currentUser.codmIgn}
-                      id="arenaCashOutAccountName"
-                      className="w-full px-3 py-2 rounded-lg bg-neutral-950 border border-neutral-700 text-white text-xs focus:border-amber-400 focus:outline-none"
+              <div className={`space-y-4 ${activeMatchSubTab === 'game' ? 'hidden lg:block' : 'block'}`}>
+                <div className="p-4 rounded-3xl bg-neutral-900 border border-neutral-800 space-y-3 sticky top-4">
+                  <div className="flex items-center gap-2 pb-1"><MessageCircle size={18} className="text-emerald-400" /><span className="text-xs font-black uppercase tracking-widest text-white">Match Chat</span></div>
+                  <div className="relative h-[550px] rounded-2xl overflow-hidden shadow-inner border border-white/5">
+                    <MatchLobbyChat
+                      matchId={myActiveMatch.id}
+                      currentUser={currentUser}
+                      opponentName={isCreatorOfActive ? (myActiveMatch.opponent?.codmIgn || 'Opponent') : myActiveMatch.creator.codmIgn}
+                      initialMessages={myActiveMatch.chatMessages || []}
+                      isSettled={['SETTLED', 'ABANDONED', 'CANCELLED'].includes(myActiveMatch.status)}
                     />
                   </div>
-
-                  {arenaCashoutConfirming ? (
-                    <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-3 animate-in fade-in">
-                      <div className="flex items-center gap-2 text-amber-400 font-bold text-xs">
-                        <AlertTriangle className="w-4 h-4 shrink-0" />
-                        <span>Confirm Instant Bank Transfer</span>
-                      </div>
-                      <p className="text-[11px] text-neutral-300 leading-relaxed">
-                        Are you sure you want to cash out <strong>₦{currentUser.balance.toLocaleString()}</strong> to your bank account now? Payouts are sent immediately and cannot be cancelled.
-                      </p>
-                      <div className="flex items-center gap-2 pt-1">
-                        <button
-                          type="button"
-                          disabled={isArenaCashoutSubmitting}
-                          onClick={async () => {
-                            const bankName = (document.getElementById('arenaCashOutBankName') as HTMLInputElement)?.value;
-                            const accountNumber = (document.getElementById('arenaCashOutAccountNumber') as HTMLInputElement)?.value;
-                            const accountName = (document.getElementById('arenaCashOutAccountName') as HTMLInputElement)?.value;
-
-                            if (!bankName || !accountNumber) {
-                              alert('Please fill in your Bank Name and Account Number.');
-                              return;
-                            }
-
-                            if (onCashOut) {
-                              setIsArenaCashoutSubmitting(true);
-                              try {
-                                await onCashOut(currentUser.balance, {
-                                  bankName,
-                                  accountNumber,
-                                  accountName: accountName || currentUser.codmIgn,
-                                });
-                                setArenaCashoutConfirming(false);
-                                onRefresh();
-                              } finally {
-                                setIsArenaCashoutSubmitting(false);
-                              }
-                            }
-                          }}
-                          className="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs uppercase cursor-pointer transition-all shadow-md"
-                        >
-                          {isArenaCashoutSubmitting ? 'Sending...' : 'Yes, Confirm Payout Now'}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isArenaCashoutSubmitting}
-                          onClick={() => setArenaCashoutConfirming(false)}
-                          className="px-4 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-bold rounded-xl text-xs cursor-pointer transition-colors"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const bankName = (document.getElementById('arenaCashOutBankName') as HTMLInputElement)?.value;
-                        const accountNumber = (document.getElementById('arenaCashOutAccountNumber') as HTMLInputElement)?.value;
-
-                        if (!bankName || !accountNumber) {
-                          alert('Please enter your Bank Name and Account Number before withdrawing.');
-                          return;
-                        }
-                        setArenaCashoutConfirming(true);
-                      }}
-                      className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs transition-all shadow-lg cursor-pointer uppercase flex items-center justify-center gap-1.5"
-                    >
-                      <Zap className="w-4 h-4 fill-current" />
-                      <span>Review & Cash Out ₦{currentUser.balance.toLocaleString()} to Bank</span>
-                    </button>
-                  )}
                 </div>
-              )}
-
-              <div className="flex justify-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => handleReturnToLobby(myActiveMatch.id)}
-                  className="px-5 py-2.5 bg-neutral-800 text-neutral-200 hover:text-white font-bold rounded-xl text-xs hover:bg-neutral-700 transition-colors cursor-pointer uppercase"
-                >
-                  Return to Battle Lobby
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onDismissMatch(myActiveMatch.id)}
-                  className="px-5 py-2.5 bg-neutral-900 border border-neutral-700 text-neutral-300 font-bold rounded-xl text-xs hover:bg-neutral-800 transition-colors cursor-pointer uppercase"
-                >
-                  Dismiss / Clear Card
-                </button>
               </div>
             </div>
-          )}
-
-          {/* Abandoned / Refunded State */}
-          {myActiveMatch.status === 'ABANDONED' && (
-            <div className="relative z-10 p-6 rounded-2xl bg-gradient-to-b from-amber-500/10 to-neutral-950 border border-amber-500/40 text-center space-y-4 animate-in fade-in">
-              <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center mx-auto shadow-lg">
-                <AlertTriangle className="w-6 h-6" />
-              </div>
-
-              <div className="space-y-1">
-                <div className="text-lg sm:text-xl font-black text-white font-heading uppercase">
-                  MATCH SETTLED AS ABANDONED
-                </div>
-                <span className="inline-block px-3 py-1 rounded-full text-xs font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                  Escrow Stakes Refunded Minus Fees
-                </span>
-              </div>
-
-              <p className="text-xs text-neutral-300 max-w-lg mx-auto leading-relaxed">
-                {myActiveMatch.resolutionNotes || 'This match was settled due to inactivity or player abandonment. Staked players were refunded their stake minus the platform fee plus a 10% penalty fee.'}
-              </p>
-
-              <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold max-w-md mx-auto flex items-center justify-center gap-2">
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
-                <span>Your refund has been credited directly to your available wallet balance.</span>
-              </div>
-
-              <div className="flex justify-center gap-3">
-                <button
-                    type="button"
-                    onClick={() => handleReturnToLobby(myActiveMatch.id)}
-                    className="px-6 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wide transition-all shadow-md cursor-pointer"
-                >
-                    Return to Battle Lobby
-                </button>
-                <button
-                    type="button"
-                    onClick={() => onDismissMatch(myActiveMatch.id)}
-                    className="px-6 py-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-bold text-xs uppercase tracking-wide transition-all cursor-pointer"
-                >
-                    Dismiss
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+          </div>
         ) : (
-          <div className="p-12 rounded-3xl bg-neutral-900 border border-neutral-800 text-center space-y-4">
-            <div className="w-14 h-14 rounded-2xl bg-neutral-800 text-neutral-400 flex items-center justify-center mx-auto">
-              <Zap className="w-7 h-7" />
-            </div>
-            <div className="text-xl font-bold font-heading text-white">No Active Match Room</div>
-            <p className="text-xs text-neutral-400 max-w-md mx-auto">
-              You are not currently participating in an ongoing match room. Join a live open challenge or host a new bet!
-            </p>
-            <button
-              onClick={() => setArenaTab('live')}
-              className="px-6 py-2.5 rounded-xl bg-amber-400 text-neutral-950 font-black text-xs uppercase cursor-pointer"
-            >
-              Browse Live Lobby
-            </button>
+          <div className="p-16 rounded-3xl bg-neutral-900 border border-neutral-800 text-center space-y-4">
+            <div className="w-16 h-16 rounded-2xl bg-neutral-800 text-neutral-500 flex items-center justify-center mx-auto"><Zap size={32} /></div>
+            <div className="text-2xl font-black font-heading text-white uppercase">No Active Battle</div>
+            <p className="text-xs text-neutral-400 max-w-sm mx-auto">You're not currently in a match. Start a new wager or accept a challenge!</p>
+            <button onClick={() => setArenaTab('live')} className="px-8 py-3 bg-amber-400 text-neutral-950 font-black rounded-2xl text-xs uppercase shadow-lg">Browse Live Lobby</button>
           </div>
         )
       )}
 
-      {/* TAB 2: MY HOSTED WAGERS */}
+      {/* 5. Hosted Bets Tab */}
       {arenaTab === 'hosted' && (
         <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-2xl font-black font-heading text-white tracking-wide">MY HOSTED WAGERS</h2>
-              <p className="text-xs text-neutral-400 mt-0.5">Manage your active hosted bet links. Cancel anytime before opponent acceptance for a 100% full refund.</p>
-            </div>
-            <div className="text-xs font-mono font-bold text-amber-400">{myHostedBets.length} Hosted</div>
-          </div>
-
-          {myHostedBets.length === 0 ? (
-            <div className="p-12 rounded-3xl bg-neutral-900 border border-neutral-800 text-center space-y-4">
-              <div className="w-14 h-14 rounded-2xl bg-neutral-800 text-neutral-400 flex items-center justify-center mx-auto">
-                <Swords className="w-7 h-7" />
-              </div>
-              <div className="text-xl font-bold font-heading text-white">No Hosted Bets</div>
-              <p className="text-xs text-neutral-400 max-w-md mx-auto">
-                You haven't hosted any custom wagers yet. Choose a battle format to host your match!
-              </p>
-              <button
-                onClick={() => setArenaTab('live')}
-                className="px-6 py-2.5 rounded-xl bg-amber-400 text-neutral-950 font-black text-xs uppercase cursor-pointer"
-              >
-                Create Hosted Bet
-              </button>
-            </div>
-          ) : (
+          <h2 className="text-2xl font-black text-white uppercase tracking-widest">My Hosted Bets</h2>
+          {myHostedBets.length === 0 ? <div className="p-16 rounded-3xl bg-neutral-900 border border-neutral-800 text-center text-neutral-500 uppercase font-bold tracking-tighter">No Hosted Bets.</div> : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {myHostedBets.map((m) => (
-                <div key={m.id} className="p-5 rounded-2xl bg-neutral-900 border border-amber-500/40 space-y-4 relative overflow-hidden shadow-lg">
-                  <img src={CODM_IMAGES.combatTacticalBg} className="absolute inset-0 w-full h-full object-cover opacity-10" />
-                  <div className="relative z-10 flex items-center justify-between">
-                    <span className="text-xs font-mono-nums bg-amber-500/15 text-amber-400 border border-amber-500/30 px-2.5 py-1 rounded-lg font-black">
-                      CHALLENGE: #{m.challengeCode}
-                    </span>
-                    <span className="text-sm font-mono-nums font-black text-emerald-400">
-                      ₦{m.stakeAmount.toLocaleString()} Staked
-                    </span>
-                  </div>
-
-                  <div className="relative z-10 space-y-1">
-                    <div className="font-heading font-black text-white text-sm uppercase">{m.gameMode}</div>
-                    <div className="text-xs text-neutral-400">Map: <strong className="text-neutral-200">{m.map}</strong> · Visibility: <strong className="text-amber-300">{m.isPublic !== false ? 'Public' : 'Private'}</strong></div>
-                  </div>
-
-                  <div className="relative z-10 flex items-center gap-2 pt-2 border-t border-neutral-800">
-                    <button
-                      type="button"
-                      onClick={() => copyInviteLink(m.id)}
-                      className="flex-1 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold rounded-xl text-xs uppercase transition-colors cursor-pointer flex items-center justify-center gap-1.5"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                      <span>{copiedLink ? 'Copied Link!' : 'Copy Invite Link'}</span>
-                    </button>
-                    <button
-                      type="button"
-                      disabled={cancellingMatchId === m.id}
-                      onClick={() => handleCancelHostedBet(m.id)}
-                      className="px-4 py-2.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-bold rounded-xl text-xs uppercase transition-colors cursor-pointer disabled:opacity-50"
-                    >
-                      {cancellingMatchId === m.id ? 'Cancelling...' : `Cancel & Refund`}
-                    </button>
-                  </div>
+              {myHostedBets.map(m => (
+                <div key={m.id} className="p-5 rounded-2xl bg-neutral-900 border border-amber-500/30 space-y-4">
+                  <div className="flex justify-between items-center"><span className="text-xs font-mono font-bold text-amber-400">#CHALLENGE_{m.challengeCode}</span><span className="text-sm font-black text-emerald-400">₦{m.stakeAmount.toLocaleString()}</span></div>
+                  <div className="text-sm font-bold text-white uppercase">{m.gameMode} · {m.map}</div>
+                  <div className="flex gap-2 pt-2"><button onClick={() => copyInviteLink(m.id)} className="flex-1 py-2 bg-neutral-800 text-white font-bold rounded-xl text-[10px] uppercase">Copy Link</button><button onClick={() => onCancelMatch(m.id)} className="px-4 py-2 bg-rose-500/20 text-rose-400 font-bold rounded-xl text-[10px] uppercase border border-rose-500/40">Cancel</button></div>
                 </div>
               ))}
             </div>
@@ -1209,357 +361,21 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
         </div>
       )}
 
-      {/* TAB 3: LIVE LOBBY & FORMAT CARDS */}
-      {arenaTab === 'live' && (
-        <div className="space-y-8">
-          {/* Active match in progress indicator banner */}
-          {myActiveMatch && (
-            <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/20 via-neutral-900 to-amber-500/10 border-2 border-amber-400 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-3 animate-in fade-in">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-amber-400 text-neutral-950 flex items-center justify-center font-black shrink-0">
-                  <Zap className="w-5 h-5 fill-current" />
-                </div>
-                <div>
-                  <div className="text-xs font-black text-amber-400 uppercase tracking-wider flex items-center gap-2">
-                    <span>Active Match In Progress · {myActiveMatch.gameMode}</span>
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  </div>
-                  <p className="text-xs sm:text-sm font-bold text-white mt-0.5">
-                    {isCreatorOfActive ? `Vs ${myActiveMatch.opponent?.codmIgn || 'Opponent'}` : `Vs Host ${myActiveMatch.creator.codmIgn}`} · Pot: ₦{myActiveMatch.potAmount.toLocaleString()} · Room #{myActiveMatch.roomCode || myActiveMatch.challengeCode}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setArenaTab('active')}
-                className="w-full sm:w-auto px-5 py-2.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs uppercase tracking-wide transition-all shadow-md cursor-pointer flex items-center justify-center gap-2 shrink-0"
-              >
-                <span>Open Match Room & Voice Comms</span>
-                <ArrowRight className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-
-          {/* Section Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div>
-              <span className="text-xs font-bold text-amber-400 uppercase tracking-widest font-mono flex items-center gap-1.5">
-                <Swords className="w-4 h-4" />
-                CREATE CODM WAGER
-              </span>
-              <h2 className="text-2xl sm:text-3xl font-black font-heading text-white tracking-wide mt-1">
-                CHOOSE YOUR BATTLE FORMAT
-              </h2>
-            </div>
-            <div className="text-xs font-mono-nums font-bold text-neutral-400">
-              ₦0 Upfront to Generate Link · Min Stake: <strong className="text-amber-400">₦1,000</strong>
-            </div>
-          </div>
-
-          {/* VISUAL FORMAT SELECTION CARDS WITH AUTHENTIC BACKGROUND IMAGES */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Solo 1v1 Card (With Shipment Map Background) */}
-            <div
-              className="relative overflow-hidden rounded-3xl p-6 sm:p-8 border-2 border-amber-500/50 hover:border-amber-400 bg-neutral-900 shadow-2xl transition-all flex flex-col justify-between min-h-[260px] group"
-            >
-              {/* Background Shipment Image */}
-              <CardBackground />
-              {/* Background Shipment Image */}
-              <div className="absolute inset-0 z-0">
-                <img
-                  src={CODM_IMAGES.shipment1v1}
-                  alt="1v1 Shipment Map"
-                  className="w-full h-full object-cover object-center opacity-30 group-hover:scale-105 transition-transform duration-700"
-                  referrerPolicy="no-referrer"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).src = CODM_IMAGES.shipment1v1Fallback;
-                  }}
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-neutral-950/85 to-transparent" />
-                <div className="absolute inset-0 bg-gradient-to-r from-neutral-950/90 via-transparent to-transparent" />
-              </div>
-
-              {/* Top Badge & Indicator */}
-              <div className="relative z-10 flex items-center justify-between">
-                <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shadow-lg">
-                  <Crosshair className="w-6 h-6 stroke-[2.5]" />
-                </div>
-                <span className="px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-400 font-mono text-xs font-black">
-                  SHIPMENT · 1V1 DUEL
-                </span>
-              </div>
-
-              {/* Content */}
-              <div className="relative z-10 space-y-2 mt-6">
-                <h3 className="text-2xl sm:text-3xl font-black font-heading text-white tracking-wide uppercase">
-                  SOLO (1v1 DUEL)
-                </h3>
-                <p className="text-xs sm:text-sm text-neutral-300 leading-relaxed max-w-md">
-                  Direct head-to-head duel. High-intensity quickscopes, snipers only, or gunfight on <strong>Shipment</strong> and <strong>Killhouse</strong>.
-                </p>
-                <div className="pt-2 flex items-center gap-4 text-xs font-mono-nums text-neutral-400">
-                  <span className="text-amber-400 font-bold">1v1 Format</span>
-                  <span>·</span>
-                  <span>On-Demand Escrow</span>
-                  <span>·</span>
-                  <span>AI Referee</span>
-                </div>
-              </div>
-
-              {/* Action Button */}
-              <div className="relative z-10 pt-4">
-                <button
-                  onClick={() => onOpenCreateBet && onOpenCreateBet('1v1 Sniper Only', 100)}
-                  className="w-full py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-2xl text-xs sm:text-sm transition-all shadow-xl hover:scale-105 active:scale-95 cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide"
-                >
-                  <Swords className="w-4 h-4 stroke-[2.5]" />
-                  <span>Generate 1v1 Bet Link (Shipment)</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Squad Team Card (With Squad / Search & Destroy Tactical Background) */}
-            <div
-              className="relative overflow-hidden rounded-3xl p-6 sm:p-8 border-2 border-emerald-500/50 hover:border-emerald-400 bg-neutral-900 shadow-2xl transition-all flex flex-col justify-between min-h-[260px] group"
-            >
-              {/* Background Squad Image */}
-              <CardBackground />
-              {/* Background Squad Image */}
-              <div className="absolute inset-0 z-0">
-                <img
-                  src={CODM_IMAGES.squadTactical}
-                  alt="Squad Tactical Match"
-                  className="w-full h-full object-cover object-center opacity-30 group-hover:scale-105 transition-transform duration-700"
-                  referrerPolicy="no-referrer"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).src = CODM_IMAGES.squadTacticalFallback;
-                  }}
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-neutral-950/85 to-transparent" />
-                <div className="absolute inset-0 bg-gradient-to-r from-neutral-950/90 via-transparent to-transparent" />
-              </div>
-
-              {/* Top Badge & Indicator */}
-              <div className="relative z-10 flex items-center justify-between">
-                <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-lg">
-                  <Users className="w-6 h-6 stroke-[2.5]" />
-                </div>
-                <span className="px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 font-mono text-xs font-black">
-                  STANDOFF · SQUAD
-                </span>
-              </div>
-
-              {/* Content */}
-              <div className="relative z-10 space-y-2 mt-6">
-                <h3 className="text-2xl sm:text-3xl font-black font-heading text-white tracking-wide uppercase">
-                  SQUAD (TEAM BATTLE)
-                </h3>
-                <p className="text-xs sm:text-sm text-neutral-300 leading-relaxed max-w-md">
-                  Tactical team match. Coordinated <strong>Search & Destroy</strong>, <strong>Hardpoint</strong>, or <strong>Domination</strong> on Standoff & Summit.
-                </p>
-                <div className="pt-2 flex items-center gap-4 text-xs font-mono-nums text-neutral-400">
-                  <span className="text-emerald-400 font-bold">Squad Tactical</span>
-                  <span>·</span>
-                  <span>Team Escrow</span>
-                  <span>·</span>
-                  <span>Objective Modes</span>
-                </div>
-              </div>
-
-              {/* Action Button */}
-              <div className="relative z-10 pt-4">
-                <button
-                  onClick={() => onOpenCreateBet && onOpenCreateBet('Search & Destroy (S&D)', 100)}
-                  className="w-full py-3.5 bg-emerald-400 hover:bg-emerald-300 text-neutral-950 font-black rounded-2xl text-xs sm:text-sm transition-all shadow-xl hover:scale-105 active:scale-95 cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide"
-                >
-                  <Swords className="w-4 h-4 stroke-[2.5]" />
-                  <span>Generate Squad Bet Link (Standoff)</span>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* 3. LIVE OPEN CHALLENGES MATCHMAKING LOBBY */}
-          <div className="space-y-4 pt-4">
-            <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider text-neutral-400 font-mono">
-              <div className="flex items-center gap-2">
-                <Flame className="w-4 h-4 text-amber-400" />
-                <span>Live Open Challenges (Accept & Send Stake)</span>
-              </div>
-              <span className="text-amber-400 font-mono-nums">{openChallenges.length} Open Matches</span>
-            </div>
-            
-            {/* SEARCH BAR */}
-            <div className="relative">
-              <input
-                type="text"
-                placeholder="Search Challenge Code (e.g. #CODM-8291-SHI)..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-neutral-900 border border-neutral-700 rounded-2xl py-3 px-4 text-sm text-white focus:ring-2 focus:ring-amber-500 transition"
-              />
-            </div>
-            
-            {filteredChallenges.length > 0 && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {filteredChallenges.map((m) => {
-                  return (
-                    <div
-                      key={m.id}
-                      className="p-5 rounded-2xl bg-neutral-900 border border-neutral-800 hover:border-amber-400/60 transition-all space-y-4 shadow-lg relative overflow-hidden"
-                    >
-                      <img src={CODM_IMAGES.combatTacticalBg} className="absolute inset-0 w-full h-full object-cover opacity-10" />
-                      <div className="relative z-10">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-mono-nums bg-amber-500/15 text-amber-400 border border-amber-500/30 px-2.5 py-1 rounded-lg font-black">
-                            CHALLENGE: #{m.challengeCode}
-                          </span>
-                          <span className="text-sm font-mono-nums font-black text-emerald-400">
-                            ₦{m.stakeAmount.toLocaleString()} Stake
-                          </span>
-                        </div>
-
-                        <div className="flex items-center justify-between mt-4">
-                          <div>
-                            <div className="font-heading font-black text-white text-sm uppercase">{m.gameMode}</div>
-                            <div className="text-xs text-neutral-400 font-medium mt-0.5">Map: <strong className="text-neutral-200">{m.map}</strong> · Host: <strong className="text-amber-400">{m.creator.codmIgn}</strong></div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-[10px] text-neutral-400 uppercase font-mono">Winner Pot</div>
-                            <div className="font-black text-amber-400 font-mono-nums text-sm">₦{m.winnerPayout.toLocaleString()}</div>
-                          </div>
-                        </div>
-
-                        <button
-                          onClick={() => {
-                            setStakeTargetMatch(m);
-                            setStakeRole('opponent');
-                            setIsStakeModalOpen(true);
-                          }}
-                          className="w-full py-3 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs sm:text-sm transition-all cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide shadow-md mt-4"
-                        >
-                          <Lock className="w-4 h-4 stroke-[2.5]" />
-                          <span>Accept & Send ₦{m.stakeAmount.toLocaleString()} Stake</span>
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Settle Abandoned Match Modal */}
+      {/* 6. Modals */}
       {showAbandonModal && myActiveMatch && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in">
-          <div className="relative w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-3xl shadow-2xl p-6 space-y-5">
-            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
-                  <AlertTriangle className="w-5 h-5" />
-                </div>
-                <h3 className="text-base font-bold text-white font-heading uppercase">
-                  Settle Abandoned Match
-                </h3>
-              </div>
-              <button
-                onClick={() => setShowAbandonModal(false)}
-                className="p-1 rounded-lg text-neutral-400 hover:text-white cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-in fade-in">
+          <div className="relative w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-3xl p-6 space-y-6 shadow-2xl">
+            <div className="flex justify-between items-center border-b border-neutral-800 pb-3"><div className="flex items-center gap-2"><AlertTriangle className="text-amber-400" /><span className="text-sm font-black uppercase text-white">Settle Abandoned</span></div><button onClick={() => setShowAbandonModal(false)}><X size={20} className="text-neutral-500" /></button></div>
             {(() => {
               const calc = calculateAbandonedMatchRefund(myActiveMatch.stakeAmount, myActiveMatch.platformFeePercentage);
-              return (
-                <div className="space-y-4">
-                  <p className="text-xs text-neutral-300 leading-relaxed">
-                    Settle this stalled or inactive match immediately. Escrow will release funds back to each player minus the platform fee plus a 10% penalty fee.
-                  </p>
-
-                  <div className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-2.5 text-xs font-mono">
-                    <div className="flex items-center justify-between text-neutral-400">
-                      <span>Your Locked Stake:</span>
-                      <strong className="text-white font-mono-nums">₦{calc.stakeAmount.toLocaleString()}</strong>
-                    </div>
-                    <div className="flex items-center justify-between text-rose-400">
-                      <span>Platform Fee ({(calc.platformFeeRate * 100).toFixed(0)}%):</span>
-                      <span className="font-mono-nums">-₦{calc.platformFee.toLocaleString()}</span>
-                    </div>
-                    <div className="flex items-center justify-between text-rose-400">
-                      <span>10% Abandonment Penalty:</span>
-                      <span className="font-mono-nums">-₦{calc.penaltyFee.toLocaleString()}</span>
-                    </div>
-                    <div className="pt-2 border-t border-neutral-800 flex items-center justify-between text-emerald-400 font-bold text-sm">
-                      <span>Refund to Your Wallet:</span>
-                      <span className="font-mono-nums text-base">₦{calc.refundPerPlayer.toLocaleString()}</span>
-                    </div>
-                  </div>
-
-                  {abandonError && (
-                    <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
-                      <AlertCircle className="w-4 h-4 shrink-0" />
-                      <span>{abandonError}</span>
-                    </div>
-                  )}
-
-                  <div className="flex gap-3 pt-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowAbandonModal(false)}
-                      className="flex-1 py-3 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-bold transition-colors cursor-pointer"
-                    >
-                      Keep Waiting
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isAbandoning}
-                      onClick={async () => {
-                        if (!onAbandonMatch) return;
-                        setIsAbandoning(true);
-                        setAbandonError(null);
-                        try {
-                          await onAbandonMatch(myActiveMatch.id, 'Player reported match abandoned / opponent AFK');
-                          setShowAbandonModal(false);
-                        } catch (err: any) {
-                          setAbandonError(err.message || 'Failed to settle match');
-                        } finally {
-                          setIsAbandoning(false);
-                        }
-                      }}
-                      className="flex-1 py-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wide transition-all shadow-md cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
-                    >
-                      {isAbandoning ? 'Settling...' : `Confirm & Settle (₦${calc.refundPerPlayer.toLocaleString()})`}
-                    </button>
-                  </div>
-                </div>
-              );
+              return (<div className="space-y-5"><p className="text-xs text-neutral-400">Settle immediately if opponent is AFK. Refunded stake minus 10% penalty.</p><div className="p-4 rounded-xl bg-black space-y-2 text-[11px] font-mono"><div className="flex justify-between text-neutral-500"><span>Stake:</span><span>₦{calc.stakeAmount.toLocaleString()}</span></div><div className="flex justify-between text-rose-500"><span>Penalty:</span><span>-₦{calc.penaltyFee.toLocaleString()}</span></div><div className="pt-2 border-t border-neutral-800 flex justify-between text-emerald-400 font-bold text-xs"><span>Refund:</span><span>₦{calc.refundPerPlayer.toLocaleString()}</span></div></div>{abandonError && <div className="p-3 bg-rose-500/10 text-rose-400 text-[10px] rounded-lg border border-rose-500/20">{abandonError}</div>}<div className="flex gap-3 pt-2"><button onClick={() => setShowAbandonModal(false)} className="flex-1 py-3 bg-neutral-800 text-white font-bold rounded-xl text-xs uppercase">Wait</button><button disabled={isAbandoning} onClick={async () => { setIsAbandoning(true); try { await onAbandonMatch?.(myActiveMatch.id); setShowAbandonModal(false); } catch(err:any){ setAbandonError(err.message); } finally { setIsAbandoning(false); } }} className="flex-1 py-3 bg-amber-400 text-neutral-950 font-black rounded-xl text-xs uppercase shadow-xl">{isAbandoning ? 'Settle...' : 'Confirm Settle'}</button></div></div>);
             })()}
           </div>
         </div>
       )}
 
-      {/* Stake Payment Modal */}
-      <StakePaymentModal
-        isOpen={isStakeModalOpen}
-        match={stakeTargetMatch}
-        currentUser={currentUser}
-        role={stakeRole}
-        onClose={() => {
-          setIsStakeModalOpen(false);
-          setStakeTargetMatch(null);
-        }}
-        onConfirmStake={handleConfirmStake}
-      />
-
-      {/* iPhone PWA Notification & Audio Persistence Guide Modal */}
-      <IOSNotificationGuideModal
-        isOpen={showIOSGuideModal}
-        onClose={() => setShowIOSGuideModal(false)}
-      />
+      <StakePaymentModal isOpen={isStakeModalOpen} match={stakeTargetMatch} currentUser={currentUser} role={stakeRole} onClose={() => { setIsStakeModalOpen(false); setStakeTargetMatch(null); }} onConfirmStake={handleConfirmStake} />
+      <IOSNotificationGuideModal isOpen={showIOSGuideModal} onClose={() => setShowIOSGuideModal(false)} />
     </div>
   );
 };

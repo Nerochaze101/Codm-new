@@ -107,35 +107,34 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
     }
   }, [initialMessages]);
 
-  const initAudioCtx = () => {
-    if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') return audioCtxRef.current;
-    const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
-    if (!AudioCtx) throw new Error('Web Audio not supported');
-    
-    const ctx = new AudioCtx();
-    audioCtxRef.current = ctx;
+  const initAudioCtx = async () => {
+    try {
+      if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
+        if (audioCtxRef.current.state === 'suspended') await audioCtxRef.current.resume();
+        return audioCtxRef.current;
+      }
+      
+      const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioCtx({ sampleRate: 44100 });
+      audioCtxRef.current = ctx;
 
-    const masterGain = ctx.createGain();
-    masterGain.connect(ctx.destination);
-    gainRef.current = masterGain;
+      const masterGain = ctx.createGain();
+      masterGain.connect(ctx.destination);
+      gainRef.current = masterGain;
 
-    // Sub-audible tone to keep iOS session alive
-    const osc = ctx.createOscillator();
-    const oscG = ctx.createGain();
-    osc.frequency.value = 15;
-    oscG.gain.value = 0.000001;
-    osc.connect(oscG);
-    oscG.connect(ctx.destination);
-    osc.start();
+      // Mobile Safari "Unlock": Play a tiny silent buffer
+      const buffer = ctx.createBuffer(1, 1, 22050);
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      source.start(0);
 
-    // Mobile Autoplay Unlock: Play a split-second of silence
-    const buffer = ctx.createBuffer(1, 1, 22050);
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(ctx.destination);
-    source.start(0);
-
-    return ctx;
+      if (ctx.state === 'suspended') await ctx.resume();
+      return ctx;
+    } catch (err) {
+      console.error('FAILED_TO_INIT_AUDIO_CTX:', err);
+      throw err;
+    }
   };
 
   const startVoice = async () => {
@@ -144,31 +143,44 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
     setAudioError(null);
 
     try {
-      // 1. Audio Context Initialization (Must be part of gesture)
-      const ctx = initAudioCtx();
-      if (ctx.state === 'suspended') await ctx.resume();
-
-      // 2. Hardware Request
+      // 1. First, ensure AudioContext is ready (User Gesture Context)
+      const ctx = await initAudioCtx();
+      
+      // 2. Request Hardware
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('Mic hardware access is missing in this browser.');
+        throw new Error('Microphone access is not supported in this browser.');
       }
       
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Request with specific constraints for better mobile compatibility
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1
+        } 
+      });
       streamRef.current = stream;
 
-      // 3. Pipeline Setup
+      // 3. Re-verify Context (sometimes iOS suspends it immediately after getUserMedia)
+      if (ctx.state === 'suspended') await ctx.resume();
+
+      // 4. Setup Processor
       const source = ctx.createMediaStreamSource(stream);
+      
+      // Using ScriptProcessor for maximum compatibility with older Safari
       const processor = ctx.createScriptProcessor(BUFFER_SIZE, 1, 1);
       
       processor.onaudioprocess = (e: any) => {
         const input = e.inputBuffer.getChannelData(0);
         
+        // VAD (Voice Activity Detection)
         let sum = 0;
         for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
         const rms = Math.sqrt(sum / input.length);
-        setMicLevel(Math.min(100, Math.round(rms * 450)));
+        setMicLevel(Math.min(100, Math.round(rms * 500)));
 
-        const speaking = rms > 0.015;
+        const speaking = rms > 0.01;
         if (speaking !== isSpeakingRef.current) {
           isSpeakingRef.current = speaking;
           socketRef.current?.emit('mic_state', { matchId, userId: currentUser.id, isSpeaking: speaking, isMuted: false });
@@ -183,18 +195,31 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       };
 
       source.connect(processor);
-      const dummy = ctx.createGain();
-      dummy.gain.value = 0;
-      processor.connect(dummy);
-      dummy.connect(ctx.destination);
+      
+      // This is the "magic" for iOS: the processor must be connected to destination
+      // but we use a gain of 0 to avoid feedback loops.
+      const silence = ctx.createGain();
+      silence.gain.value = 0;
+      processor.connect(silence);
+      silence.connect(ctx.destination);
 
       processorRef.current = processor;
       setIsMicActive(true);
       
     } catch (err: any) {
-      console.error('MIC_ERROR:', err);
-      setAudioError(err.name === 'NotAllowedError' ? 'Permission denied.' : 'Hardware error. Please reload.');
+      console.error('MIC_ACTIVATION_FAILED:', err);
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        setAudioError('Mic Permission Denied. Please check browser settings.');
+      } else if (err.name === 'NotFoundError') {
+        setAudioError('No microphone found on this device.');
+      } else {
+        setAudioError(`Mic Error: ${err.message || 'Unknown'}`);
+      }
       setIsMicActive(false);
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+        streamRef.current = null;
+      }
     } finally {
       setIsInitializing(false);
     }
@@ -233,24 +258,26 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       });
     });
 
-    socket.on('audio_stream', (data) => {
+    socket.on('audio_stream', async (data) => {
       if (data.userId === currentUser.id) return;
-      const ctx = initAudioCtx();
-      if (ctx.state === 'suspended') ctx.resume();
+      try {
+        const ctx = await initAudioCtx();
+        const float32 = base64ToFloat32(data.pcm);
+        const buffer = ctx.createBuffer(1, float32.length, data.sampleRate || SAMPLE_RATE);
+        buffer.getChannelData(0).set(float32);
 
-      const float32 = base64ToFloat32(data.pcm);
-      const buffer = ctx.createBuffer(1, float32.length, data.sampleRate || SAMPLE_RATE);
-      buffer.getChannelData(0).set(float32);
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(gainRef.current || ctx.destination);
 
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(gainRef.current || ctx.destination);
-
-      const now = ctx.currentTime;
-      if (nextPlayTimeRef.current < now) nextPlayTimeRef.current = now + 0.05;
-      source.start(nextPlayTimeRef.current);
-      nextPlayTimeRef.current += buffer.duration;
-      setOpponentSpeaking(true);
+        const now = ctx.currentTime;
+        if (nextPlayTimeRef.current < now) nextPlayTimeRef.current = now + 0.05;
+        source.start(nextPlayTimeRef.current);
+        nextPlayTimeRef.current += buffer.duration;
+        setOpponentSpeaking(true);
+      } catch (err) {
+        console.warn('Audio playback error:', err);
+      }
     });
 
     socket.on('mic_state', (data) => {
