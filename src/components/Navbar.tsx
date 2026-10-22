@@ -3,7 +3,7 @@ import { UserProfile } from '../types';
 import {
   Menu, X, Swords, CreditCard, ShieldCheck, Clock,
   User, Trophy, Plus, LogOut, ChevronRight, Wallet,
-  Crosshair, ArrowRight
+  Crosshair, ArrowRight, Bell
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { useSound } from '../hooks/useSound';
@@ -15,6 +15,8 @@ export interface NavbarProps {
   openCreateBetModal: () => void;
   onOpenFundWallet?: () => void;
   onSignOut?: () => void;
+  unreadNotificationsCount?: number;
+  onOpenNotificationCenter?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -24,6 +26,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   openCreateBetModal,
   onOpenFundWallet,
   onSignOut,
+  unreadNotificationsCount = 0,
+  onOpenNotificationCenter,
 }) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const playTabSound = useSound();
@@ -195,6 +199,22 @@ export const Navbar: React.FC<NavbarProps> = ({
               </div>
             </button>
 
+            {/* Live Match Alerts Bell Button */}
+            <button
+              type="button"
+              onClick={onOpenNotificationCenter}
+              className="relative p-2 sm:p-2.5 rounded-xl border border-neutral-800 hover:border-amber-400/50 bg-neutral-900 text-neutral-300 hover:text-white transition-all cursor-pointer shadow-md active:scale-95 flex items-center justify-center"
+              title="Live Match Alerts & Mobile Phone Notifications"
+              aria-label="Live Match Alerts"
+            >
+              <Bell className="w-4 h-4 sm:w-5 sm:h-5 text-amber-400" />
+              {(unreadNotificationsCount || 0) > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-amber-500 text-neutral-950 font-black text-[10px] rounded-full flex items-center justify-center ring-2 ring-neutral-950 animate-pulse">
+                  {(unreadNotificationsCount || 0) > 9 ? '9+' : unreadNotificationsCount}
+                </span>
+              )}
+            </button>
+
             {/* 3-Line Hamburger Menu Button at the Top Corner */}
             <button
               type="button"
@@ -295,6 +315,34 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <div className="text-[10px] font-mono font-bold text-neutral-500 uppercase tracking-wider px-2 py-1">
                   MAIN NAVIGATION
                 </div>
+
+                {/* Live Match Alerts in Drawer */}
+                <button
+                  onClick={() => {
+                    playTabSound();
+                    setIsMenuOpen(false);
+                    onOpenNotificationCenter?.();
+                  }}
+                  className="w-full flex items-center justify-between p-3.5 rounded-2xl transition-all cursor-pointer text-left border bg-neutral-900/70 hover:bg-neutral-900 border-neutral-800/80 hover:border-amber-400/50 group"
+                >
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center">
+                      <Bell className="w-5 h-5 stroke-[2.2]" />
+                    </div>
+                    <div>
+                      <div className="font-heading font-black text-sm uppercase tracking-wide text-white group-hover:text-amber-400 flex items-center gap-2">
+                        <span>Match Alerts</span>
+                        {(unreadNotificationsCount || 0) > 0 && (
+                          <span className="bg-amber-500 text-neutral-950 font-black text-[10px] px-1.5 py-0.5 rounded-full">
+                            {unreadNotificationsCount} NEW
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-neutral-400">Mobile lock-screen & browser alerts</div>
+                    </div>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-neutral-500 group-hover:text-amber-400 transition-colors" />
+                </button>
 
                 {navTabs.map((tab) => {
                   const Icon = tab.icon;

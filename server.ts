@@ -24,6 +24,8 @@ import {
 
 dotenv.config();
 
+let globalIo: any = null;
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -690,9 +692,66 @@ async function saveMatchToDb(match: any) {
         settled_at = EXCLUDED.settled_at,
         is_public = EXCLUDED.is_public;
     `);
+    try {
+      broadcastMatchStateChange(match);
+    } catch (bcErr) {
+      console.warn('broadcastMatchStateChange error:', bcErr);
+    }
   } catch (err) {
     console.error(`Error saving match ${match.id} to DB:`, err);
     throw err;
+  }
+}
+
+export function broadcastMatchStateChange(match: any, alertType?: string, alertTitle?: string, alertBody?: string) {
+  if (!match || !match.id) return;
+  if (globalIo) {
+    globalIo.emit('matchUpdated', match);
+
+    let soundType = 'default';
+    let title = alertTitle || '';
+    let body = alertBody || '';
+
+    if (alertType === 'RIVAL_JOINED' || match.status === 'OPPONENT_STAKED_AWAITING_CREATOR') {
+      soundType = 'rival_joined';
+      title = title || `⚔️ Rival Joined Challenge #${match.challengeCode}!`;
+      body = body || `${match.opponent?.codmIgn || 'A rival'} staked ₦${parseFloat(match.stakeAmount || 0).toLocaleString()} in escrow. Match your stake to battle!`;
+    } else if (alertType === 'MATCH_STARTED' || match.status === 'READY_TO_PLAY' || match.status === 'IN_PROGRESS') {
+      soundType = 'match_started';
+      title = title || `🔥 Match Started! Room Code #${match.roomCode || 'Ready'}`;
+      body = body || `Both stakes locked (Pot: ₦${parseFloat(match.potAmount || 0).toLocaleString()}). Join CODM Room #${match.roomCode} now!`;
+    } else if (alertType === 'RESULT_DISPUTED' || match.status === 'DISPUTED') {
+      soundType = 'disputed';
+      title = title || `⚠️ Result Disputed on Challenge #${match.challengeCode}`;
+      body = body || `Conflicting claims submitted. Escrow pot is protected while screenshots are reviewed.`;
+    } else if (alertType === 'MATCH_SETTLED' || match.status === 'SETTLED') {
+      soundType = 'settled';
+      title = title || `🏆 Match Settled! Winner: ${match.winnerIgn || 'Champion'}`;
+      body = body || `₦${parseFloat(match.winnerPayout || 0).toLocaleString()} awarded. Winnings credited to wallet.`;
+    } else if (alertType === 'MATCH_CANCELLED' || match.status === 'CANCELLED' || match.status === 'ABANDONED' || match.status === 'EXPIRED') {
+      soundType = 'default';
+      title = title || `🛡️ Match Escrow Released`;
+      body = body || `Challenge #${match.challengeCode} ended. Funds refunded to wallet.`;
+    }
+
+    if (title && body) {
+      globalIo.emit('matchAlert', {
+        id: `alert_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        matchId: match.id,
+        challengeCode: match.challengeCode,
+        roomCode: match.roomCode,
+        status: match.status,
+        creatorId: match.creator?.id,
+        opponentId: match.opponent?.id,
+        creatorIgn: match.creator?.codmIgn,
+        opponentIgn: match.opponent?.codmIgn,
+        title,
+        body,
+        soundType,
+        timestamp: Date.now(),
+        match,
+      });
+    }
   }
 }
 
@@ -4276,6 +4335,7 @@ app.post('/api/matches/:id/opponent-stake', async (req, res) => {
 
     await client.query('COMMIT');
     const updatedMatch = await getMatchFromDb(matchId);
+    globalIo?.emit('matchUpdated', updatedMatch);
     res.json(updatedMatch);
   } catch (err: any) {
     await client.query('ROLLBACK');
@@ -4388,6 +4448,7 @@ app.post('/api/matches/:id/creator-stake', async (req, res) => {
 
     await client.query('COMMIT');
     const updatedMatch = await getMatchFromDb(matchId);
+    globalIo?.emit('matchUpdated', updatedMatch);
     res.json(updatedMatch);
   } catch (err: any) {
     await client.query('ROLLBACK');
@@ -4485,6 +4546,7 @@ app.post('/api/matches/:id/join', async (req, res) => {
 
     await client.query('COMMIT');
     const updatedMatch = await getMatchFromDb(matchId);
+    globalIo?.emit('matchUpdated', updatedMatch);
     res.json(updatedMatch);
   } catch (err: any) {
     await client.query('ROLLBACK');
@@ -4594,6 +4656,7 @@ app.post('/api/matches/:id/cancel', async (req, res) => {
     await client.query('COMMIT');
     await clearMatchChatInDb(matchId);
     const updatedMatch = await getMatchFromDb(matchId);
+    globalIo?.emit('matchUpdated', updatedMatch);
     res.json(updatedMatch);
   } catch (err: any) {
     try { await client.query('ROLLBACK'); } catch (_) {}
@@ -5502,6 +5565,7 @@ async function startServer() {
   const server = http.createServer(app);
   const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
   
+  globalIo = io;
   (app as any).io = io;
 
   io.on('connection', (socket) => {
@@ -5585,6 +5649,10 @@ async function startServer() {
 
     socket.on('matchUpdated', (data) => {
       io.emit('matchUpdated', data);
+    });
+
+    socket.on('matchAlert', (data) => {
+      io.emit('matchAlert', data);
     });
 
     socket.on('updateBalance', (data) => {

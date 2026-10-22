@@ -5,13 +5,14 @@ import {
   ArrowRight, AlertCircle, CheckCircle2, MessageCircle, Wallet,
   UserCheck, RefreshCw, Sparkles, Crosshair, Target, X, Plus,
   Flame, Zap, Users, Flag, Shield, Sliders, ChevronRight, Gamepad2, MapPin,
-  TrendingUp, Award, Clock, Lock, AlertTriangle, XCircle
+  TrendingUp, Award, Clock, Lock, AlertTriangle, XCircle, Bell
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { SkeletonLoader } from './SkeletonLoader';
 import { StakePaymentModal } from './StakePaymentModal';
 import { MatchLobbyChat } from './MatchLobbyChat';
 import { calculateAbandonedMatchRefund } from '../utils/feeCalculator';
+import { requestNotificationPermission, getNotificationPermission } from '../services/notificationService';
 
 // Helper for card background
 const CardBackground = () => (
@@ -83,6 +84,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   const [isAbandoning, setIsAbandoning] = useState(false);
   const [showAbandonModal, setShowAbandonModal] = useState(false);
   const [abandonError, setAbandonError] = useState<string | null>(null);
+  const [showNotificationPrompt, setShowNotificationPrompt] = useState(true);
 
   // Staking Modal state
   const [stakeTargetMatch, setStakeTargetMatch] = useState<Match | null>(null);
@@ -251,6 +253,46 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 pb-16">
+      {/* PHONE & BROWSER ALERT PROMPT BANNER */}
+      {showNotificationPrompt && typeof window !== 'undefined' && 'Notification' in window && getNotificationPermission() === 'default' && (
+        <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-neutral-900 to-neutral-900 border border-amber-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xl">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-400 text-neutral-950 flex items-center justify-center font-bold shrink-0 shadow">
+              <Bell className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-white flex items-center gap-2">
+                <span>Enable Phone & Browser Notifications</span>
+                <span className="text-[10px] bg-amber-400/20 text-amber-300 px-1.5 py-0.5 rounded font-mono uppercase tracking-wider">
+                  Mobile Lock Screen
+                </span>
+              </div>
+              <p className="text-[11px] text-neutral-300 mt-0.5 leading-relaxed">
+                Receive instant mobile alerts when a rival joins your challenge, stakes lock into escrow, or your in-game room starts!
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+            <button
+              onClick={async () => {
+                await requestNotificationPermission();
+                setShowNotificationPrompt(false);
+              }}
+              className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wide rounded-xl transition-all shadow cursor-pointer active:scale-95"
+            >
+              Enable Alerts
+            </button>
+            <button
+              onClick={() => setShowNotificationPrompt(false)}
+              className="p-1.5 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer"
+              title="Dismiss"
+            >
+              <X size={15} />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ARENA NAVIGATION TABS */}
       <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-neutral-900 border border-neutral-800 max-w-xl mx-auto">
         <button

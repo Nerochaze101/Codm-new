@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import { UserProfile, Match } from './types';
@@ -9,6 +9,11 @@ import {
   createUser, signUpUser, signInUser, updateUser, withdrawWallet,
   cleanUserHistory
 } from './services/api';
+import {
+  initNotificationService,
+  showBrowserNotification,
+  NotificationPayload,
+} from './services/notificationService';
 import { Navbar } from './components/Navbar';
 import { LandingPage } from './components/LandingPage';
 import { AuthPage } from './components/AuthPage';
@@ -22,6 +27,8 @@ import { FundWalletModal } from './components/FundWalletModal';
 import { ReferralPage } from './components/ReferralPage';
 import { WalletPage } from './components/WalletPage';
 import { AdminDashboard } from './components/AdminDashboard';
+import { NotificationToast } from './components/NotificationToast';
+import { NotificationCenterModal } from './components/NotificationCenterModal';
 
 const socket = io('/');
 
@@ -46,6 +53,58 @@ function MainApp() {
     transactions: [],
   });
   const [matches, setMatches] = useState<Match[]>([]);
+  const [notifications, setNotifications] = useState<NotificationPayload[]>(() => {
+    try {
+      const saved = localStorage.getItem('codm_notifications_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [activeToast, setActiveToast] = useState<NotificationPayload | null>(null);
+  const [isNotificationCenterOpen, setIsNotificationCenterOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('codm_notifications_unread');
+      return saved ? parseInt(saved, 10) : 0;
+    } catch {
+      return 0;
+    }
+  });
+
+  const previousMatchesRef = useRef<Map<string, string>>(new Map());
+
+  // Initialize browser notification service worker on mount
+  useEffect(() => {
+    initNotificationService();
+  }, []);
+
+  // Centralized alert dispatcher (vibrates phone, plays chime, shows lock-screen notification + toast)
+  const triggerNotificationAlert = useCallback((payload: NotificationPayload) => {
+    showBrowserNotification(payload);
+    setActiveToast(payload);
+
+    setNotifications((prev) => {
+      const filtered = prev.filter((n) => n.id !== payload.id);
+      const updated = [payload, ...filtered].slice(0, 30);
+      try {
+        localStorage.setItem('codm_notifications_history', JSON.stringify(updated));
+      } catch {
+        // storage quota fallback
+      }
+      return updated;
+    });
+
+    setUnreadCount((prev) => {
+      const next = prev + 1;
+      try {
+        localStorage.setItem('codm_notifications_unread', next.toString());
+      } catch {
+        // storage fallback
+      }
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     socket.on('matchCreated', (newMatch) => {
@@ -56,8 +115,96 @@ function MainApp() {
       });
     });
     
-    socket.on('matchUpdated', (updatedMatch) => {
+    // Direct match alert event broadcast from server
+    socket.on('matchAlert', (alert: any) => {
+      if (!alert) return;
+
+      const isRelated =
+        currentUser.id === 'guest' ||
+        alert.creatorId === currentUser.id ||
+        alert.opponentId === currentUser.id ||
+        alert.matchId;
+
+      if (!isRelated) return;
+
+      triggerNotificationAlert({
+        id: alert.id || `alert_${Date.now()}`,
+        title: alert.title,
+        body: alert.body,
+        soundType: alert.soundType || 'default',
+        data: {
+          matchId: alert.matchId,
+          url: '/arena',
+          status: alert.status,
+        },
+      });
+    });
+
+    socket.on('matchUpdated', (updatedMatch: Match) => {
       if (!updatedMatch || !updatedMatch.id) return;
+
+      const prevStatus = previousMatchesRef.current.get(updatedMatch.id);
+      previousMatchesRef.current.set(updatedMatch.id, updatedMatch.status);
+
+      const isCreator = updatedMatch.creator?.id === currentUser.id;
+      const isOpponent = updatedMatch.opponent?.id === currentUser.id;
+      const isMyMatch = isCreator || isOpponent || currentUser.id === 'guest';
+
+      // Detect meaningful match state changes
+      if (prevStatus && prevStatus !== updatedMatch.status && isMyMatch) {
+        // 1. Rival Joined (Creator gets notified when opponent stakes)
+        if (
+          isCreator &&
+          updatedMatch.status === 'OPPONENT_STAKED_AWAITING_CREATOR' &&
+          prevStatus === 'PENDING_OPPONENT_STAKE'
+        ) {
+          triggerNotificationAlert({
+            id: `alert_rival_${updatedMatch.id}_${Date.now()}`,
+            title: `⚔️ Rival Joined Challenge #${updatedMatch.challengeCode}!`,
+            body: `${updatedMatch.opponent?.codmIgn || 'An opponent'} staked ₦${updatedMatch.stakeAmount.toLocaleString()} in escrow! Match stake to battle.`,
+            soundType: 'rival_joined',
+            data: { matchId: updatedMatch.id, url: '/arena' },
+          });
+        }
+        // 2. Match Started (Room Code generated, ready to play)
+        else if (
+          (updatedMatch.status === 'READY_TO_PLAY' || updatedMatch.status === 'IN_PROGRESS') &&
+          prevStatus !== 'READY_TO_PLAY' &&
+          prevStatus !== 'IN_PROGRESS'
+        ) {
+          triggerNotificationAlert({
+            id: `alert_start_${updatedMatch.id}_${Date.now()}`,
+            title: `🔥 Match Started! Room Code #${updatedMatch.roomCode || 'Ready'}`,
+            body: `Both stakes locked (Pot: ₦${updatedMatch.potAmount.toLocaleString()}). Join CODM Room #${updatedMatch.roomCode} now!`,
+            soundType: 'match_started',
+            data: { matchId: updatedMatch.id, url: '/arena' },
+          });
+        }
+        // 3. Result Disputed
+        else if (updatedMatch.status === 'DISPUTED') {
+          triggerNotificationAlert({
+            id: `alert_disp_${updatedMatch.id}_${Date.now()}`,
+            title: `⚠️ Result Disputed on Match #${updatedMatch.challengeCode}`,
+            body: `Conflicting scores reported. Escrow is protected under referee review. Upload post-match screenshot!`,
+            soundType: 'disputed',
+            data: { matchId: updatedMatch.id, url: '/arena' },
+          });
+        }
+        // 4. Match Settled
+        else if (updatedMatch.status === 'SETTLED') {
+          const isWinner = updatedMatch.winnerId === currentUser.id;
+          triggerNotificationAlert({
+            id: `alert_settle_${updatedMatch.id}_${Date.now()}`,
+            title: isWinner ? `🏆 Victory! ₦${updatedMatch.winnerPayout.toLocaleString()} Won` : `💀 Match Settled`,
+            body: isWinner
+              ? `Congratulations! Winnings credited to your wallet balance.`
+              : `Match #${updatedMatch.challengeCode} has concluded. Winner: ${updatedMatch.winnerIgn || 'Champion'}.`,
+            soundType: isWinner ? 'settled' : 'default',
+            data: { matchId: updatedMatch.id, url: '/arena' },
+          });
+        }
+      }
+
       setMatches((prev) => prev.map((m) => m.id === updatedMatch.id ? updatedMatch : m));
     });
     
@@ -74,11 +221,12 @@ function MainApp() {
     
     return () => {
       socket.off('matchCreated');
+      socket.off('matchAlert');
       socket.off('matchUpdated');
       socket.off('matchJoined');
       socket.off('balanceUpdated');
     };
-  }, [currentUser.id]);
+  }, [currentUser.id, triggerNotificationAlert]);
   const [isMatchesLoading, setIsMatchesLoading] = useState<boolean>(true);
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signup');
 
@@ -447,6 +595,16 @@ function MainApp() {
         openCreateBetModal={() => handleOpenCreateBet()}
         onOpenFundWallet={() => setIsFundWalletModalOpen(true)}
         onSignOut={handleSignOut}
+        unreadNotificationsCount={unreadCount}
+        onOpenNotificationCenter={() => {
+          setIsNotificationCenterOpen(true);
+          setUnreadCount(0);
+          try {
+            localStorage.setItem('codm_notifications_unread', '0');
+          } catch {
+            // storage fallback
+          }
+        }}
       />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-12">
@@ -648,6 +806,34 @@ function MainApp() {
           } catch (e) {
             console.error('Error refreshing user after deposit:', e);
           }
+        }}
+      />
+
+      {/* Floating Tactical Alert Toast */}
+      <NotificationToast
+        notification={activeToast}
+        onClose={() => setActiveToast(null)}
+        onAction={(url) => {
+          if (url) navigate(url);
+        }}
+      />
+
+      {/* Slide-over Notification Center Modal */}
+      <NotificationCenterModal
+        isOpen={isNotificationCenterOpen}
+        onClose={() => setIsNotificationCenterOpen(false)}
+        notifications={notifications}
+        onClearNotifications={() => {
+          setNotifications([]);
+          try {
+            localStorage.removeItem('codm_notifications_history');
+          } catch {
+            // storage fallback
+          }
+        }}
+        onNavigateToMatch={(url) => {
+          if (url) navigate(url);
+          setIsNotificationCenterOpen(false);
         }}
       />
     </div>
