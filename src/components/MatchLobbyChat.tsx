@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { UserProfile, ChatMessage } from '../types';
 import {
   Send, Mic, MicOff, Volume2, VolumeX, Shield, Trash2,
-  Check, CheckCheck, Radio, Sparkles, RefreshCw, AlertCircle, Headphones, Info
+  Check, CheckCheck, Radio, Sparkles, RefreshCw, AlertCircle, Headphones, Loader2, Wifi, WifiOff
 } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 
@@ -14,15 +14,8 @@ interface MatchLobbyChatProps {
   isSettled?: boolean;
 }
 
-/**
- * VOICE CHAT ENGINE V3 - ULTIMATE MOBILE REWRITE
- * Focused on iOS Safari hardware activation and reliable low-latency streaming.
- */
-
 const SAMPLE_RATE = 16000;
-const BUFFER_SIZE = 2048; // Smaller buffer for lower latency
-
-// --- UTILITIES ---
+const BUFFER_SIZE = 4096;
 
 function float32ToPcm16(float32: Float32Array): Int16Array {
   const int16 = new Int16Array(float32.length);
@@ -79,30 +72,27 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   initialMessages = [],
   isSettled = false,
 }) => {
-  // --- UI STATE ---
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   
-  // --- VOICE STATE ---
-  const [isMicEnabled, setIsMicEnabled] = useState(false);
+  const [isMicActive, setIsMicActive] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [opponentSpeaking, setOpponentSpeaking] = useState(false);
   const [micLevel, setMicLevel] = useState(0);
   const [audioError, setAudioError] = useState<string | null>(null);
-  const [showPermissionGuide, setShowPermissionGuide] = useState(false);
 
-  // --- REFS ---
   const socketRef = useRef<Socket | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
-  const gainNodeRef = useRef<GainNode | null>(null);
+  const gainRef = useRef<GainNode | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const isSpeakingRef = useRef<boolean>(false);
 
-  // --- AUTO SCROLL ---
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -117,112 +107,100 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
     }
   }, [initialMessages]);
 
-  // --- VOICE ENGINE INITIALIZATION ---
+  const initAudioCtx = () => {
+    if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') return audioCtxRef.current;
+    const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) throw new Error('Web Audio not supported');
+    
+    const ctx = new AudioCtx();
+    audioCtxRef.current = ctx;
 
-  const createAudioContext = () => {
-    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-      return audioContextRef.current;
-    }
-    const AudioContextClass = (window as any).AudioContext || (window as any).webkitAudioContext;
-    const ctx = new AudioContextClass({ latencyHint: 'interactive' });
-    audioContextRef.current = ctx;
+    const masterGain = ctx.createGain();
+    masterGain.connect(ctx.destination);
+    gainRef.current = masterGain;
 
-    // Master gain for opponent voice
-    const gain = ctx.createGain();
-    gain.connect(ctx.destination);
-    gainNodeRef.current = gain;
-
-    // iOS "Keep-Alive" sub-audible oscillator
-    // Prevents iOS from killing the audio session when silent
+    // Sub-audible tone to keep iOS session alive
     const osc = ctx.createOscillator();
-    const oscGain = ctx.createGain();
+    const oscG = ctx.createGain();
     osc.frequency.value = 15;
-    oscGain.gain.value = 0.00001;
-    osc.connect(oscGain);
-    oscGain.connect(ctx.destination);
+    oscG.gain.value = 0.000001;
+    osc.connect(oscG);
+    oscG.connect(ctx.destination);
     osc.start();
+
+    // Mobile Autoplay Unlock: Play a split-second of silence
+    const buffer = ctx.createBuffer(1, 1, 22050);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+    source.start(0);
 
     return ctx;
   };
 
-  const handleStartMic = async () => {
+  const startVoice = async () => {
+    if (isInitializing) return;
+    setIsInitializing(true);
     setAudioError(null);
-    
-    // CRITICAL: iOS Safari requires getUserMedia to be the ABSOLUTE FIRST async action.
-    // We do NOT await anything before this if possible.
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          sampleRate: 44100 // Request standard, downsample manually for stability
-        }
-      });
-      
-      streamRef.current = stream;
-      const ctx = createAudioContext();
-      
-      // Resume context (essential for iOS)
-      if (ctx.state === 'suspended') {
-        await ctx.resume();
-      }
 
+    try {
+      // 1. Audio Context Initialization (Must be part of gesture)
+      const ctx = initAudioCtx();
+      if (ctx.state === 'suspended') await ctx.resume();
+
+      // 2. Hardware Request
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Mic hardware access is missing in this browser.');
+      }
+      
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      // 3. Pipeline Setup
       const source = ctx.createMediaStreamSource(stream);
       const processor = ctx.createScriptProcessor(BUFFER_SIZE, 1, 1);
       
       processor.onaudioprocess = (e: any) => {
         const input = e.inputBuffer.getChannelData(0);
         
-        // VU Meter calculation
         let sum = 0;
         for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
         const rms = Math.sqrt(sum / input.length);
-        setMicLevel(Math.min(100, Math.round(rms * 400)));
+        setMicLevel(Math.min(100, Math.round(rms * 450)));
 
-        // Speech detection
-        const isSpeaking = rms > 0.01;
-        
-        // Send audio chunks if not muted
+        const speaking = rms > 0.015;
+        if (speaking !== isSpeakingRef.current) {
+          isSpeakingRef.current = speaking;
+          socketRef.current?.emit('mic_state', { matchId, userId: currentUser.id, isSpeaking: speaking, isMuted: false });
+        }
+
         if (!isMuted) {
-          const resampled = downsample(input, ctx.sampleRate, SAMPLE_RATE);
-          const pcm16 = float32ToPcm16(resampled);
-          const base64 = pcm16ToBase64(pcm16);
-          
-          socketRef.current?.emit('audio_stream', {
-            matchId,
-            userId: currentUser.id,
-            pcm: base64,
-            sampleRate: SAMPLE_RATE,
-            isSpeaking
-          });
+          const down = downsample(input, ctx.sampleRate, SAMPLE_RATE);
+          const p16 = float32ToPcm16(down);
+          const b64 = pcm16ToBase64(p16);
+          socketRef.current?.emit('audio_stream', { matchId, userId: currentUser.id, pcm: b64, sampleRate: SAMPLE_RATE });
         }
       };
 
       source.connect(processor);
-      // Dummy gain to destination to keep processor alive
       const dummy = ctx.createGain();
       dummy.gain.value = 0;
       processor.connect(dummy);
       dummy.connect(ctx.destination);
 
       processorRef.current = processor;
-      setIsMicEnabled(true);
-      setShowPermissionGuide(false);
-
+      setIsMicActive(true);
+      
     } catch (err: any) {
-      console.error('MIC_INIT_ERROR:', err);
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        setAudioError('Microphone access blocked.');
-        setShowPermissionGuide(true);
-      } else {
-        setAudioError(`Hardware error: ${err.message || 'Check settings'}`);
-      }
-      setIsMicEnabled(false);
+      console.error('MIC_ERROR:', err);
+      setAudioError(err.name === 'NotAllowedError' ? 'Permission denied.' : 'Hardware error. Please reload.');
+      setIsMicActive(false);
+    } finally {
+      setIsInitializing(false);
     }
   };
 
-  const handleStopMic = () => {
+  const stopVoice = () => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => t.stop());
       streamRef.current = null;
@@ -231,12 +209,11 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       processorRef.current.disconnect();
       processorRef.current = null;
     }
-    setIsMicEnabled(false);
+    setIsMicActive(false);
     setMicLevel(0);
+    isSpeakingRef.current = false;
     socketRef.current?.emit('mic_state', { matchId, userId: currentUser.id, isSpeaking: false, isMuted: true });
   };
-
-  // --- SOCKET SYNC ---
 
   useEffect(() => {
     const socket = io('/', { query: { matchId, userId: currentUser.id } });
@@ -258,8 +235,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
 
     socket.on('audio_stream', (data) => {
       if (data.userId === currentUser.id) return;
-
-      const ctx = createAudioContext();
+      const ctx = initAudioCtx();
       if (ctx.state === 'suspended') ctx.resume();
 
       const float32 = base64ToFloat32(data.pcm);
@@ -268,155 +244,140 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
 
       const source = ctx.createBufferSource();
       source.buffer = buffer;
-      source.connect(gainNodeRef.current || ctx.destination);
+      source.connect(gainRef.current || ctx.destination);
 
-      // Playback scheduling with jitter buffer
       const now = ctx.currentTime;
-      if (nextPlayTimeRef.current < now) {
-        nextPlayTimeRef.current = now + 0.05; // 50ms buffer
-      }
+      if (nextPlayTimeRef.current < now) nextPlayTimeRef.current = now + 0.05;
       source.start(nextPlayTimeRef.current);
       nextPlayTimeRef.current += buffer.duration;
-      
       setOpponentSpeaking(true);
-      // Auto-clear speaking state after a short silence
     });
 
     socket.on('mic_state', (data) => {
-      if (data.userId !== currentUser.id) {
-        setOpponentSpeaking(data.isSpeaking);
-      }
+      if (data.userId !== currentUser.id) setOpponentSpeaking(data.isSpeaking);
     });
 
     return () => {
       socket.disconnect();
-      handleStopMic();
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
-      }
+      stopVoice();
+      if (audioCtxRef.current) audioCtxRef.current.close();
     };
   }, [matchId, currentUser.id]);
 
-  // Clear opponent speaking flag when stream stops
   useEffect(() => {
     if (opponentSpeaking) {
-      const timer = setTimeout(() => setOpponentSpeaking(false), 1000);
-      return () => clearTimeout(timer);
+      const t = setTimeout(() => setOpponentSpeaking(false), 1000);
+      return () => clearTimeout(t);
     }
   }, [opponentSpeaking]);
 
-  const handleSendMessage = () => {
-    const text = inputText.trim();
-    if (!text || isSending) return;
+  const handleSend = () => {
+    if (!inputText.trim() || isSending) return;
     setIsSending(true);
-
     const newMsg: ChatMessage = {
-      id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
       senderId: currentUser.id,
       senderName: currentUser.codmIgn || 'You',
-      text,
+      text: inputText.trim(),
       timestamp: Date.now(),
     };
-
     socketRef.current?.emit('chat', { ...newMsg, matchId });
     setMessages(prev => [...prev, newMsg]);
     setInputText('');
-    setTimeout(() => setIsSending(false), 300);
+    setTimeout(() => setIsSending(false), 200);
   };
 
   return (
     <div className="flex flex-col h-[520px] bg-[#0c1317] rounded-3xl border border-neutral-800 shadow-2xl overflow-hidden font-sans select-none">
-      {/* HEADER */}
-      <div className="px-4 py-3 bg-[#1f2c34] border-b border-[#2a3942] flex items-center justify-between z-20">
+      {/* Header */}
+      <div className="px-4 py-3 bg-[#1f2c34] border-b border-[#2a3942] flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
           <div className="relative">
             <div className="w-10 h-10 rounded-full bg-emerald-600 flex items-center justify-center text-white font-bold text-sm shadow-md ring-2 ring-emerald-500/30">
               {opponentName.charAt(0).toUpperCase()}
             </div>
-            <span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[#1f2c34] ${isConnected ? 'bg-emerald-400' : 'bg-neutral-500'}`} />
+            <span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[#1f2c34] ${isConnected ? 'bg-emerald-400' : 'bg-rose-500'}`} />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-white font-bold text-sm tracking-wide">{opponentName}</span>
+              <span className="text-white font-bold text-sm">{opponentName}</span>
               {opponentSpeaking && (
-                <div className="flex items-center gap-1">
-                  <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping" />
-                  <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-tight">Live</span>
-                </div>
+                <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-widest flex items-center gap-1">
+                  <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />
+                  Live
+                </span>
               )}
             </div>
-            <div className="text-[11px] text-[#8696a0] flex items-center gap-1">
-              <Shield size={10} className="text-amber-400" />
-              <span>Voice Escrow Protected</span>
+            <div className="text-[10px] flex items-center gap-1.5">
+              {isConnected ? (
+                <div className="flex items-center gap-1 text-emerald-500/70">
+                  <Wifi size={10} />
+                  <span>Encrypted</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1 text-rose-500">
+                  <WifiOff size={10} />
+                  <span>Connecting...</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {isMicEnabled && (
+        <div className="flex items-center gap-1.5">
+          {isMicActive && (
             <button
               onClick={() => setIsMuted(!isMuted)}
               className={`p-2 rounded-full transition-all ${isMuted ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'}`}
             >
-              {isMuted ? <MicOff size={18} /> : <Mic size={18} />}
+              {isMuted ? <MicOff size={16} /> : <Mic size={16} />}
             </button>
           )}
           <button
-            onClick={isMicEnabled ? handleStopMic : handleStartMic}
-            disabled={isSettled}
-            className={`px-4 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 transition-all shadow-lg active:scale-95 ${isMicEnabled ? 'bg-rose-600 hover:bg-rose-700 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
+            onClick={isMicActive ? stopVoice : startVoice}
+            disabled={isSettled || isInitializing}
+            className={`px-3.5 py-1.5 rounded-full text-[11px] font-black flex items-center gap-1.5 shadow-md transition-all active:scale-95 uppercase tracking-wide ${isMicActive ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white animate-pulse'}`}
           >
-            {isMicEnabled ? <><VolumeX size={14} /><span>Exit</span></> : <><Mic size={14} /><span>Voice Chat</span></>}
+            {isInitializing ? (
+              <><Loader2 size={14} className="animate-spin" /><span>Syncing...</span></>
+            ) : isMicActive ? (
+              <><VolumeX size={14} /><span>Exit</span></>
+            ) : (
+              <><Mic size={14} /><span>Voice Chat</span></>
+            )}
           </button>
         </div>
       </div>
 
-      {/* MIC STATUS BAR */}
-      {isMicEnabled && (
-        <div className="bg-[#111b21] px-4 py-1.5 border-b border-emerald-900/30 flex items-center justify-between text-[11px]">
-          <div className="flex items-center gap-3">
-            <span className="text-emerald-400 font-bold uppercase tracking-widest flex items-center gap-1">
-              <Radio size={12} className="animate-pulse" />
-              On Air
-            </span>
-            <div className="w-20 h-1.5 bg-neutral-900 rounded-full overflow-hidden border border-emerald-500/10">
-              <div 
-                className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400 transition-all duration-100" 
-                style={{ width: `${micLevel}%` }} 
-              />
+      {/* Status Bar */}
+      {isMicActive && (
+        <div className="bg-[#111b21] px-4 py-1.5 border-b border-emerald-900/20 flex items-center justify-between text-[10px]">
+          <div className="flex items-center gap-2.5">
+            <Radio size={11} className="text-emerald-400 animate-pulse" />
+            <span className="text-emerald-400/80 font-bold uppercase tracking-widest">Broadcasting</span>
+            <div className="w-16 h-1 bg-black/40 rounded-full overflow-hidden">
+              <div className="h-full bg-emerald-400 transition-all duration-75" style={{ width: `${micLevel}%` }} />
             </div>
           </div>
-          <div className="text-[#8696a0] italic">Low Latency Enabled</div>
+          <div className="text-[#8696a0] font-mono text-[9px]">16KHz OPUS-SIM</div>
         </div>
       )}
 
-      {/* ERROR & GUIDE */}
       {audioError && (
-        <div className="bg-rose-950/80 px-4 py-2 border-b border-rose-800/40 flex flex-col gap-1">
-          <div className="flex items-center gap-2 text-xs text-rose-200">
-            <AlertCircle size={14} className="text-rose-400 shrink-0" />
-            <span className="font-bold">{audioError}</span>
-          </div>
-          {showPermissionGuide && (
-            <div className="text-[10px] text-rose-300 pl-6 leading-tight">
-              1. Tap the <span className="font-bold">LOCK</span> icon in address bar.<br />
-              2. Toggle <span className="font-bold text-white">Microphone ON</span>.<br />
-              3. Reload page and try again.
-            </div>
-          )}
+        <div className="bg-rose-950/90 px-4 py-2 border-b border-rose-800/40 flex items-center gap-2 text-[10px] text-rose-200">
+          <AlertCircle size={14} className="text-rose-400 shrink-0" />
+          <span>{audioError} (Tap address bar lock icon to allow mic)</span>
         </div>
       )}
 
-      {/* CHAT AREA */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-[#0b141a] relative pattern-bg">
-        <div className="absolute inset-0 opacity-[0.02] pointer-events-none bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')]" />
-        
+      {/* Chat Area */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-[#0b141a]">
         {messages.map((m, idx) => {
           const isMe = m.senderId === currentUser.id;
           return (
             <div key={m.id || idx} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
-              <div className={`p-2.5 rounded-2xl shadow-sm max-w-[85%] relative ${isMe ? 'bg-[#005c4b] text-white rounded-tr-none' : 'bg-[#202c33] text-[#e9edef] rounded-tl-none border border-[#2a3942]/40'}`}>
-                {!isMe && <p className="text-[10px] font-bold text-emerald-400 mb-0.5 uppercase tracking-tighter">{m.senderName || opponentName}</p>}
+              <div className={`p-2.5 rounded-2xl shadow-sm max-w-[85%] relative ${isMe ? 'bg-[#005c4b] text-white rounded-tr-none' : 'bg-[#202c33] text-[#e9edef] rounded-tl-none border border-white/5'}`}>
+                {!isMe && <p className="text-[10px] font-bold text-amber-500 mb-0.5 uppercase tracking-tighter">{m.senderName || opponentName}</p>}
                 <p className="text-sm leading-relaxed whitespace-pre-wrap">{m.text}</p>
                 <div className="flex justify-end mt-1 gap-1 text-[9px] text-[#8696a0]">
                   <span>{formatTime(m.timestamp)}</span>
@@ -429,21 +390,21 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* INPUT AREA */}
-      <div className="p-3 bg-[#1f2c34] border-t border-[#2a3942] flex items-center gap-2 z-20">
+      {/* Input */}
+      <div className="p-3 bg-[#1f2c34] border-t border-[#2a3942] flex items-center gap-2 shrink-0">
         <input
           type="text"
           value={inputText}
           onChange={e => setInputText(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && handleSendMessage()}
+          onKeyDown={e => e.key === 'Enter' && handleSend()}
           disabled={isSettled}
-          placeholder={isSettled ? 'Match settled' : 'Message...'}
-          className="flex-1 bg-[#2a3942] text-white placeholder-[#8696a0] rounded-full px-5 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-all border border-neutral-700/50"
+          placeholder="Type message..."
+          className="flex-1 bg-[#2a3942] text-white placeholder-[#8696a0] rounded-full px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
         />
         <button
-          onClick={handleSendMessage}
+          onClick={handleSend}
           disabled={!inputText.trim() || isSending || isSettled}
-          className="p-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-full transition-all shadow-md active:scale-90"
+          className="p-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-full transition-all active:scale-95"
         >
           <Send size={18} />
         </button>
