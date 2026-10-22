@@ -2,11 +2,9 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { UserProfile, ChatMessage } from '../types';
 import {
   Send, Mic, MicOff, Volume2, VolumeX, Shield, Trash2,
-  Check, CheckCheck, Radio, Sparkles, RefreshCw, AlertCircle
+  Check, CheckCheck, Radio, Sparkles, RefreshCw, AlertCircle, Headphones
 } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
-import { unlockAudio, isAudioUnlocked } from '../services/audioUnlockService';
-import { showBrowserNotification } from '../services/notificationService';
 
 interface MatchLobbyChatProps {
   matchId: string;
@@ -51,6 +49,29 @@ function base64ToFloat32(base64: string): Float32Array {
   return float32;
 }
 
+// High-quality downsampler to reduce native sample rate (e.g. 48kHz/44.1kHz) to 16kHz
+function downsample(buffer: Float32Array, fromRate: number, toRate: number): Float32Array {
+  if (toRate >= fromRate) return buffer;
+  const ratio = fromRate / toRate;
+  const newLength = Math.round(buffer.length / ratio);
+  const result = new Float32Array(newLength);
+  let offsetResult = 0;
+  let offsetBuffer = 0;
+  while (offsetResult < newLength) {
+    const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+    let accum = 0;
+    let count = 0;
+    for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+      accum += buffer[i];
+      count++;
+    }
+    result[offsetResult] = count > 0 ? accum / count : 0;
+    offsetResult++;
+    offsetBuffer = nextOffsetBuffer;
+  }
+  return result;
+}
+
 // Format timestamp into WhatsApp style: 10:45 AM
 function formatTime(timestamp?: number): string {
   if (!timestamp) return '';
@@ -86,6 +107,12 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   const [audioError, setAudioError] = useState<string | null>(null);
   const [testToneActive, setTestToneActive] = useState(false);
 
+  // Live mic feedback states
+  const [micLevel, setMicLevel] = useState(0);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isLoopbackEnabled, setIsLoopbackEnabled] = useState(false);
+  const [isTestingMic, setIsTestingMic] = useState(false);
+
   const socketRef = useRef<Socket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const playbackCtxRef = useRef<AudioContext | null>(null);
@@ -98,6 +125,14 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const silentAudioRef = useRef<HTMLAudioElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Persistent audio pipeline node refs to prevent browser garbage collection
+  const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const loopbackGainRef = useRef<GainNode | null>(null);
+  const lastSpeakingStateRef = useRef<boolean>(false);
+  const lastLevelUpdateRef = useRef<number>(0);
+  const micTestTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Auto-scroll to latest message
   const scrollToBottom = useCallback((smooth = true) => {
@@ -128,23 +163,32 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
     }
   }, [initialMessages]);
 
-  // Initialize playback AudioContext on first interaction or mount
+  // Initialize playback AudioContext using native hardware sample rate
   const ensurePlaybackContext = useCallback(() => {
     if (!playbackCtxRef.current || playbackCtxRef.current.state === 'closed') {
       const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      const ctx = new AudioCtxClass({ sampleRate: 16000 });
+      const ctx = new AudioCtxClass();
       const gain = ctx.createGain();
       gain.gain.value = opponentVolume;
-
-      // 1. Create MediaStream destination for HTML5 <audio> tag
-      // This is the core mechanism that keeps mobile OS (iOS mediaserverd & Android) playing audio when minimized into CODM
-      const dest = ctx.createMediaStreamDestination();
-      gain.connect(dest);
       gain.connect(ctx.destination);
-      streamDestRef.current = dest;
 
-      // 2. Connect continuous sub-audible carrier (12 Hz at 0.00005 gain)
-      // Prevents mobile OS from terminating the audio stream on silence when neither player is speaking
+      // Create MediaStream destination for HTML5 <audio> tag to keep mobile background audio active
+      try {
+        if (ctx.createMediaStreamDestination) {
+          const dest = ctx.createMediaStreamDestination();
+          gain.connect(dest);
+          streamDestRef.current = dest;
+          if (remoteAudioRef.current && dest.stream) {
+            remoteAudioRef.current.srcObject = dest.stream;
+            remoteAudioRef.current.muted = true; // Mute element to prevent double-audio output over WebAudio
+            remoteAudioRef.current.play().catch(() => {});
+          }
+        }
+      } catch (destErr) {
+        console.warn('MediaStreamDestination fallback:', destErr);
+      }
+
+      // Connect sub-audible carrier (12 Hz) to keep mobile audio stack alive
       try {
         const carrierOsc = ctx.createOscillator();
         const carrierGain = ctx.createGain();
@@ -152,7 +196,6 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
         carrierOsc.frequency.setValueAtTime(12, ctx.currentTime);
         carrierGain.gain.setValueAtTime(0.00005, ctx.currentTime);
         carrierOsc.connect(carrierGain);
-        carrierGain.connect(dest);
         carrierGain.connect(ctx.destination);
         carrierOsc.start();
         carrierOscRef.current = carrierOsc;
@@ -163,42 +206,33 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       gainNodeRef.current = gain;
       playbackCtxRef.current = ctx;
 
-      // 3. Attach MediaStream to <audio playsInline autoPlay>
-      if (remoteAudioRef.current && dest.stream) {
-        remoteAudioRef.current.srcObject = dest.stream;
-        remoteAudioRef.current.play().catch(() => {});
+      // MediaSession registration for background persistence
+      if ('mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: 'CODM 1v1 Voice Comms (Live)',
+            artist: 'CODM Stake Arena',
+            album: `1v1 Match vs ${opponentName}`,
+            artwork: [
+              { src: '/18012397-6DAC-458A-9230-E51DC47747A9.png', sizes: '512x512', type: 'image/png' },
+            ],
+          });
+          navigator.mediaSession.playbackState = 'playing';
+          navigator.mediaSession.setActionHandler('play', () => {
+            playbackCtxRef.current?.resume().catch(() => {});
+            if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+          });
+          navigator.mediaSession.setActionHandler('pause', () => {});
+        } catch (msErr) {
+          console.warn('MediaSession setup:', msErr);
+        }
       }
     }
     if (playbackCtxRef.current.state === 'suspended') {
       playbackCtxRef.current.resume().catch(() => {});
     }
-    if (remoteAudioRef.current && remoteAudioRef.current.paused && remoteAudioRef.current.srcObject) {
-      remoteAudioRef.current.play().catch(() => {});
-    }
     return playbackCtxRef.current;
-  }, [opponentVolume]);
-
-  // Mobile Safari User Gesture Audio Unlock
-  // Forces Web Audio context & HTML5 audio pipeline initialization on first interaction
-  useEffect(() => {
-    const handleGestureUnlock = async () => {
-      await unlockAudio(playbackCtxRef.current);
-      ensurePlaybackContext();
-    };
-
-    const gestureEvents = ['touchstart', 'touchend', 'click', 'keydown'];
-    gestureEvents.forEach((ev) => {
-      window.addEventListener(ev, handleGestureUnlock, { capture: true, passive: true, once: true });
-      document.addEventListener(ev, handleGestureUnlock, { capture: true, passive: true, once: true });
-    });
-
-    return () => {
-      gestureEvents.forEach((ev) => {
-        window.removeEventListener(ev, handleGestureUnlock, { capture: true } as EventListenerOptions);
-        document.removeEventListener(ev, handleGestureUnlock, { capture: true } as EventListenerOptions);
-      });
-    };
-  }, [ensurePlaybackContext]);
+  }, [opponentVolume, opponentName]);
 
   // Play synthesized pleasant pop tone on message receive/send
   const playPopTone = useCallback(() => {
@@ -222,13 +256,12 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   }, [ensurePlaybackContext]);
 
   // Test speaker output with a quick melodic chime
-  const handleTestSpeaker = async () => {
+  const handleTestSpeaker = () => {
     try {
       setTestToneActive(true);
-      await unlockAudio(playbackCtxRef.current);
       const ctx = ensurePlaybackContext();
-      await ctx.resume();
-      const now = ctx.currentTime;
+      ctx.resume().then(() => {
+        const now = ctx.currentTime;
         const freqs = [523.25, 659.25, 783.99]; // C5, E5, G5
         freqs.forEach((freq, idx) => {
           const osc = ctx.createOscillator();
@@ -240,9 +273,10 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
           osc.connect(gain);
           gain.connect(ctx.destination);
           osc.start(now + idx * 0.12);
-        osc.stop(now + idx * 0.12 + 0.28);
+          osc.stop(now + idx * 0.12 + 0.28);
+        });
+        setTimeout(() => setTestToneActive(false), 600);
       });
-      setTimeout(() => setTestToneActive(false), 600);
     } catch (err: unknown) {
       setAudioError(err instanceof Error ? err.message : 'Audio test failed');
       setTestToneActive(false);
@@ -256,14 +290,6 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       if (!ctx) return;
       if (ctx.state === 'suspended') {
         ctx.resume().catch(() => {});
-      }
-
-      // Ensure remote audio element is actively playing the stream
-      if (remoteAudioRef.current && (!remoteAudioRef.current.srcObject || remoteAudioRef.current.paused)) {
-        if (streamDestRef.current?.stream) {
-          remoteAudioRef.current.srcObject = streamDestRef.current.stream;
-        }
-        remoteAudioRef.current.play().catch(() => {});
       }
 
       const float32 = base64ToFloat32(pcmBase64);
@@ -281,11 +307,16 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
         source.connect(ctx.destination);
       }
 
-      // Schedule smoothly along timeline to eliminate clipping/stutter
-      const currentTime = ctx.currentTime;
-      const scheduledTime = Math.max(currentTime, nextPlayTimeRef.current);
-      source.start(scheduledTime);
-      nextPlayTimeRef.current = scheduledTime + buffer.duration;
+      // Prevent buffer queue drift and underflow
+      const now = ctx.currentTime;
+      if (nextPlayTimeRef.current < now || nextPlayTimeRef.current > now + 0.35) {
+        nextPlayTimeRef.current = now + 0.02;
+      }
+      source.start(nextPlayTimeRef.current);
+      nextPlayTimeRef.current += buffer.duration;
+      source.onended = () => {
+        try { source.disconnect(); } catch {}
+      };
     } catch (err) {
       console.warn('Audio playback chunk error:', err);
     }
@@ -317,11 +348,9 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
     socket.on('chat', (newMsg: ChatMessage & { matchId?: string }) => {
       if (!newMsg || !newMsg.text) return;
       setMessages((prev) => {
-        // 1. Check ID uniqueness
         if (newMsg.id && prev.some((m) => m.id === newMsg.id)) {
           return prev;
         }
-        // 2. Check content + timestamp match within 2.5s (prevents local/remote duplicate echo)
         const isDuplicateContent = prev.some(
           (m) =>
             m.senderId === newMsg.senderId &&
@@ -331,22 +360,6 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
         if (isDuplicateContent) {
           return prev;
         }
-
-        // Trigger phone & lock-screen push notification when opponent sends a chat message
-        if (newMsg.senderId !== currentUser.id && newMsg.senderId !== 'SYSTEM') {
-          showBrowserNotification({
-            id: `chat_push_${newMsg.id}`,
-            title: `💬 ${newMsg.senderName || opponentName} (Match Chat)`,
-            body: newMsg.text,
-            soundType: 'default',
-            tag: `codm_chat_${matchId}`,
-            data: {
-              matchId,
-              url: '/arena',
-            },
-          });
-        }
-
         playPopTone();
         return [...prev, newMsg];
       });
@@ -380,7 +393,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       setMessages([]);
     });
 
-    // Background keep-alive interval for persistent voice comms when minimized to play CODM
+    // Background keep-alive interval
     const keepAliveInterval = setInterval(() => {
       if (playbackCtxRef.current && playbackCtxRef.current.state === 'suspended') {
         playbackCtxRef.current.resume().catch(() => {});
@@ -388,21 +401,14 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
         audioContextRef.current.resume().catch(() => {});
       }
-      if (remoteAudioRef.current && remoteAudioRef.current.paused && remoteAudioRef.current.srcObject) {
-        remoteAudioRef.current.play().catch(() => {});
-      }
     }, 1000);
 
-    // Auto-resume audio across all browser lifecycle transitions
     const handleLifecycleChange = () => {
       if (playbackCtxRef.current && playbackCtxRef.current.state === 'suspended') {
         playbackCtxRef.current.resume().catch(() => {});
       }
       if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
         audioContextRef.current.resume().catch(() => {});
-      }
-      if (remoteAudioRef.current && remoteAudioRef.current.paused && remoteAudioRef.current.srcObject) {
-        remoteAudioRef.current.play().catch(() => {});
       }
     };
 
@@ -424,33 +430,30 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
     };
   }, [matchId, currentUser.id, playPopTone, playRemoteAudio]);
 
-  // Start microphone capture using AudioWorklet (with fallback to ScriptProcessor)
-  const startAudio = async () => {
-    console.log('startAudio clicked');
+  // Toggle local self-hear loopback
+  const toggleLoopback = () => {
+    const next = !isLoopbackEnabled;
+    setIsLoopbackEnabled(next);
+    if (loopbackGainRef.current) {
+      loopbackGainRef.current.gain.value = next ? 1.0 : 0.0;
+    }
+  };
+
+  // Start microphone capture with downsampling and persistent AudioNode references
+  const startAudio = async (enableLoopback = false) => {
     setAudioError(null);
+
+    // 1. Check browser mediaDevices support
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setAudioError('Microphone access is not supported by this browser or security context (HTTPS required).');
+      setIsMicEnabled(false);
+      setIsTestingMic(false);
+      return;
+    }
+
     try {
-      // 0. Force unlock Web Audio context inside this user gesture (iOS Safari requirement)
-      await unlockAudio(playbackCtxRef.current);
-
-      // 1. Request screen wake lock to prevent mobile device sleep during active match
-      if ('wakeLock' in navigator && !wakeLockRef.current) {
-        try {
-          wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
-          wakeLockRef.current.addEventListener('release', () => {
-            wakeLockRef.current = null;
-          });
-        } catch {
-          // Wake lock optional
-        }
-      }
-
-      // 2. Ensure playback pipeline & MediaStream destination are primed
-      const pCtx = ensurePlaybackContext();
-      if (pCtx && pCtx.state === 'suspended') {
-        await pCtx.resume();
-      }
-
-      console.log('Attempting to get microphone access...');
+      // CRITICAL FOR iOS: Request microphone IMMEDIATELY as the first async operation
+      // This ensures the "user gesture" context is preserved for the hardware trigger.
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -458,86 +461,97 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
           autoGainControl: true,
         },
       });
-      console.log('Microphone access granted. Tracks:', stream.getAudioTracks().length);
       localStreamRef.current = stream;
 
+      // 2. Setup playback context (after mic is granted)
+      const pCtx = ensurePlaybackContext();
+      if (pCtx && pCtx.state === 'suspended') {
+        pCtx.resume().catch(() => {});
+      }
+
+      // 4. Create AudioContext using native hardware sample rate
       const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       const audioCtx = new AudioCtxClass();
-      console.log('AudioContext created. State:', audioCtx.state);
       audioContextRef.current = audioCtx;
       if (audioCtx.state === 'suspended') {
-        console.log('Resuming AudioContext...');
         await audioCtx.resume();
       }
 
-      console.log('Creating MediaStreamSource...');
+      const nativeRate = audioCtx.sampleRate || 48000;
       const source = audioCtx.createMediaStreamSource(stream);
-      console.log('MediaStreamSource created.');
+      sourceNodeRef.current = source;
 
-      // Attempt AudioWorklet for dedicated background thread processing
-      let workletSuccess = false;
-      try {
-        await audioCtx.audioWorklet.addModule('/audio-processor.js');
-        const workletNode = new AudioWorkletNode(audioCtx, 'audio-processor');
-        source.connect(workletNode);
-        const muteGain = audioCtx.createGain();
-        muteGain.gain.value = 0.00001; // Tiny non-zero gain prevents mobile WebKit from pruning node graph
-        workletNode.connect(muteGain);
-        muteGain.connect(audioCtx.destination);
+      // 5. Setup self-hear loopback gain node
+      const loopbackGain = audioCtx.createGain();
+      loopbackGain.gain.value = enableLoopback ? 1.0 : 0.0;
+      source.connect(loopbackGain);
+      loopbackGain.connect(audioCtx.destination);
+      loopbackGainRef.current = loopbackGain;
+      setIsLoopbackEnabled(enableLoopback);
 
-        workletNode.port.onmessage = (e) => {
-          if (!socketRef.current || isMicMuted) return;
-          const floatData = e.data as Float32Array;
-          if (!floatData || floatData.length === 0) return;
+      // 6. Setup persistent ScriptProcessor (4096 buffer size) stored in ref to prevent GC
+      const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+      processorRef.current = processor;
 
-          // Check if user is actively speaking (amplitude threshold)
-          let sum = 0;
-          for (let i = 0; i < floatData.length; i++) sum += floatData[i] * floatData[i];
-          const rms = Math.sqrt(sum / floatData.length);
-          if (rms > 0.015) {
-            socketRef.current.emit('mic_state', {
-              userId: currentUser.id,
-              isSpeaking: true,
-              matchId,
-            });
-          }
+      processor.onaudioprocess = (e) => {
+        if (!localStreamRef.current) return;
+        const inputData = e.inputBuffer.getChannelData(0);
+        if (!inputData || inputData.length === 0) return;
 
-          const pcm = int16ToBase64(floatTo16BitPCM(floatData));
-          socketRef.current.emit('audio_stream', {
+        // Calculate real-time RMS for voice activity & VU meter
+        let sum = 0;
+        for (let i = 0; i < inputData.length; i++) {
+          sum += inputData[i] * inputData[i];
+        }
+        const rms = Math.sqrt(sum / inputData.length);
+        const levelPct = Math.min(100, Math.round(rms * 280));
+
+        // Throttle UI update to ~12 FPS for smooth performance
+        const now = Date.now();
+        if (now - lastLevelUpdateRef.current > 75) {
+          lastLevelUpdateRef.current = now;
+          setMicLevel(levelPct);
+        }
+
+        const currentlySpeaking = rms > 0.012 && !isMicMuted;
+        if (currentlySpeaking !== lastSpeakingStateRef.current) {
+          lastSpeakingStateRef.current = currentlySpeaking;
+          setIsSpeaking(currentlySpeaking);
+          socketRef.current?.emit('mic_state', {
             userId: currentUser.id,
-            pcm,
-            sampleRate: audioCtx.sampleRate,
+            isSpeaking: currentlySpeaking,
+            isMuted: isMicMuted,
             matchId,
           });
-        };
-        workletSuccess = true;
-      } catch (workletErr) {
-        console.warn('AudioWorklet load fallback to ScriptProcessor:', workletErr);
+        }
+
+        if (isMicMuted) return;
+
+        // Downsample native audio to 16000 Hz and emit over socket
+        const downsampled = downsample(inputData, nativeRate, 16000);
+        const pcm16 = floatTo16BitPCM(downsampled);
+        const pcmBase64 = int16ToBase64(pcm16);
+
+        socketRef.current?.emit('audio_stream', {
+          userId: currentUser.id,
+          pcm: pcmBase64,
+          sampleRate: 16000,
+          matchId,
+        });
+      };
+
+      source.connect(processor);
+      const muteGain = audioCtx.createGain();
+      muteGain.gain.value = 0.00001;
+      processor.connect(muteGain);
+      muteGain.connect(audioCtx.destination);
+
+      if ('wakeLock' in navigator && !wakeLockRef.current) {
+        try {
+          wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+        } catch {}
       }
 
-      // Safe fallback if AudioWorklet was not available
-      if (!workletSuccess) {
-        const processor = audioCtx.createScriptProcessor(2048, 1, 1);
-        source.connect(processor);
-        const muteGain = audioCtx.createGain();
-        muteGain.gain.value = 0.00001;
-        processor.connect(muteGain);
-        muteGain.connect(audioCtx.destination);
-
-        processor.onaudioprocess = (e) => {
-          if (!socketRef.current || isMicMuted) return;
-          const floatData = e.inputBuffer.getChannelData(0);
-          const pcm = int16ToBase64(floatTo16BitPCM(floatData));
-          socketRef.current.emit('audio_stream', {
-            userId: currentUser.id,
-            pcm,
-            sampleRate: audioCtx.sampleRate,
-            matchId,
-          });
-        };
-      }
-
-      // Start silent loop audio element to keep mobile background thread awake
       if (silentAudioRef.current) {
         silentAudioRef.current.play().catch(() => {});
       }
@@ -551,15 +565,35 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
         matchId,
       });
     } catch (err: unknown) {
-      console.error('startAudio failed:', err);
-      const msg = err instanceof Error ? err.message : 'Microphone access denied';
-      setAudioError(msg);
+      console.error('startAudio error:', err);
       setIsMicEnabled(false);
+      setIsTestingMic(false);
+
+      if (err instanceof DOMException || (err && typeof err === 'object' && 'name' in err)) {
+        const errName = (err as any).name;
+        if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError') {
+          setAudioError('Microphone is BLOCKED by your browser. Click the lock 🔒 or tune 🎛️ icon in your address bar and set Microphone to "Allow".');
+        } else if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError') {
+          setAudioError('No microphone detected on your device.');
+        } else if (errName === 'NotReadableError' || errName === 'TrackStartError') {
+          setAudioError('Microphone is in use by another app (e.g. Call of Duty or Zoom). Close other audio apps and try again.');
+        } else if (errName === 'SecurityError') {
+          setAudioError('Microphone access restricted by security policy.');
+        } else {
+          setAudioError(`Microphone error (${errName}): ${err instanceof Error ? err.message : 'Permission denied'}`);
+        }
+      } else {
+        setAudioError('Microphone access denied or blocked in browser settings.');
+      }
     }
   };
 
   // Stop microphone capture
   const stopAudio = () => {
+    if (micTestTimeoutRef.current) {
+      clearTimeout(micTestTimeoutRef.current);
+      micTestTimeoutRef.current = null;
+    }
     if (wakeLockRef.current) {
       try {
         wakeLockRef.current.release();
@@ -570,6 +604,18 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       localStreamRef.current.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
     }
+    if (processorRef.current) {
+      try { processorRef.current.disconnect(); } catch {}
+      processorRef.current = null;
+    }
+    if (sourceNodeRef.current) {
+      try { sourceNodeRef.current.disconnect(); } catch {}
+      sourceNodeRef.current = null;
+    }
+    if (loopbackGainRef.current) {
+      try { loopbackGainRef.current.disconnect(); } catch {}
+      loopbackGainRef.current = null;
+    }
     if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
       audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
@@ -578,12 +624,30 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       silentAudioRef.current.pause();
     }
     setIsMicEnabled(false);
+    setIsLoopbackEnabled(false);
+    setIsTestingMic(false);
+    setMicLevel(0);
+    setIsSpeaking(false);
     socketRef.current?.emit('mic_state', {
       userId: currentUser.id,
       isSpeaking: false,
       isMuted: true,
       matchId,
     });
+  };
+
+  // Run a 6-second live microphone self-test
+  const handleTestMic = async () => {
+    if (isTestingMic || isMicEnabled) {
+      stopAudio();
+      return;
+    }
+    setIsTestingMic(true);
+    await startAudio(true);
+    micTestTimeoutRef.current = setTimeout(() => {
+      setIsTestingMic(false);
+      stopAudio();
+    }, 6000);
   };
 
   // Toggle mic mute
@@ -603,88 +667,6 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
     });
   };
 
-  // Media Session API Integration
-  // Manages lock-screen, control center, and Bluetooth headset playback controls & metadata
-  // Ensures iOS Safari mediaserverd and Android AudioFlinger recognize the match audio stream as active media even in the background
-  useEffect(() => {
-    if (typeof window === 'undefined' || !('mediaSession' in navigator)) return;
-
-    try {
-      const statusText = !isMicEnabled
-        ? 'Listening'
-        : isMicMuted
-        ? 'Mic Muted'
-        : 'Live';
-
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: `CODM 1v1 Comms (${statusText})`,
-        artist: `1v1 Match vs ${opponentName}`,
-        album: 'CODM Stake Arena · Refereed Room',
-        artwork: [
-          { src: '/18012397-6DAC-458A-9230-E51DC47747A9.png', sizes: '96x96', type: 'image/png' },
-          { src: '/18012397-6DAC-458A-9230-E51DC47747A9.png', sizes: '128x128', type: 'image/png' },
-          { src: '/18012397-6DAC-458A-9230-E51DC47747A9.png', sizes: '192x192', type: 'image/png' },
-          { src: '/18012397-6DAC-458A-9230-E51DC47747A9.png', sizes: '256x256', type: 'image/png' },
-          { src: '/18012397-6DAC-458A-9230-E51DC47747A9.png', sizes: '512x512', type: 'image/png' },
-        ],
-      });
-
-      // Maintain 'playing' state so mobile browsers treat audio as active media
-      navigator.mediaSession.playbackState = 'playing';
-
-      // Lock screen Play: resume AudioContext and ensure media playback
-      navigator.mediaSession.setActionHandler('play', async () => {
-        await unlockAudio(playbackCtxRef.current);
-        if (playbackCtxRef.current?.state === 'suspended') {
-          await playbackCtxRef.current.resume().catch(() => {});
-        }
-        if (remoteAudioRef.current && remoteAudioRef.current.paused && remoteAudioRef.current.srcObject) {
-          await remoteAudioRef.current.play().catch(() => {});
-        }
-        if (isMicEnabled && isMicMuted) {
-          toggleMicMute();
-        }
-        navigator.mediaSession.playbackState = 'playing';
-      });
-
-      // Lock screen Pause: toggle mic mute without dropping opponent incoming audio
-      navigator.mediaSession.setActionHandler('pause', () => {
-        if (isMicEnabled && !isMicMuted) {
-          toggleMicMute();
-        }
-      });
-
-      // Lock screen Stop: leaves voice room or pauses comms
-      navigator.mediaSession.setActionHandler('stop', () => {
-        if (isMicEnabled) {
-          stopAudio();
-        }
-      });
-
-      // Headset & lock screen microphone toggle action (AirPods stem click, Bluetooth headset button)
-      try {
-        navigator.mediaSession.setActionHandler('togglemicrophone' as any, () => {
-          if (isMicEnabled) {
-            toggleMicMute();
-          } else {
-            startAudio();
-          }
-        });
-      } catch {}
-
-      // VoIP Call hangup action
-      try {
-        navigator.mediaSession.setActionHandler('hangup' as any, () => {
-          if (isMicEnabled) {
-            stopAudio();
-          }
-        });
-      } catch {}
-    } catch (msErr) {
-      console.warn('[MediaSession] Configuration error:', msErr);
-    }
-  }, [isMicEnabled, isMicMuted, opponentName]);
-
   // Send in-match text message with client-side deduplication lock
   const handleSendMessage = () => {
     const text = inputText.trim();
@@ -699,7 +681,6 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       timestamp: Date.now(),
     };
 
-    // Optimistically append locally (safely guarded)
     setMessages((prev) => {
       if (prev.some((m) => m.id === newMsg.id)) return prev;
       return [...prev, newMsg];
@@ -708,7 +689,6 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
     setInputText('');
     playPopTone();
 
-    // Broadcast over Socket.io
     socketRef.current?.emit('chat', {
       id: newMsg.id,
       text: newMsg.text,
@@ -739,17 +719,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   };
 
   return (
-    <div
-      onClick={() => {
-        unlockAudio(playbackCtxRef.current);
-        ensurePlaybackContext();
-      }}
-      onTouchStart={() => {
-        unlockAudio(playbackCtxRef.current);
-        ensurePlaybackContext();
-      }}
-      className="flex flex-col h-[520px] bg-[#0c1317] rounded-3xl border border-neutral-800 shadow-2xl overflow-hidden font-sans select-none"
-    >
+    <div className="flex flex-col h-[520px] bg-[#0c1317] rounded-3xl border border-neutral-800 shadow-2xl overflow-hidden font-sans select-none">
       {/* Hidden silent loop audio to keep mobile background execution active */}
       <audio
         ref={silentAudioRef}
@@ -759,11 +729,12 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
         className="hidden"
       />
 
-      {/* Hidden live MediaStream audio element to preserve background audio session when minimized in CODM */}
+      {/* Hidden live MediaStream audio element to preserve background audio session */}
       <audio
         ref={remoteAudioRef}
         autoPlay
         playsInline
+        muted
         className="hidden"
       />
 
@@ -808,7 +779,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
 
         {/* Tactical Voice & Comms Controls */}
         <div className="flex items-center gap-1.5">
-          {/* Test Speaker Button (Unmutes & unblocks mobile autoplay) */}
+          {/* Test Speaker Button */}
           <button
             onClick={handleTestSpeaker}
             title="Test Speaker & Unmute Audio"
@@ -822,7 +793,23 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
             <span className="hidden sm:inline">Test Audio</span>
           </button>
 
-          {/* Opponent Volume Slider (when mic is active) */}
+          {/* Test Mic Button */}
+          {!isMicEnabled && (
+            <button
+              onClick={handleTestMic}
+              title="Test live microphone recording & hear yourself"
+              className={`px-2.5 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1 transition-all ${
+                isTestingMic
+                  ? 'bg-emerald-500 text-neutral-950 ring-2 ring-emerald-300 animate-pulse font-bold'
+                  : 'bg-[#2a3942] hover:bg-[#374248] text-[#d1d7db]'
+              }`}
+            >
+              <Headphones size={13} />
+              <span className="hidden sm:inline">{isTestingMic ? 'Testing Mic...' : 'Test Mic'}</span>
+            </button>
+          )}
+
+          {/* Opponent Volume Slider */}
           {isMicEnabled && (
             <div className="hidden sm:flex items-center gap-1 bg-[#2a3942] px-2 py-1 rounded-full text-xs text-[#8696a0]">
               <Volume2 size={13} className="text-emerald-400" />
@@ -855,7 +842,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
 
           {/* Voice Chat On/Off Toggle Button */}
           <button
-            onClick={isMicEnabled ? stopAudio : startAudio}
+            onClick={isMicEnabled ? stopAudio : () => startAudio(false)}
             disabled={isSettled}
             title={isMicEnabled ? 'Leave Voice Room' : 'Join Voice Chat'}
             className={`px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 transition-all shadow-md ${
@@ -888,31 +875,73 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
         </div>
       </div>
 
-      {/* Voice Status Pill Banner */}
+      {/* Live Voice Status Pill Banner with Real-Time VU Meter */}
       {isMicEnabled && (
-        <div className="bg-emerald-950/70 border-b border-emerald-800/40 px-4 py-1.5 flex items-center justify-between text-xs text-emerald-300">
+        <div className="bg-emerald-950/80 border-b border-emerald-800/40 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-300">
+          <div className="flex items-center gap-2.5">
+            <span className={`w-2.5 h-2.5 rounded-full ${isSpeaking ? 'bg-emerald-400 animate-ping' : 'bg-emerald-500'}`} />
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-white">
+                {isMicMuted ? 'Mic Muted' : isSpeaking ? '🎙️ Broadcasting Voice...' : 'Mic Ready (Listening)'}
+              </span>
+
+              {/* Real-time input volume meter */}
+              {!isMicMuted && (
+                <div className="flex items-center gap-1.5 bg-neutral-900/90 px-2 py-0.5 rounded-md border border-emerald-500/30">
+                  <span className="text-[10px] text-neutral-400 font-mono">Input:</span>
+                  <div className="w-16 h-2 bg-neutral-800 rounded-full overflow-hidden flex items-center">
+                    <div
+                      className={`h-full transition-all duration-75 rounded-full ${
+                        micLevel > 60 ? 'bg-amber-400' : micLevel > 15 ? 'bg-emerald-400' : 'bg-emerald-600'
+                      }`}
+                      style={{ width: `${Math.max(4, micLevel)}%` }}
+                    />
+                  </div>
+                  <span className="text-[10px] font-mono text-emerald-400 font-bold">{micLevel}%</span>
+                </div>
+              )}
+            </div>
+          </div>
+
           <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-            <span className="font-medium">
-              Live Voice Comms Active · Background audio enabled for playing Call of Duty: Mobile
+            {/* Toggle Hear Myself (Loopback) */}
+            <button
+              onClick={toggleLoopback}
+              title="Hear your microphone in your headset/speaker to verify recording"
+              className={`px-2 py-1 rounded text-[11px] font-semibold flex items-center gap-1 transition-all ${
+                isLoopbackEnabled
+                  ? 'bg-amber-500 text-neutral-950 ring-1 ring-amber-300 font-bold'
+                  : 'bg-[#2a3942] hover:bg-[#374248] text-neutral-300'
+              }`}
+            >
+              <Headphones size={12} />
+              <span>{isLoopbackEnabled ? 'Mute Self-Hear' : 'Hear Myself'}</span>
+            </button>
+
+            <span className="text-[10px] text-emerald-400/80 font-mono uppercase">
+              {isMicMuted ? 'MUTED' : 'LIVE'}
             </span>
           </div>
-          <span className="text-[11px] text-emerald-400/80 font-mono">
-            {isMicMuted ? 'MUTED' : 'LIVE'}
-          </span>
         </div>
       )}
 
       {audioError && (
-        <div className="bg-rose-950/80 border-b border-rose-800/60 px-4 py-1.5 flex items-center gap-2 text-xs text-rose-300">
-          <AlertCircle size={14} />
-          <span>{audioError} - Tap &quot;Test Audio&quot; to allow browser audio permissions.</span>
+        <div className="bg-rose-950/90 border-b border-rose-800/80 px-4 py-2 flex flex-wrap items-center justify-between gap-2 text-xs text-rose-200">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <AlertCircle size={15} className="text-rose-400 shrink-0" />
+            <span className="leading-snug">{audioError}</span>
+          </div>
+          <button
+            onClick={() => startAudio(false)}
+            className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg text-[11px] uppercase tracking-wider shrink-0 transition-all cursor-pointer shadow"
+          >
+            Retry Mic
+          </button>
         </div>
       )}
 
-      {/* WhatsApp Chat Canvas with subtle dark texture */}
+      {/* WhatsApp Chat Canvas */}
       <div className="flex-1 overflow-y-auto p-4 space-y-2.5 bg-[#0b141a] relative">
-        {/* Subtle background decoration */}
         <div className="absolute inset-0 opacity-[0.03] pointer-events-none bg-[radial-gradient(#25d366_1px,transparent_1px)] [background-size:16px_16px]" />
 
         {/* Encrypted Referee Notification Badge */}

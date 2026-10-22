@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { getSharedAudioContext, unlockAudio } from '../services/audioUnlockService';
 
 const SOUND_STORAGE_KEY = 'codm_sound_enabled';
 const SOUND_EVENT_NAME = 'codm_sound_setting_changed';
@@ -78,10 +79,10 @@ export const playShotgunSound = (): void => {
   if (!getSoundEnabled()) return;
 
   try {
-    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    if (AudioCtx) {
-      const ctx = new AudioCtx();
+    const ctx = getSharedAudioContext();
+    if (ctx) {
       if (ctx.state === 'suspended') {
+        unlockAudio(ctx);
         ctx.resume().catch(() => {});
       }
 
