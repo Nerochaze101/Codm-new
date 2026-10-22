@@ -499,7 +499,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
           socketRef.current.emit('audio_stream', {
             userId: currentUser.id,
             pcm,
-            sampleRate: 16000,
+            sampleRate: audioCtx.sampleRate,
             matchId,
           });
         };
@@ -524,7 +524,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
           socketRef.current.emit('audio_stream', {
             userId: currentUser.id,
             pcm,
-            sampleRate: 16000,
+            sampleRate: audioCtx.sampleRate,
             matchId,
           });
         };
