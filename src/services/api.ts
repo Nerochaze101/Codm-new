@@ -45,6 +45,7 @@ export async function signUpUser(data: {
   accountNumber?: string;
   accountName?: string;
   initialDeposit?: number;
+  referralCode?: string;
 }): Promise<UserProfile> {
   const res = await fetch('/api/auth/register', {
     method: 'POST',

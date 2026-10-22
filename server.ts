@@ -712,7 +712,11 @@ export function broadcastMatchStateChange(match: any, alertType?: string, alertT
     let title = alertTitle || '';
     let body = alertBody || '';
 
-    if (alertType === 'RIVAL_JOINED' || match.status === 'OPPONENT_STAKED_AWAITING_CREATOR') {
+    if (alertType === 'NEW_MATCH_AWAITING_OPPONENT' || (!match.opponent && (match.status === 'PENDING_OPPONENT_STAKE' || match.status === 'PENDING'))) {
+      soundType = 'rival_joined';
+      title = title || `⚔️ New Match Open: ₦${parseFloat(match.stakeAmount || 0).toLocaleString()} Challenge!`;
+      body = body || `${match.creator?.codmIgn || 'A gladiator'} is awaiting an opponent for 1v1 ${match.gameMode || 'Multiplayer'} on ${match.map || 'Shipment'} (₦${parseFloat(match.stakeAmount || 0).toLocaleString()}). Tap to accept!`;
+    } else if (alertType === 'RIVAL_JOINED' || match.status === 'OPPONENT_STAKED_AWAITING_CREATOR') {
       soundType = 'rival_joined';
       title = title || `⚔️ Rival Joined Challenge #${match.challengeCode}!`;
       body = body || `${match.opponent?.codmIgn || 'A rival'} staked ₦${parseFloat(match.stakeAmount || 0).toLocaleString()} in escrow. Match your stake to battle!`;
@@ -3197,6 +3201,11 @@ app.post('/api/flutterwave/verify-bank-transfer', async (req, res) => {
   }
 });
 
+// Get server time
+app.get('/api/server-time', (req, res) => {
+  res.json({ serverTime: Date.now() });
+});
+
 // Nigerian Bank Codes lookup for Paystack
 const PAYSTACK_BANK_CODES: Record<string, string> = {
   'opay': '999992',
@@ -3431,7 +3440,7 @@ app.get('/api/users/:id', async (req, res) => {
 
 // Register user with Email, Password, CODM IGN and Permanent Banking Details
 app.post('/api/auth/register', async (req, res) => {
-  const { email, password, codmIgn, codmUid, phone, bankName, accountNumber, accountName, initialDeposit = 0 } = req.body;
+  const { email, password, codmIgn, codmUid, phone, bankName, accountNumber, accountName, initialDeposit = 0, referralCode } = req.body;
   if (!email || !email.trim()) {
     return res.status(400).json({ error: 'Valid email address is required' });
   }
@@ -3446,6 +3455,16 @@ app.post('/api/auth/register', async (req, res) => {
   }
   if (!bankName || !accountNumber) {
     return res.status(400).json({ error: 'Banking details (Bank Name and Account Number) are required for deposits and withdrawals' });
+  }
+
+  // Validate referral code if provided
+  let referredBy: string | undefined;
+  if (referralCode) {
+    const referrer = await getUserByReferralCodeOrIdentifier(referralCode);
+    if (!referrer) {
+      return res.status(400).json({ error: 'Invalid referral code' });
+    }
+    referredBy = referrer.id;
   }
 
   // Check directly in database if email or IGN already exists
@@ -3469,6 +3488,7 @@ app.post('/api/auth/register', async (req, res) => {
     bankName: bankName.trim(),
     accountNumber: accountNumber.trim(),
     accountName: accountName ? accountName.trim() : `${codmIgn.trim()} (Verified NUBAN)`,
+    referredBy,
     balance: numDeposit,
     escrowBalance: 0,
     totalWinnings: 0,
@@ -4222,6 +4242,10 @@ app.post('/api/matches', async (req, res) => {
 
     await saveMatchToDb(newMatch);
     await client.query('COMMIT');
+    if (globalIo) {
+      globalIo.emit('matchCreated', newMatch);
+      broadcastMatchStateChange(newMatch, 'NEW_MATCH_AWAITING_OPPONENT');
+    }
     res.json(newMatch);
   } catch (err: any) {
     try { await client.query('ROLLBACK'); } catch (_) {}
@@ -4384,25 +4408,9 @@ app.post('/api/matches/:id/creator-stake', async (req, res) => {
     }
     const creatorRow = creatorRes.rows[0];
 
-    if (paymentMethod === 'wallet_balance') {
-      const currentBal = parseFloat(creatorRow.balance || 0);
-      if (currentBal < stakeAmount) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({ error: `Insufficient balance (₦${currentBal.toLocaleString()}).` });
-      }
-      await client.query(`
-        UPDATE users 
-        SET balance = balance - ${escapeSql(stakeAmount)},
-            escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
-        WHERE id = ${escapeSql(creatorId)}
-      `);
-    } else {
-      await client.query(`
-        UPDATE users 
-        SET escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
-        WHERE id = ${escapeSql(creatorId)}
-      `);
-    }
+    // No-op: Host is already debited at match creation
+    console.log('Host already debited at match creation, skipping creator-stake debit.');
+
 
     const creatorData = matchRow.creator_data || {};
     creatorData.staked = true;
@@ -5603,6 +5611,26 @@ async function startServer() {
 
         // Broadcast to all clients in the match room with guaranteed unique id
         io.to(data.matchId).emit('chat', { ...newMsg, matchId: data.matchId });
+
+        // Broadcast real-time push notification alert to other players in this match
+        socket.to(data.matchId).emit('chatNotification', {
+          id: `chat_notif_${newMsg.id}`,
+          matchId: data.matchId,
+          senderId: newMsg.senderId,
+          senderName: newMsg.senderName,
+          text: newMsg.text,
+          timestamp: newMsg.timestamp,
+        });
+
+        // Also emit platform-wide so players who are minimized or outside this lobby get phone notification
+        io.emit('globalChatAlert', {
+          id: `chat_notif_${newMsg.id}`,
+          matchId: data.matchId,
+          senderId: newMsg.senderId,
+          senderName: newMsg.senderName,
+          text: newMsg.text,
+          timestamp: newMsg.timestamp,
+        });
       } catch (err) {
         console.error('Error processing socket chat message:', err);
       }

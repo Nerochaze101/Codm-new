@@ -129,11 +129,22 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   const [timeLeft, setTimeLeft] = useState<string>('');
   const [isExpired, setIsExpired] = useState<boolean>(false);
 
+
+  const [serverTimeOffset, setServerTimeOffset] = useState<number>(0);
+
+  useEffect(() => {
+    fetch('/api/server-time')
+      .then(res => res.json())
+      .then(data => {
+        setServerTimeOffset(data.serverTime - Date.now());
+      });
+  }, []);
+
   useEffect(() => {
     if (!myActiveMatch?.roomGeneratedAt || !myActiveMatch?.matchDurationMinutes) return;
     const targetTime = myActiveMatch.roomGeneratedAt + (myActiveMatch.matchDurationMinutes * 60 * 1000);
     const updateTimer = () => {
-      const diff = targetTime - Date.now();
+      const diff = targetTime - (Date.now() + serverTimeOffset);
       if (diff <= 0) {
         setTimeLeft('00:00');
         setIsExpired(true);
@@ -148,7 +159,8 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
     updateTimer();
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [myActiveMatch]);
+  }, [myActiveMatch, serverTimeOffset]);
+
 
   const [searchQuery, setSearchQuery] = useState('');
   

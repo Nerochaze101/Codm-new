@@ -1,4 +1,5 @@
 // Real-Time Browser & Mobile Phone Notification Service for CODM Stake 1v1
+import { unlockAudio } from './audioUnlockService';
 
 export interface NotificationPayload {
   id?: string;
@@ -103,6 +104,7 @@ export function playAlertAudio(type: 'rival_joined' | 'match_started' | 'dispute
       audioContext = new AudioCtxClass();
     }
     if (audioContext.state === 'suspended') {
+      unlockAudio(audioContext);
       audioContext.resume().catch(() => {});
     }
 

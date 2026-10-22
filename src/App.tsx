@@ -113,16 +113,40 @@ function MainApp() {
         if (prev.some((m) => m.id === newMatch.id)) return prev;
         return [newMatch, ...prev];
       });
+
+      // Send push notification if new live match is awaiting opponent (for other players)
+      if (
+        newMatch.creator?.id !== currentUser.id &&
+        (newMatch.status === 'PENDING_OPPONENT_STAKE' || newMatch.status === 'PENDING')
+      ) {
+        triggerNotificationAlert({
+          id: `notif_new_match_${newMatch.id}_${Date.now()}`,
+          title: `⚔️ New Match Open: ₦${Number(newMatch.stakeAmount || 0).toLocaleString()} Challenge!`,
+          body: `${newMatch.creator?.codmIgn || 'A gladiator'} is awaiting an opponent for 1v1 ${newMatch.gameMode || 'Multiplayer'} on ${newMatch.map || 'Shipment'}. Tap to accept!`,
+          soundType: 'rival_joined',
+          data: { matchId: newMatch.id, url: '/arena' },
+        });
+      }
     });
-    
+
     // Direct match alert event broadcast from server
     socket.on('matchAlert', (alert: any) => {
       if (!alert) return;
+
+      // Filter out self-notifications for match creation (creator already knows they created it)
+      if (
+        (alert.status === 'PENDING_OPPONENT_STAKE' || alert.status === 'PENDING') &&
+        alert.creatorId === currentUser.id
+      ) {
+        return;
+      }
 
       const isRelated =
         currentUser.id === 'guest' ||
         alert.creatorId === currentUser.id ||
         alert.opponentId === currentUser.id ||
+        alert.status === 'PENDING_OPPONENT_STAKE' ||
+        alert.status === 'PENDING' ||
         alert.matchId;
 
       if (!isRelated) return;
@@ -136,6 +160,24 @@ function MainApp() {
           matchId: alert.matchId,
           url: '/arena',
           status: alert.status,
+        },
+      });
+    });
+
+    // Real-time chat notification when players send chat to each other
+    socket.on('globalChatAlert', (chatAlert: any) => {
+      if (!chatAlert || !chatAlert.text) return;
+      if (chatAlert.senderId === currentUser.id) return; // Do not notify sender
+
+      triggerNotificationAlert({
+        id: chatAlert.id || `chat_alert_${Date.now()}`,
+        title: `💬 ${chatAlert.senderName} (Match Chat)`,
+        body: chatAlert.text,
+        soundType: 'default',
+        tag: `codm_chat_${chatAlert.matchId}`,
+        data: {
+          matchId: chatAlert.matchId,
+          url: '/arena',
         },
       });
     });
@@ -222,6 +264,7 @@ function MainApp() {
     return () => {
       socket.off('matchCreated');
       socket.off('matchAlert');
+      socket.off('globalChatAlert');
       socket.off('matchUpdated');
       socket.off('matchJoined');
       socket.off('balanceUpdated');
@@ -457,6 +500,7 @@ function MainApp() {
     accountNumber: string;
     accountName: string;
     initialDeposit: number;
+    referralCode?: string;
   }) => {
     const user = await signUpUser(data);
     localStorage.setItem('codm_current_user_id', user.id);

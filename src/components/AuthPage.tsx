@@ -18,6 +18,7 @@ interface AuthPageProps {
     accountNumber: string;
     accountName: string;
     initialDeposit: number;
+    referralCode?: string;
   }) => Promise<void>;
   onSignIn: (data: {
     identifier: string;
@@ -68,6 +69,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   const [nubanResolved, setNubanResolved] = useState(false);
   const [nubanError, setNubanError] = useState<string | null>(null);
   const [showSignupPassword, setShowSignupPassword] = useState(false);
+  const [signupReferralCode, setSignupReferralCode] = useState('');
 
   // Sign In Form State
   const [signinIdentifier, setSigninIdentifier] = useState('');
@@ -168,6 +170,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
         accountNumber: signupAccountNumber.trim(),
         accountName: signupAccountName || `${signupCodmIgn.trim()} (Verified)`,
         initialDeposit: 0,
+        referralCode: signupReferralCode.trim(),
       });
     } catch (err: any) {
       setError(err.message || 'Account registration failed');
@@ -365,6 +368,21 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                   value={signupCodmIgn}
                   onChange={(e) => setSignupCodmIgn(e.target.value)}
                   placeholder="e.g. Ghost_Sniper99"
+                  className="w-full px-4 py-3 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-sm focus:border-amber-400 focus:outline-none transition-colors"
+                />
+              </div>
+
+              {/* Referral Code */}
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <UserCheck className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Referral Code (Optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={signupReferralCode}
+                  onChange={(e) => setSignupReferralCode(e.target.value)}
+                  placeholder="e.g. FRIEND123"
                   className="w-full px-4 py-3 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-sm focus:border-amber-400 focus:outline-none transition-colors"
                 />
               </div>

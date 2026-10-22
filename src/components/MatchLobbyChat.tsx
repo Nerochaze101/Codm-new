@@ -5,6 +5,8 @@ import {
   Check, CheckCheck, Radio, Sparkles, RefreshCw, AlertCircle
 } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
+import { unlockAudio, isAudioUnlocked } from '../services/audioUnlockService';
+import { showBrowserNotification } from '../services/notificationService';
 
 interface MatchLobbyChatProps {
   matchId: string;
@@ -166,29 +168,6 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
         remoteAudioRef.current.srcObject = dest.stream;
         remoteAudioRef.current.play().catch(() => {});
       }
-
-      // 4. Register MediaSession for lock-screen persistence and VoIP keepalive
-      if ('mediaSession' in navigator) {
-        try {
-          navigator.mediaSession.metadata = new MediaMetadata({
-            title: 'CODM 1v1 Voice Comms (Live)',
-            artist: 'CODM Stake Arena',
-            album: `1v1 Match vs ${opponentName}`,
-            artwork: [
-              { src: '/18012397-6DAC-458A-9230-E51DC47747A9.png', sizes: '512x512', type: 'image/png' },
-            ],
-          });
-          navigator.mediaSession.playbackState = 'playing';
-          navigator.mediaSession.setActionHandler('play', () => {
-            playbackCtxRef.current?.resume().catch(() => {});
-            remoteAudioRef.current?.play().catch(() => {});
-            if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-          });
-          navigator.mediaSession.setActionHandler('pause', () => {});
-        } catch (msErr) {
-          console.warn('MediaSession setup:', msErr);
-        }
-      }
     }
     if (playbackCtxRef.current.state === 'suspended') {
       playbackCtxRef.current.resume().catch(() => {});
@@ -197,7 +176,29 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       remoteAudioRef.current.play().catch(() => {});
     }
     return playbackCtxRef.current;
-  }, [opponentVolume, opponentName]);
+  }, [opponentVolume]);
+
+  // Mobile Safari User Gesture Audio Unlock
+  // Forces Web Audio context & HTML5 audio pipeline initialization on first interaction
+  useEffect(() => {
+    const handleGestureUnlock = async () => {
+      await unlockAudio(playbackCtxRef.current);
+      ensurePlaybackContext();
+    };
+
+    const gestureEvents = ['touchstart', 'touchend', 'click', 'keydown'];
+    gestureEvents.forEach((ev) => {
+      window.addEventListener(ev, handleGestureUnlock, { capture: true, passive: true, once: true });
+      document.addEventListener(ev, handleGestureUnlock, { capture: true, passive: true, once: true });
+    });
+
+    return () => {
+      gestureEvents.forEach((ev) => {
+        window.removeEventListener(ev, handleGestureUnlock, { capture: true } as EventListenerOptions);
+        document.removeEventListener(ev, handleGestureUnlock, { capture: true } as EventListenerOptions);
+      });
+    };
+  }, [ensurePlaybackContext]);
 
   // Play synthesized pleasant pop tone on message receive/send
   const playPopTone = useCallback(() => {
@@ -221,12 +222,13 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   }, [ensurePlaybackContext]);
 
   // Test speaker output with a quick melodic chime
-  const handleTestSpeaker = () => {
+  const handleTestSpeaker = async () => {
     try {
       setTestToneActive(true);
+      await unlockAudio(playbackCtxRef.current);
       const ctx = ensurePlaybackContext();
-      ctx.resume().then(() => {
-        const now = ctx.currentTime;
+      await ctx.resume();
+      const now = ctx.currentTime;
         const freqs = [523.25, 659.25, 783.99]; // C5, E5, G5
         freqs.forEach((freq, idx) => {
           const osc = ctx.createOscillator();
@@ -238,10 +240,9 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
           osc.connect(gain);
           gain.connect(ctx.destination);
           osc.start(now + idx * 0.12);
-          osc.stop(now + idx * 0.12 + 0.28);
-        });
-        setTimeout(() => setTestToneActive(false), 600);
+        osc.stop(now + idx * 0.12 + 0.28);
       });
+      setTimeout(() => setTestToneActive(false), 600);
     } catch (err: unknown) {
       setAudioError(err instanceof Error ? err.message : 'Audio test failed');
       setTestToneActive(false);
@@ -330,6 +331,22 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
         if (isDuplicateContent) {
           return prev;
         }
+
+        // Trigger phone & lock-screen push notification when opponent sends a chat message
+        if (newMsg.senderId !== currentUser.id && newMsg.senderId !== 'SYSTEM') {
+          showBrowserNotification({
+            id: `chat_push_${newMsg.id}`,
+            title: `💬 ${newMsg.senderName || opponentName} (Match Chat)`,
+            body: newMsg.text,
+            soundType: 'default',
+            tag: `codm_chat_${matchId}`,
+            data: {
+              matchId,
+              url: '/arena',
+            },
+          });
+        }
+
         playPopTone();
         return [...prev, newMsg];
       });
@@ -411,6 +428,9 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   const startAudio = async () => {
     setAudioError(null);
     try {
+      // 0. Force unlock Web Audio context inside this user gesture (iOS Safari requirement)
+      await unlockAudio(playbackCtxRef.current);
+
       // 1. Request screen wake lock to prevent mobile device sleep during active match
       if ('wakeLock' in navigator && !wakeLockRef.current) {
         try {
@@ -576,6 +596,88 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
     });
   };
 
+  // Media Session API Integration
+  // Manages lock-screen, control center, and Bluetooth headset playback controls & metadata
+  // Ensures iOS Safari mediaserverd and Android AudioFlinger recognize the match audio stream as active media even in the background
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('mediaSession' in navigator)) return;
+
+    try {
+      const statusText = !isMicEnabled
+        ? 'Listening'
+        : isMicMuted
+        ? 'Mic Muted'
+        : 'Live';
+
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: `CODM 1v1 Comms (${statusText})`,
+        artist: `1v1 Match vs ${opponentName}`,
+        album: 'CODM Stake Arena · Refereed Room',
+        artwork: [
+          { src: '/18012397-6DAC-458A-9230-E51DC47747A9.png', sizes: '96x96', type: 'image/png' },
+          { src: '/18012397-6DAC-458A-9230-E51DC47747A9.png', sizes: '128x128', type: 'image/png' },
+          { src: '/18012397-6DAC-458A-9230-E51DC47747A9.png', sizes: '192x192', type: 'image/png' },
+          { src: '/18012397-6DAC-458A-9230-E51DC47747A9.png', sizes: '256x256', type: 'image/png' },
+          { src: '/18012397-6DAC-458A-9230-E51DC47747A9.png', sizes: '512x512', type: 'image/png' },
+        ],
+      });
+
+      // Maintain 'playing' state so mobile browsers treat audio as active media
+      navigator.mediaSession.playbackState = 'playing';
+
+      // Lock screen Play: resume AudioContext and ensure media playback
+      navigator.mediaSession.setActionHandler('play', async () => {
+        await unlockAudio(playbackCtxRef.current);
+        if (playbackCtxRef.current?.state === 'suspended') {
+          await playbackCtxRef.current.resume().catch(() => {});
+        }
+        if (remoteAudioRef.current && remoteAudioRef.current.paused && remoteAudioRef.current.srcObject) {
+          await remoteAudioRef.current.play().catch(() => {});
+        }
+        if (isMicEnabled && isMicMuted) {
+          toggleMicMute();
+        }
+        navigator.mediaSession.playbackState = 'playing';
+      });
+
+      // Lock screen Pause: toggle mic mute without dropping opponent incoming audio
+      navigator.mediaSession.setActionHandler('pause', () => {
+        if (isMicEnabled && !isMicMuted) {
+          toggleMicMute();
+        }
+      });
+
+      // Lock screen Stop: leaves voice room or pauses comms
+      navigator.mediaSession.setActionHandler('stop', () => {
+        if (isMicEnabled) {
+          stopAudio();
+        }
+      });
+
+      // Headset & lock screen microphone toggle action (AirPods stem click, Bluetooth headset button)
+      try {
+        navigator.mediaSession.setActionHandler('togglemicrophone' as any, () => {
+          if (isMicEnabled) {
+            toggleMicMute();
+          } else {
+            startAudio();
+          }
+        });
+      } catch {}
+
+      // VoIP Call hangup action
+      try {
+        navigator.mediaSession.setActionHandler('hangup' as any, () => {
+          if (isMicEnabled) {
+            stopAudio();
+          }
+        });
+      } catch {}
+    } catch (msErr) {
+      console.warn('[MediaSession] Configuration error:', msErr);
+    }
+  }, [isMicEnabled, isMicMuted, opponentName]);
+
   // Send in-match text message with client-side deduplication lock
   const handleSendMessage = () => {
     const text = inputText.trim();
@@ -630,7 +732,17 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-[520px] bg-[#0c1317] rounded-3xl border border-neutral-800 shadow-2xl overflow-hidden font-sans select-none">
+    <div
+      onClick={() => {
+        unlockAudio(playbackCtxRef.current);
+        ensurePlaybackContext();
+      }}
+      onTouchStart={() => {
+        unlockAudio(playbackCtxRef.current);
+        ensurePlaybackContext();
+      }}
+      className="flex flex-col h-[520px] bg-[#0c1317] rounded-3xl border border-neutral-800 shadow-2xl overflow-hidden font-sans select-none"
+    >
       {/* Hidden silent loop audio to keep mobile background execution active */}
       <audio
         ref={silentAudioRef}
