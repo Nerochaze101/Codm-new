@@ -280,6 +280,31 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
             />
           </div>
 
+          {/* Match Expiration Duration Selector */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-amber-400" />
+              <span>Match Expiration Duration</span>
+            </label>
+            <div className="grid grid-cols-5 gap-2">
+              {[10, 15, 30, 45, 60].map((mins) => (
+                <button
+                  key={mins}
+                  type="button"
+                  onClick={() => setDurationInput(mins)}
+                  className={`py-2 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                    durationInput === mins
+                      ? 'bg-amber-400 text-neutral-950 border-amber-400 shadow-md scale-105'
+                      : 'bg-neutral-950 text-neutral-300 border-neutral-800 hover:border-neutral-700'
+                  }`}
+                >
+                  {mins}m
+                </button>
+              ))}
+            </div>
+            <p className="text-[10px] text-neutral-400">Match auto-expires if results are not submitted within this duration.</p>
+          </div>
+
           {/* Stake Amount Selector */}
           <div>
             <div className="flex items-center justify-between mb-2">

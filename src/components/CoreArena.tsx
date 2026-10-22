@@ -85,6 +85,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   const [showAbandonModal, setShowAbandonModal] = useState(false);
   const [abandonError, setAbandonError] = useState<string | null>(null);
   const [showNotificationPrompt, setShowNotificationPrompt] = useState(true);
+  const [activeMatchSubTab, setActiveMatchSubTab] = useState<'game' | 'chat'>('game');
 
   // Staking Modal state
   const [stakeTargetMatch, setStakeTargetMatch] = useState<Match | null>(null);
@@ -153,9 +154,9 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   }, [myActiveMatch?.status]);
   const [cancellingMatchId, setCancellingMatchId] = useState<string | null>(null);
 
-  // Public open challenges created by others that currentUser can join
+  // Public open challenges in lobby
   const openChallenges = matches.filter(
-    (m) => m.status === 'PENDING_OPPONENT_STAKE' && m.isPublic !== false && m.creator.id !== currentUser.id
+    (m) => m.status === 'PENDING_OPPONENT_STAKE' && m.isPublic !== false
   );
 
   // My hosted bets waiting for opponent
@@ -394,8 +395,63 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
             </div>
           </div>
 
-          {/* STEP 1: Waiting for opponent to accept & stake */}
-          {myActiveMatch.status === 'PENDING_OPPONENT_STAKE' && (
+          {/* Active Match Sub-Tabs: Game Arena vs Match Chat */}
+          <div className="relative z-10 flex rounded-xl bg-neutral-950 p-1 border border-neutral-800 my-4">
+            <button
+              type="button"
+              onClick={() => setActiveMatchSubTab('game')}
+              className={`flex-1 py-2.5 text-xs font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                activeMatchSubTab === 'game'
+                  ? 'bg-amber-400 text-neutral-950 shadow-md'
+                  : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              <Swords className="w-4 h-4" />
+              <span>🎮 Game Arena & Match Room</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveMatchSubTab('chat')}
+              className={`flex-1 py-2.5 text-xs font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer flex items-center justify-center gap-2 relative ${
+                activeMatchSubTab === 'chat'
+                  ? 'bg-amber-400 text-neutral-950 shadow-md'
+                  : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              <MessageCircle className="w-4 h-4" />
+              <span>💬 Match Chat & Voice Comms</span>
+              {myActiveMatch.chatMessages && myActiveMatch.chatMessages.length > 0 && (
+                <span className="w-5 h-5 rounded-full bg-emerald-500 text-neutral-950 text-[10px] font-black flex items-center justify-center">
+                  {myActiveMatch.chatMessages.length}
+                </span>
+              )}
+            </button>
+          </div>
+
+          {activeMatchSubTab === 'chat' ? (
+            <div className="space-y-4 pt-2">
+              <div className="p-4 rounded-2xl bg-neutral-900 border border-neutral-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="text-xs font-black uppercase tracking-wider text-white font-heading">
+                      Match Lobby Voice & Tactical Chat
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-neutral-400 font-mono">
+                    🔒 Live Comms · Auto-Purged on Settlement
+                  </span>
+                </div>
+                <MatchLobbyChat
+                  matchId={myActiveMatch.id}
+                  currentUser={currentUser}
+                  opponentName={isCreatorOfActive ? (myActiveMatch.opponent?.codmIgn || 'Opponent') : myActiveMatch.creator.codmIgn}
+                  initialMessages={myActiveMatch.chatMessages || []}
+                  isSettled={['SETTLED', 'ABANDONED', 'ABANDONED_AND_SETTLED', 'CANCELLED'].includes(myActiveMatch.status)}
+                />
+              </div>
+            </div>
+          ) : (
             <div className="relative z-10 space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs">
                 <div className="flex items-center gap-2 text-amber-400 font-bold">
@@ -969,12 +1025,22 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                 </div>
               )}
 
-              <button
-                onClick={() => handleReturnToLobby(myActiveMatch.id)}
-                className="px-5 py-2.5 bg-neutral-800 text-neutral-200 hover:text-white font-bold rounded-xl text-xs hover:bg-neutral-700 transition-colors cursor-pointer uppercase"
-              >
-                Return to Battle Lobby
-              </button>
+              <div className="flex justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => handleReturnToLobby(myActiveMatch.id)}
+                  className="px-5 py-2.5 bg-neutral-800 text-neutral-200 hover:text-white font-bold rounded-xl text-xs hover:bg-neutral-700 transition-colors cursor-pointer uppercase"
+                >
+                  Return to Battle Lobby
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDismissMatch(myActiveMatch.id)}
+                  className="px-5 py-2.5 bg-neutral-900 border border-neutral-700 text-neutral-300 font-bold rounded-xl text-xs hover:bg-neutral-800 transition-colors cursor-pointer uppercase"
+                >
+                  Dismiss / Clear Card
+                </button>
+              </div>
             </div>
           )}
 
@@ -1021,28 +1087,6 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
               </div>
             </div>
           )}
-
-          {/* REAL-TIME MATCH LOBBY CHAT & LIVE AUDIO COMMS */}
-          <div className="relative z-10 pt-4 border-t border-neutral-800/80 space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-                <span className="text-xs font-black uppercase tracking-wider text-white font-heading">
-                  Match Lobby Voice & Tactical Chat
-                </span>
-              </div>
-              <span className="text-[10px] text-neutral-400 font-mono">
-                🔒 Live Comms · Auto-Purged on Settlement
-              </span>
-            </div>
-            <MatchLobbyChat
-              matchId={myActiveMatch.id}
-              currentUser={currentUser}
-              opponentName={isCreatorOfActive ? (myActiveMatch.opponent?.codmIgn || 'Opponent') : myActiveMatch.creator.codmIgn}
-              initialMessages={myActiveMatch.chatMessages || []}
-              isSettled={['SETTLED', 'ABANDONED', 'ABANDONED_AND_SETTLED', 'CANCELLED'].includes(myActiveMatch.status)}
-            />
-          </div>
         </div>
         ) : (
           <div className="p-12 rounded-3xl bg-neutral-900 border border-neutral-800 text-center space-y-4">

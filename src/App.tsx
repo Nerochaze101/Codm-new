@@ -552,6 +552,7 @@ function MainApp() {
 
   const handleNavigate = (tab: string) => {
     if (tab === 'landing') navigate('/');
+    else if (tab === 'admin') navigate('/msksksnuwje');
     else navigate(`/${tab}`);
   };
 
