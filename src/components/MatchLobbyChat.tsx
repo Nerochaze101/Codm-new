@@ -339,7 +339,10 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
         await audioCtx.audioWorklet.addModule('/audio-processor.js');
         const workletNode = new AudioWorkletNode(audioCtx, 'audio-processor');
         source.connect(workletNode);
-        workletNode.connect(audioCtx.destination);
+        const muteGain = audioCtx.createGain();
+        muteGain.gain.value = 0;
+        workletNode.connect(muteGain);
+        muteGain.connect(audioCtx.destination);
 
         workletNode.port.onmessage = (e) => {
           if (!socketRef.current || isMicMuted) return;
@@ -375,7 +378,10 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       if (!workletSuccess) {
         const processor = audioCtx.createScriptProcessor(2048, 1, 1);
         source.connect(processor);
-        processor.connect(audioCtx.destination);
+        const muteGain = audioCtx.createGain();
+        muteGain.gain.value = 0;
+        processor.connect(muteGain);
+        muteGain.connect(audioCtx.destination);
 
         processor.onaudioprocess = (e) => {
           if (!socketRef.current || isMicMuted) return;

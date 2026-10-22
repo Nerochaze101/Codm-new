@@ -106,16 +106,14 @@ export const Navbar: React.FC<NavbarProps> = ({
     },
   ];
 
-  if (currentUser.role === 'admin') {
-    navTabs.push({
-      id: 'admin',
-      label: 'Admin Portal',
-      subtitle: 'Platform Fees & Gladiators',
-      icon: ShieldCheck,
-      badge: 'ADMIN',
-      badgeColor: 'bg-rose-500/20 text-rose-400 border-rose-500/40',
-    });
-  }
+  navTabs.push({
+    id: 'admin',
+    label: 'Admin Portal',
+    subtitle: 'Platform Fees & Gladiators',
+    icon: ShieldCheck,
+    badge: 'ADMIN',
+    badgeColor: 'bg-rose-500/20 text-rose-400 border-rose-500/40',
+  });
 
   const handleSelectTab = (tabId: string) => {
     playTabSound();
