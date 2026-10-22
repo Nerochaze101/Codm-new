@@ -11,13 +11,13 @@
   "theme_color": "#f59e0b",
   "icons": [
     {
-      "src": "/public/18012397-6DAC-458A-9230-E51DC47747A9.png",
+      "src": "/18012397-6DAC-458A-9230-E51DC47747A9.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/public/18012397-6DAC-458A-9230-E51DC47747A9.png",
+      "src": "/18012397-6DAC-458A-9230-E51DC47747A9.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"

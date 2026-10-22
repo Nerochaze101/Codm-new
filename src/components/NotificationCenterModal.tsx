@@ -1,9 +1,17 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   X, Bell, BellRing, BellOff, Swords, Zap, AlertTriangle,
-  Trophy, Shield, Trash2, Check, ExternalLink, Sparkles
+  Trophy, Shield, Trash2, Check, ExternalLink, Sparkles, Smartphone
 } from 'lucide-react';
-import { NotificationPayload, requestNotificationPermission, getNotificationPermission, showBrowserNotification } from '../services/notificationService';
+import {
+  NotificationPayload,
+  requestNotificationPermission,
+  getNotificationPermission,
+  showBrowserNotification,
+  isIOS,
+  isStandalone,
+} from '../services/notificationService';
+import { IOSNotificationGuideModal } from './IOSNotificationGuideModal';
 
 interface NotificationCenterModalProps {
   isOpen: boolean;
@@ -20,11 +28,19 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
   onClearNotifications,
   onNavigateToMatch,
 }) => {
+  const [showIOSGuide, setShowIOSGuide] = useState(false);
+
   if (!isOpen) return null;
 
   const permission = getNotificationPermission();
+  const onIOS = isIOS();
+  const inStandalone = isStandalone();
 
   const handleRequestPermission = async () => {
+    if (onIOS && !inStandalone) {
+      setShowIOSGuide(true);
+      return;
+    }
     await requestNotificationPermission();
   };
 
@@ -103,6 +119,8 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
                 <p className="text-[11px] text-neutral-400 mt-0.5">
                   {permission === 'granted'
                     ? 'Lock screen and sound alerts active for match events.'
+                    : onIOS && !inStandalone
+                    ? 'iPhone requires adding app to Home Screen for lock-screen alerts.'
                     : 'Enable to get notified on lock screen when rivals join or match starts.'}
                 </p>
               </div>
@@ -112,9 +130,10 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
               {permission !== 'granted' ? (
                 <button
                   onClick={handleRequestPermission}
-                  className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase rounded-xl transition-all shadow cursor-pointer active:scale-95"
+                  className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase rounded-xl transition-all shadow cursor-pointer active:scale-95 flex items-center gap-1.5"
                 >
-                  Enable Alerts
+                  {onIOS && !inStandalone && <Smartphone size={13} />}
+                  <span>{onIOS && !inStandalone ? 'iPhone: Setup Alerts' : 'Enable Alerts'}</span>
                 </button>
               ) : (
                 <button
@@ -188,6 +207,9 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
           </div>
         )}
       </div>
+
+      {/* iPhone PWA Installation Guide Modal */}
+      <IOSNotificationGuideModal isOpen={showIOSGuide} onClose={() => setShowIOSGuide(false)} />
     </div>
   );
 };

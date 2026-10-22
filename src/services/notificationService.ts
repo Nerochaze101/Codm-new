@@ -16,11 +16,27 @@ export interface NotificationPayload {
   };
 }
 
-const NOTIFICATION_ICON = '/public/18012397-6DAC-458A-9230-E51DC47747A9.png';
+const NOTIFICATION_ICON = '/18012397-6DAC-458A-9230-E51DC47747A9.png';
 
 // Service Worker Registration reference
 let swRegistration: ServiceWorkerRegistration | null = null;
 let audioContext: AudioContext | null = null;
+
+// Detect iOS devices (iPhone, iPad, iPod)
+export function isIOS(): boolean {
+  if (typeof window === 'undefined') return false;
+  const ua = window.navigator.userAgent.toLowerCase();
+  return /iphone|ipad|ipod/.test(ua) || (window.navigator.platform === 'MacIntel' && window.navigator.maxTouchPoints > 1);
+}
+
+// Detect if app is currently installed/running in standalone PWA mode
+export function isStandalone(): boolean {
+  if (typeof window === 'undefined') return false;
+  return (
+    (window.navigator as unknown as { standalone?: boolean }).standalone === true ||
+    window.matchMedia('(display-mode: standalone)').matches
+  );
+}
 
 // Initialize Notification Service Worker
 export async function initNotificationService(): Promise<void> {
@@ -38,7 +54,17 @@ export async function initNotificationService(): Promise<void> {
 
 // Request Notification Permission (supports both promise and callback formats)
 export async function requestNotificationPermission(): Promise<NotificationPermission> {
-  if (typeof window === 'undefined' || !('Notification' in window)) {
+  if (typeof window === 'undefined') {
+    return 'denied';
+  }
+
+  // If on iPhone and not installed as Home Screen PWA, trigger the interactive iOS guide
+  if (isIOS() && (!isStandalone() || !('Notification' in window))) {
+    window.dispatchEvent(new CustomEvent('codm_show_ios_pwa_guide'));
+    return 'default';
+  }
+
+  if (!('Notification' in window)) {
     return 'denied';
   }
 

@@ -38,3 +38,27 @@ self.addEventListener('message', (event) => {
     self.registration.showNotification(title, options);
   }
 });
+
+// Native Push Event handler for lock-screen push notifications
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = { title: 'CODM Stake 1v1', body: event.data ? event.data.text() : 'Match state updated!' };
+  }
+
+  const title = data.title || '⚔️ CODM Match Alert';
+  const options = {
+    body: data.body || 'Your challenge has an update.',
+    icon: data.icon || '/18012397-6DAC-458A-9230-E51DC47747A9.png',
+    badge: data.badge || '/18012397-6DAC-458A-9230-E51DC47747A9.png',
+    vibrate: [200, 100, 200, 100, 250],
+    data: data.data || { url: '/arena' },
+    tag: data.tag || `codm_alert_${Date.now()}`,
+    requireInteraction: true,
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
