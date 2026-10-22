@@ -27,6 +27,7 @@ export function isAudioUnlocked(): boolean {
 
 // Unlock Web Audio context and HTML5 media playback on mobile Safari
 export async function unlockAudio(targetCtx?: AudioContext | null): Promise<boolean> {
+  console.log('unlockAudio called');
   if (typeof window === 'undefined') return false;
 
   if (isUnlocked && (!targetCtx || targetCtx.state === 'running')) {

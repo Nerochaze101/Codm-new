@@ -426,6 +426,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
 
   // Start microphone capture using AudioWorklet (with fallback to ScriptProcessor)
   const startAudio = async () => {
+    console.log('startAudio clicked');
     setAudioError(null);
     try {
       // 0. Force unlock Web Audio context inside this user gesture (iOS Safari requirement)
@@ -449,6 +450,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
         await pCtx.resume();
       }
 
+      console.log('Attempting to get microphone access...');
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -456,16 +458,21 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
           autoGainControl: true,
         },
       });
+      console.log('Microphone access granted. Tracks:', stream.getAudioTracks().length);
       localStreamRef.current = stream;
 
       const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       const audioCtx = new AudioCtxClass();
+      console.log('AudioContext created. State:', audioCtx.state);
       audioContextRef.current = audioCtx;
       if (audioCtx.state === 'suspended') {
+        console.log('Resuming AudioContext...');
         await audioCtx.resume();
       }
 
+      console.log('Creating MediaStreamSource...');
       const source = audioCtx.createMediaStreamSource(stream);
+      console.log('MediaStreamSource created.');
 
       // Attempt AudioWorklet for dedicated background thread processing
       let workletSuccess = false;
@@ -544,6 +551,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
         matchId,
       });
     } catch (err: unknown) {
+      console.error('startAudio failed:', err);
       const msg = err instanceof Error ? err.message : 'Microphone access denied';
       setAudioError(msg);
       setIsMicEnabled(false);
