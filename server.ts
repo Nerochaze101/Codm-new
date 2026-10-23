@@ -29,26 +29,7 @@ let globalIo: any = null;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Dev server must run on port 3000. In Cloud Run environments, PORT=8080 is used by nginx ingress,
-// which proxies incoming traffic to port 3000.
-function resolveServerPort(): number {
-  const portArgIdx = process.argv.indexOf('--port');
-  if (portArgIdx !== -1 && process.argv[portArgIdx + 1]) {
-    const parsed = parseInt(process.argv[portArgIdx + 1], 10);
-    if (!isNaN(parsed) && parsed > 0) return parsed;
-  }
-  if (process.env.APP_PORT) {
-    const parsed = parseInt(process.env.APP_PORT, 10);
-    if (!isNaN(parsed) && parsed > 0) return parsed;
-  }
-  if (process.env.PORT && process.env.PORT !== '8080') {
-    const parsed = parseInt(process.env.PORT, 10);
-    if (!isNaN(parsed) && parsed > 0) return parsed;
-  }
-  return 3000;
-}
-
-const PORT = resolveServerPort();
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 // Initialize Google GenAI if key available
 let ai: GoogleGenAI | null = null;

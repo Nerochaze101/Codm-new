@@ -179,51 +179,41 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
             </div>
           )}
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div className="lg:col-span-2 space-y-8">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="relative overflow-hidden rounded-3xl p-6 border-2 border-amber-500/50 hover:border-amber-400 bg-neutral-900 shadow-xl transition-all flex flex-col justify-between min-h-[220px] group">
-                   <div className="absolute inset-0 z-0 opacity-20"><img src={CODM_IMAGES.shipment1v1} className="w-full h-full object-cover" alt="" /></div>
-                   <div className="relative z-10">
-                     <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center mb-4"><Crosshair className="text-amber-400" /></div>
-                     <h3 className="text-xl font-black text-white font-heading uppercase">SOLO 1V1 DUEL</h3>
-                     <p className="text-xs text-neutral-400 mt-1">Snipers only or Gunfight on Shipment.</p>
-                   </div>
-                   <button onClick={() => onOpenCreateBet?.('1v1 Sniper Only', 1000)} className="relative z-10 mt-4 py-2.5 bg-amber-400 text-neutral-950 font-black rounded-xl text-xs uppercase">Generate Link</button>
-                </div>
-                <div className="relative overflow-hidden rounded-3xl p-6 border-2 border-emerald-500/50 hover:border-emerald-400 bg-neutral-900 shadow-xl transition-all flex flex-col justify-between min-h-[220px] group">
-                   <div className="absolute inset-0 z-0 opacity-20"><img src={CODM_IMAGES.squadTactical} className="w-full h-full object-cover" alt="" /></div>
-                   <div className="relative z-10">
-                     <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center mb-4"><Users className="text-emerald-400" /></div>
-                     <h3 className="text-xl font-black text-white font-heading uppercase">SQUAD BATTLE</h3>
-                     <p className="text-xs text-neutral-400 mt-1">Tactical Search & Destroy or Hardpoint.</p>
-                   </div>
-                   <button onClick={() => onOpenCreateBet?.('Search & Destroy (S&D)', 1000)} className="relative z-10 mt-4 py-2.5 bg-emerald-500 text-neutral-950 font-black rounded-xl text-xs uppercase">Generate Link</button>
-                </div>
+          <div className="space-y-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="relative overflow-hidden rounded-3xl p-6 border-2 border-amber-500/50 hover:border-amber-400 bg-neutral-900 shadow-xl transition-all flex flex-col justify-between min-h-[220px] group">
+                 <div className="absolute inset-0 z-0 opacity-20"><img src={CODM_IMAGES.shipment1v1} className="w-full h-full object-cover" alt="" /></div>
+                 <div className="relative z-10">
+                   <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center mb-4"><Crosshair className="text-amber-400" /></div>
+                   <h3 className="text-xl font-black text-white font-heading uppercase">SOLO 1V1 DUEL</h3>
+                   <p className="text-xs text-neutral-400 mt-1">Snipers only or Gunfight on Shipment.</p>
+                 </div>
+                 <button onClick={() => onOpenCreateBet?.('1v1 Sniper Only', 1000)} className="relative z-10 mt-4 py-2.5 bg-amber-400 text-neutral-950 font-black rounded-xl text-xs uppercase cursor-pointer hover:bg-amber-300">Generate Link</button>
               </div>
-
-              <div className="space-y-4 pt-4 border-t border-neutral-800">
-                <div className="flex items-center justify-between"><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-neutral-400"><Flame size={16} className="text-amber-400" /><span>Lobby Challenges</span></div><input type="text" placeholder="Search #Code" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="bg-neutral-950 border border-neutral-800 rounded-lg py-1.5 px-3 text-xs text-white" /></div>
-                {filteredChallenges.length > 0 ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {filteredChallenges.map(m => (
-                      <div key={m.id} className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 hover:border-amber-400/40 transition-all flex flex-col justify-between shadow-lg">
-                        <div className="flex items-center justify-between mb-3"><span className="text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded border border-amber-500/20">#{m.challengeCode}</span><span className="text-xs font-black text-emerald-400">₦{m.stakeAmount.toLocaleString()}</span></div>
-                        <div className="flex items-center gap-2.5"><img src={m.creator.avatar} alt="" className="w-8 h-8 rounded-lg bg-neutral-800" /><div className="min-w-0 flex-1"><div className="text-xs font-bold text-white truncate">{m.creator.codmIgn}</div><div className="text-[10px] text-neutral-400 truncate">{m.gameMode} · {m.map}</div></div></div>
-                        <button onClick={() => { setStakeTargetMatch(m); setStakeRole('opponent'); setIsStakeModalOpen(true); }} className="w-full mt-3 py-2 bg-neutral-800 hover:bg-neutral-700 text-amber-400 font-black rounded-lg text-[10px] uppercase">Accept Duel</button>
-                      </div>
-                    ))}
-                  </div>
-                ) : <div className="p-10 rounded-2xl bg-neutral-950 border border-dashed border-neutral-800 text-center text-neutral-500 text-xs italic">No open challenges.</div>}
+              <div className="relative overflow-hidden rounded-3xl p-6 border-2 border-emerald-500/50 hover:border-emerald-400 bg-neutral-900 shadow-xl transition-all flex flex-col justify-between min-h-[220px] group">
+                 <div className="absolute inset-0 z-0 opacity-20"><img src={CODM_IMAGES.squadTactical} className="w-full h-full object-cover" alt="" /></div>
+                 <div className="relative z-10">
+                   <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center mb-4"><Users className="text-emerald-400" /></div>
+                   <h3 className="text-xl font-black text-white font-heading uppercase">SQUAD BATTLE</h3>
+                   <p className="text-xs text-neutral-400 mt-1">Tactical Search & Destroy or Hardpoint.</p>
+                 </div>
+                 <button onClick={() => onOpenCreateBet?.('Search & Destroy (S&D)', 1000)} className="relative z-10 mt-4 py-2.5 bg-emerald-500 text-neutral-950 font-black rounded-xl text-xs uppercase cursor-pointer hover:bg-emerald-400">Generate Link</button>
               </div>
             </div>
 
-            <div className="space-y-4">
-              <div className="p-4 rounded-3xl bg-neutral-900 border border-neutral-800 space-y-3 sticky top-6">
-                <div className="flex items-center gap-2 pb-2"><MessageCircle size={18} className="text-emerald-400" /><span className="text-xs font-black uppercase tracking-widest text-white">World Chat</span></div>
-                <div className="relative h-[550px] rounded-2xl overflow-hidden shadow-inner border border-white/5"><MatchLobbyChat matchId="lobby_global" currentUser={currentUser} opponentName="World Arena" initialMessages={[]} isSettled={false} /></div>
-                <div className="text-[10px] text-neutral-500 flex gap-2"><Info size={12} className="text-amber-500 shrink-0" /><span>Find opponents or coordinate rules here.</span></div>
-              </div>
+            <div className="space-y-4 pt-4 border-t border-neutral-800">
+              <div className="flex items-center justify-between"><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-neutral-400"><Flame size={16} className="text-amber-400" /><span>Lobby Challenges</span></div><input type="text" placeholder="Search #Code" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="bg-neutral-950 border border-neutral-800 rounded-lg py-1.5 px-3 text-xs text-white" /></div>
+              {filteredChallenges.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {filteredChallenges.map(m => (
+                    <div key={m.id} className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 hover:border-amber-400/40 transition-all flex flex-col justify-between shadow-lg">
+                      <div className="flex items-center justify-between mb-3"><span className="text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded border border-amber-500/20">#{m.challengeCode}</span><span className="text-xs font-black text-emerald-400">₦{m.stakeAmount.toLocaleString()}</span></div>
+                      <div className="flex items-center gap-2.5"><img src={m.creator.avatar} alt="" className="w-8 h-8 rounded-lg bg-neutral-800" /><div className="min-w-0 flex-1"><div className="text-xs font-bold text-white truncate">{m.creator.codmIgn}</div><div className="text-[10px] text-neutral-400 truncate">{m.gameMode} · {m.map}</div></div></div>
+                      <button onClick={() => { setStakeTargetMatch(m); setStakeRole('opponent'); setIsStakeModalOpen(true); }} className="w-full mt-3 py-2 bg-neutral-800 hover:bg-neutral-700 text-amber-400 font-black rounded-lg text-[10px] uppercase cursor-pointer">Accept Duel</button>
+                    </div>
+                  ))}
+                </div>
+              ) : <div className="p-10 rounded-2xl bg-neutral-950 border border-dashed border-neutral-800 text-center text-neutral-500 text-xs italic">No open challenges.</div>}
             </div>
           </div>
         </div>
