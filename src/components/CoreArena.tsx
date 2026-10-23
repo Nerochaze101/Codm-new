@@ -72,8 +72,9 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
     try { return JSON.parse(localStorage.getItem('codm_dismissed_matches') || '[]'); } catch { return []; }
   });
 
-  const myActiveMatch = matches.find(m => (m.creator.id === currentUser.id || m.opponent?.id === currentUser.id) && m.status !== 'CANCELLED' && !dismissedMatchIds.includes(m.id));
-  const [arenaTab, setArenaTab] = useState<'live' | 'active' | 'hosted'>(() => (myActiveMatch && myActiveMatch.status !== 'SETTLED' && myActiveMatch.status !== 'ABANDONED') ? 'active' : 'live');
+  const activeStatuses = ['PENDING_OPPONENT_STAKE', 'READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'];
+  const myActiveMatch = matches.find(m => (m.creator.id === currentUser.id || m.opponent?.id === currentUser.id) && activeStatuses.includes(m.status));
+  const [arenaTab, setArenaTab] = useState<'live' | 'active' | 'hosted'>(() => myActiveMatch ? 'active' : 'live');
 
   useEffect(() => {
     fetch('/api/server-time').then(res => res.json()).then(data => setServerTimeOffset(data.serverTime - Date.now())).catch(() => {});
