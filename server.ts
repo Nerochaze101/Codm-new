@@ -4087,7 +4087,7 @@ app.post('/api/matches', async (req, res) => {
 // Opponent accepts challenge and sends stake into escrow directly in database with strict race-condition locking
 app.post('/api/matches/:id/opponent-stake', async (req, res) => {
   const matchId = req.params.id;
-  const { opponentId, paymentMethod = 'bank_transfer' } = req.body;
+  const { opponentId } = req.body;
 
   const client = await pool.connect();
   try {
@@ -4121,25 +4121,19 @@ app.post('/api/matches/:id/opponent-stake', async (req, res) => {
     }
     const oppRow = oppRes.rows[0];
 
-    if (paymentMethod === 'wallet_balance') {
-      const currentBal = parseFloat(oppRow.balance || 0);
-      if (currentBal < stakeAmount) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({ error: `Insufficient balance (₦${currentBal.toLocaleString()}).` });
-      }
-      await client.query(`
-        UPDATE users 
-        SET balance = balance - ${escapeSql(stakeAmount)},
-            escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
-        WHERE id = ${escapeSql(opponentId)}
-      `);
-    } else {
-      await client.query(`
-        UPDATE users 
-        SET escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
-        WHERE id = ${escapeSql(opponentId)}
-      `);
+    const currentBal = parseFloat(oppRow.balance || 0);
+    if (currentBal < stakeAmount) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: `Insufficient wallet balance (₦${currentBal.toLocaleString()}) to accept this wager. Please fund your wallet first.` });
     }
+
+    // Deduct stake immediately from opponent balance into escrow
+    await client.query(`
+      UPDATE users 
+      SET balance = balance - ${escapeSql(stakeAmount)},
+          escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
+      WHERE id = ${escapeSql(opponentId)}
+    `);
 
     const opponentData = {
       id: oppRow.id,
@@ -4150,99 +4144,6 @@ app.post('/api/matches/:id/opponent-stake', async (req, res) => {
       staked: true,
     };
 
-    const newChatMsg = {
-      id: `msg_${Date.now()}`,
-      senderId: 'SYSTEM',
-      senderName: 'CODM Referee Bot',
-      text: `⚔️ Challenge accepted! ${oppRow.codm_ign} has sent ₦${stakeAmount.toLocaleString()} into escrow. Host ${matchRow.creator_data?.codmIgn || 'Host'}, please send your matching ₦${stakeAmount.toLocaleString()} stake to generate your CODM in-game room number!`,
-      timestamp: Date.now(),
-    };
-
-    const chatMessages = Array.isArray(matchRow.chat_messages) ? matchRow.chat_messages : [];
-    chatMessages.push(newChatMsg);
-
-    await client.query(`
-      UPDATE matches 
-      SET status = 'OPPONENT_STAKED_AWAITING_CREATOR',
-          opponent_id = ${escapeSql(oppRow.id)},
-          opponent_data = ${escapeSql(opponentData)},
-          chat_messages = ${escapeSql(chatMessages)}
-      WHERE id = ${escapeSql(matchId)}
-    `);
-
-    const tx = {
-      id: `tx_${Date.now()}`,
-      type: 'ESCROW_LOCK',
-      amount: stakeAmount,
-      description: `₦${stakeAmount.toLocaleString()} stake locked in escrow for challenge #${matchRow.challenge_code}`,
-      timestamp: Date.now(),
-      matchId: matchRow.id,
-    };
-
-    await client.query(`
-      INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
-      VALUES (${escapeSql(tx.id)}, ${escapeSql(opponentId)}, ${escapeSql(tx.type)}, ${escapeSql(tx.amount)}, ${escapeSql(tx.description)}, ${escapeSql(tx.matchId)}, ${escapeSql(tx.timestamp)})
-      ON CONFLICT (id) DO NOTHING
-    `);
-
-    await client.query('COMMIT');
-    const updatedMatch = await getMatchFromDb(matchId);
-    globalIo?.emit('matchUpdated', updatedMatch);
-    res.json(updatedMatch);
-  } catch (err: any) {
-    await client.query('ROLLBACK');
-    console.error('Opponent stake race condition error:', err);
-    res.status(500).json({ error: err.message || 'Failed to accept challenge' });
-  } finally {
-    client.release();
-  }
-});
-
-// Creator sends matching stake after opponent has accepted
-// Creator sends matching stake after opponent has accepted with atomic locking
-app.post('/api/matches/:id/creator-stake', async (req, res) => {
-  const matchId = req.params.id;
-  const { creatorId, paymentMethod = 'bank_transfer' } = req.body;
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    // Lock match row to prevent double-staking
-    const matchRes = await client.query(`SELECT * FROM matches WHERE id = ${escapeSql(matchId)} FOR UPDATE`);
-    if (matchRes.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Match not found' });
-    }
-
-    const matchRow = matchRes.rows[0];
-    if (matchRow.status !== 'OPPONENT_STAKED_AWAITING_CREATOR') {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'Match is not in waiting for host stake state.' });
-    }
-
-    if (matchRow.creator_id !== creatorId) {
-      await client.query('ROLLBACK');
-      return res.status(403).json({ error: 'Only the match creator can provide the matching host stake.' });
-    }
-
-    const stakeAmount = parseFloat(matchRow.stake_amount);
-
-    // Lock creator user row
-    const creatorRes = await client.query(`SELECT * FROM users WHERE id = ${escapeSql(creatorId)} FOR UPDATE`);
-    if (creatorRes.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'Creator not found' });
-    }
-    const creatorRow = creatorRes.rows[0];
-
-    // No-op: Host is already debited at match creation
-    console.log('Host already debited at match creation, skipping creator-stake debit.');
-
-
-    const creatorData = matchRow.creator_data || {};
-    creatorData.staked = true;
-
     const generatedRoomCode = generateRoomCode(matchRow.map);
     const now = Date.now();
 
@@ -4250,7 +4151,7 @@ app.post('/api/matches/:id/creator-stake', async (req, res) => {
       id: `msg_${now}`,
       senderId: 'SYSTEM',
       senderName: 'CODM Referee Bot',
-      text: `🎉 BOTH STAKES CONFIRMED! Total Pot: ₦${parseFloat(matchRow.pot_amount).toLocaleString()} secured in automated escrow. 🎯 IN-GAME ROOM NUMBER GENERATED: ${generatedRoomCode}. Both players: open CODM > Multiplayer > Private Match > Join #${generatedRoomCode} and battle!`,
+      text: `🎉 MATCH STARTED! ${oppRow.codm_ign} accepted the duel and ₦${stakeAmount.toLocaleString()} stake was locked into escrow. Total Pot: ₦${parseFloat(matchRow.pot_amount).toLocaleString()}. In-game Room Code: #${generatedRoomCode}`,
       timestamp: now,
     };
 
@@ -4262,37 +4163,48 @@ app.post('/api/matches/:id/creator-stake', async (req, res) => {
       SET status = 'READY_TO_PLAY',
           room_code = ${escapeSql(generatedRoomCode)},
           room_generated_at = ${now},
-          creator_data = ${escapeSql(creatorData)},
+          opponent_id = ${escapeSql(oppRow.id)},
+          opponent_data = ${escapeSql(opponentData)},
           chat_messages = ${escapeSql(chatMessages)}
       WHERE id = ${escapeSql(matchId)}
     `);
 
     const tx = {
-      id: `tx_${now}`,
+      id: `tx_${now}_opp`,
       type: 'ESCROW_LOCK',
       amount: stakeAmount,
-      description: `₦${stakeAmount.toLocaleString()} matching stake locked in escrow for challenge #${matchRow.challenge_code}`,
+      description: `₦${stakeAmount.toLocaleString()} stake locked in escrow for challenge #${matchRow.challenge_code}`,
       timestamp: now,
       matchId: matchRow.id,
     };
 
     await client.query(`
       INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
-      VALUES (${escapeSql(tx.id)}, ${escapeSql(creatorId)}, ${escapeSql(tx.type)}, ${escapeSql(tx.amount)}, ${escapeSql(tx.description)}, ${escapeSql(tx.matchId)}, ${escapeSql(tx.timestamp)})
+      VALUES (${escapeSql(tx.id)}, ${escapeSql(opponentId)}, ${escapeSql(tx.type)}, ${escapeSql(tx.amount)}, ${escapeSql(tx.description)}, ${escapeSql(tx.matchId)}, ${escapeSql(tx.timestamp)})
       ON CONFLICT (id) DO NOTHING
     `);
 
     await client.query('COMMIT');
     const updatedMatch = await getMatchFromDb(matchId);
-    globalIo?.emit('matchUpdated', updatedMatch);
+    if (updatedMatch) {
+      broadcastMatchStateChange(updatedMatch, 'MATCH_STARTED');
+    }
     res.json(updatedMatch);
   } catch (err: any) {
     await client.query('ROLLBACK');
-    console.error('Creator stake race condition error:', err);
-    res.status(500).json({ error: err.message || 'Failed to submit matching host stake' });
+    console.error('Opponent stake race condition error:', err);
+    res.status(500).json({ error: err.message || 'Failed to accept challenge' });
   } finally {
     client.release();
   }
+});
+
+// Creator sends matching stake after opponent has accepted (Backward compatibility fallback)
+app.post('/api/matches/:id/creator-stake', async (req, res) => {
+  const matchId = req.params.id;
+  const match = await getMatchFromDb(matchId);
+  if (!match) return res.status(404).json({ error: 'Match not found' });
+  res.json(match);
 });
 
 // Direct Join handler with atomic locking
@@ -4330,9 +4242,16 @@ app.post('/api/matches/:id/join', async (req, res) => {
     }
     const oppRow = oppRes.rows[0];
 
+    const currentBal = parseFloat(oppRow.balance || 0);
+    if (currentBal < stakeAmount) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: `Insufficient wallet balance (₦${currentBal.toLocaleString()}) to accept this wager. Please fund your wallet first.` });
+    }
+
     await client.query(`
       UPDATE users 
-      SET escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
+      SET balance = balance - ${escapeSql(stakeAmount)},
+          escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
       WHERE id = ${escapeSql(opponentId)}
     `);
 
@@ -4345,12 +4264,15 @@ app.post('/api/matches/:id/join', async (req, res) => {
       staked: true,
     };
 
+    const generatedRoomCode = generateRoomCode(matchRow.map);
+    const now = Date.now();
+
     const newChatMsg = {
-      id: `msg_${Date.now()}`,
+      id: `msg_${now}`,
       senderId: 'SYSTEM',
       senderName: 'CODM Referee Bot',
-      text: `⚔️ Challenge accepted! ${oppRow.codm_ign} has sent ₦${stakeAmount.toLocaleString()} into escrow. Host ${matchRow.creator_data?.codmIgn || 'Host'}, send your matching ₦${stakeAmount.toLocaleString()} stake to generate your CODM in-game room number!`,
-      timestamp: Date.now(),
+      text: `🎉 MATCH STARTED! ${oppRow.codm_ign} accepted the duel and ₦${stakeAmount.toLocaleString()} stake was locked into escrow. Total Pot: ₦${parseFloat(matchRow.pot_amount).toLocaleString()}. In-game Room Code: #${generatedRoomCode}`,
+      timestamp: now,
     };
 
     const chatMessages = Array.isArray(matchRow.chat_messages) ? matchRow.chat_messages : [];
@@ -4358,7 +4280,9 @@ app.post('/api/matches/:id/join', async (req, res) => {
 
     await client.query(`
       UPDATE matches 
-      SET status = 'OPPONENT_STAKED_AWAITING_CREATOR',
+      SET status = 'READY_TO_PLAY',
+          room_code = ${escapeSql(generatedRoomCode)},
+          room_generated_at = ${now},
           opponent_id = ${escapeSql(oppRow.id)},
           opponent_data = ${escapeSql(opponentData)},
           chat_messages = ${escapeSql(chatMessages)}
@@ -4366,11 +4290,11 @@ app.post('/api/matches/:id/join', async (req, res) => {
     `);
 
     const tx = {
-      id: `tx_${Date.now()}`,
+      id: `tx_${now}_join`,
       type: 'ESCROW_LOCK',
       amount: stakeAmount,
       description: `₦${stakeAmount.toLocaleString()} stake locked in escrow for challenge #${matchRow.challenge_code}`,
-      timestamp: Date.now(),
+      timestamp: now,
       matchId: matchRow.id,
     };
 
@@ -4382,7 +4306,9 @@ app.post('/api/matches/:id/join', async (req, res) => {
 
     await client.query('COMMIT');
     const updatedMatch = await getMatchFromDb(matchId);
-    globalIo?.emit('matchUpdated', updatedMatch);
+    if (updatedMatch) {
+      broadcastMatchStateChange(updatedMatch, 'MATCH_STARTED');
+    }
     res.json(updatedMatch);
   } catch (err: any) {
     await client.query('ROLLBACK');

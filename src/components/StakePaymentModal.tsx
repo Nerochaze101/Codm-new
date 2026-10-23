@@ -107,12 +107,10 @@ export const StakePaymentModal: React.FC<StakePaymentModalProps> = ({
               </div>
               <div>
                 <h2 className="text-base sm:text-lg font-bold font-heading text-white flex items-center gap-2">
-                  <span>{isOpponent ? 'Accept Challenge & Send Stake' : 'Send Matching Stake to Unlock Room'}</span>
+                  <span>Accept Challenge & Lock ₦{stakeAmount.toLocaleString()} Stake</span>
                 </h2>
                 <p className="text-xs text-neutral-400">
-                  {isOpponent
-                    ? `Send ₦${stakeAmount.toLocaleString()} to lock in escrow & accept duel`
-                    : `Opponent has paid! Send your ₦${stakeAmount.toLocaleString()} to generate in-game room #`}
+                  Host has already staked ₦{stakeAmount.toLocaleString()} upfront. Accept duel to lock your stake and generate room code immediately.
                 </p>
               </div>
             </div>
@@ -144,7 +142,7 @@ export const StakePaymentModal: React.FC<StakePaymentModalProps> = ({
                   <span>{match.gameMode} ({match.map})</span>
                 </div>
                 <div className="text-xs text-neutral-400">
-                  Rival: <strong className="text-white">{isOpponent ? match.creator.codmIgn : match.opponent?.codmIgn || 'Opponent'}</strong>
+                  Rival: <strong className="text-white">{match.creator.codmIgn}</strong>
                 </div>
               </div>
 
@@ -169,18 +167,14 @@ export const StakePaymentModal: React.FC<StakePaymentModalProps> = ({
                 </span>
               </div>
               <div className="grid grid-cols-3 gap-1.5 text-[10px] text-center">
-                <div className={`p-2 rounded-lg border ${
-                  isOpponent ? 'bg-amber-500/10 border-amber-400 text-amber-300 font-bold' : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                }`}>
-                  1. Opponent Stakes {isOpponent ? '(You)' : '✓ Done'}
+                <div className="p-2 rounded-lg border bg-emerald-500/10 border-emerald-500/30 text-emerald-400 font-bold">
+                  1. Host Paid (✓ Done)
                 </div>
-                <div className={`p-2 rounded-lg border ${
-                  !isOpponent ? 'bg-amber-500/10 border-amber-400 text-amber-300 font-bold animate-pulse' : 'bg-neutral-900 border-neutral-800 text-neutral-400'
-                }`}>
-                  2. Host Stakes {!isOpponent ? '(You)' : ''}
+                <div className="p-2 rounded-lg border bg-amber-500/10 border-amber-400 text-amber-300 font-bold animate-pulse">
+                  2. Your Stake (Accept)
                 </div>
                 <div className="p-2 rounded-lg border bg-neutral-900 border-neutral-800 text-neutral-400">
-                  3. Room # Generated
+                  3. Match Starts (Instant)
                 </div>
               </div>
             </div>
@@ -269,9 +263,7 @@ export const StakePaymentModal: React.FC<StakePaymentModalProps> = ({
                 <>
                   <Lock className="w-4 h-4 stroke-[2.5]" />
                   <span>
-                    {isOpponent
-                      ? `Proceed to Checkout (₦${stakeAmount.toLocaleString()})`
-                      : `Send ₦${stakeAmount.toLocaleString()} & Generate Room #`}
+                    Accept & Lock ₦{stakeAmount.toLocaleString()}
                   </span>
                 </>
               )}

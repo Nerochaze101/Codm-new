@@ -238,20 +238,15 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 relative z-10">
               <div className={`lg:col-span-2 space-y-4 ${activeMatchSubTab === 'chat' ? 'hidden lg:block' : 'block'}`}>
                  <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-bold text-amber-400 flex justify-between items-center">
-                    <div className="flex items-center gap-2"><Clock size={16} className="animate-pulse" /><span>{isCreatorOfActive ? 'Host View: Awaiting Opponent' : 'Rival View: Stake & Play'}</span></div>
-                    <span className="text-emerald-400">Payout: ₦{myActiveMatch.winnerPayout.toLocaleString()}</span>
+                    <div className="flex items-center gap-2"><Clock size={16} className="animate-pulse" /><span>{myActiveMatch.roomCode ? `Battle Room Ready (#${myActiveMatch.roomCode})` : 'Awaiting Opponent to Accept'}</span></div>
+                    <span className="text-emerald-400">Winner Payout: ₦{myActiveMatch.winnerPayout.toLocaleString()}</span>
                  </div>
 
-                 <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 space-y-3">
-                   <div className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest">Share Invite Link</div>
-                   <div className="flex gap-2"><input type="text" readOnly value={`${window.location.origin}/?join=${myActiveMatch.id}`} className="flex-1 bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-xs text-neutral-400" /><button onClick={() => copyInviteLink(myActiveMatch.id)} className="px-4 py-2 bg-amber-400 text-neutral-950 font-black text-[10px] rounded-lg uppercase">Copy</button></div>
-                 </div>
-
-                 {myActiveMatch.status === 'OPPONENT_STAKED_AWAITING_CREATOR' && (
-                    <div className="p-5 rounded-xl bg-emerald-500/10 border-2 border-emerald-500/40 space-y-4 animate-in fade-in">
-                       <div className="flex justify-between items-center"><div className="flex items-center gap-2"><CheckCircle2 className="text-emerald-400" /><div><div className="text-xs font-bold text-white uppercase">{myActiveMatch.opponent?.codmIgn} Joined!</div><div className="text-[10px] text-neutral-400">Match stake to unlock room.</div></div></div><div className="text-right font-black text-amber-400">₦{myActiveMatch.stakeAmount.toLocaleString()}</div></div>
-                       {isCreatorOfActive && <button onClick={() => { setStakeTargetMatch(myActiveMatch); setStakeRole('creator'); setIsStakeModalOpen(true); }} className="w-full py-3 bg-amber-400 text-neutral-950 font-black rounded-xl text-xs uppercase shadow-xl">Send Host Stake & Reveal Room #</button>}
-                    </div>
+                 {myActiveMatch.status === 'PENDING_OPPONENT_STAKE' && (
+                   <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 space-y-3">
+                     <div className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest">Share Invite Link</div>
+                     <div className="flex gap-2"><input type="text" readOnly value={`${window.location.origin}/?join=${myActiveMatch.id}`} className="flex-1 bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-xs text-neutral-400" /><button onClick={() => copyInviteLink(myActiveMatch.id)} className="px-4 py-2 bg-amber-400 text-neutral-950 font-black text-[10px] rounded-lg uppercase cursor-pointer">Copy Link</button></div>
+                   </div>
                  )}
 
                  {['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(myActiveMatch.status) && (
