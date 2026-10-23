@@ -251,7 +251,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
           />
           <div>
             <span className="font-heading font-black text-lg tracking-wide text-white">
-              CODM STAKE
+              OPS STAKE
             </span>
             <div className="text-[10px] text-neutral-400 font-mono-nums leading-none">
               ESPORTS ESCROW ARENA
@@ -295,11 +295,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({
           {/* Header Title */}
           <div>
             <h2 className="text-xl sm:text-2xl font-black font-heading text-white tracking-wide uppercase">
-              {mode === 'signup' ? 'Create CODM Stake Account' : 'Sign In to Your Account'}
+              {mode === 'signup' ? 'Create OPS Stake Account' : 'Sign In to Your Account'}
             </h2>
             <p className="text-xs text-neutral-400 mt-1 leading-relaxed">
               {mode === 'signup'
-                ? 'Register with your CODM details and permanent NUBAN banking details to prevent multiple accounts & payment lockups.'
+                ? 'Register with your gamer tag and permanent NUBAN banking details to prevent multiple accounts & payment lockups.'
                 : 'Access your wallet, open match rooms, and battle arena.'}
             </p>
           </div>
@@ -356,11 +356,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                 </div>
               </div>
 
-              {/* Call of Duty: Mobile Username (IGN) */}
+              {/* In-Game Username (IGN) */}
               <div className="space-y-1">
                 <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider flex items-center gap-1.5">
                   <Crosshair className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Call of Duty: Mobile Username (IGN) <span className="text-rose-400">*</span></span>
+                  <span>In-Game Username / Gamer Tag (IGN) <span className="text-rose-400">*</span></span>
                 </label>
                 <input
                   type="text"

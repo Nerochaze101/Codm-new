@@ -106,14 +106,16 @@ export const Navbar: React.FC<NavbarProps> = ({
     },
   ];
 
-  navTabs.push({
-    id: 'admin',
-    label: 'Admin Portal',
-    subtitle: 'Platform Fees & Gladiators',
-    icon: ShieldCheck,
-    badge: 'ADMIN',
-    badgeColor: 'bg-rose-500/20 text-rose-400 border-rose-500/40',
-  });
+  if (currentUser.role === 'admin' || currentUser.role === 'super_admin') {
+    navTabs.push({
+      id: 'admin',
+      label: 'Admin Portal',
+      subtitle: 'Platform Fees & Gladiators',
+      icon: ShieldCheck,
+      badge: 'ADMIN',
+      badgeColor: 'bg-rose-500/20 text-rose-400 border-rose-500/40',
+    });
+  }
 
   const handleSelectTab = (tabId: string) => {
     playTabSound();
@@ -134,7 +136,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <img
                 src={CODM_IMAGES.appLogo}
-                alt="CODM Stake"
+                alt="OPS Stake"
                 className="w-10 h-10 object-contain group-hover:scale-105 transition-transform drop-shadow-md"
                 referrerPolicy="no-referrer"
                 onError={(e) => {
@@ -143,7 +145,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               />
               <div>
                 <span className="font-heading font-black text-lg sm:text-xl tracking-wider text-white group-hover:text-amber-400 transition-colors">
-                  CODM STAKE
+                  OPS STAKE
                 </span>
               </div>
             </button>
@@ -262,7 +264,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </div>
                   <div>
                     <h2 className="font-heading font-black text-sm text-white uppercase tracking-wider">
-                      CODM Stake Hub
+                      OPS Stake Hub
                     </h2>
                     <p className="text-[10px] text-neutral-400 font-mono">
                       All Navigation Tabs & Operations

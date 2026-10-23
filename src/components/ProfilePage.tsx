@@ -4,7 +4,7 @@ import {
   User, Trophy, Award, TrendingUp, ShieldCheck, Swords,
   Edit3, Check, Copy, ArrowRight, Shield, Zap, Flame, Clock,
   Calendar, CheckCircle2, AlertCircle, Camera, Crosshair, Users, LogOut, BookOpen,
-  Volume2, VolumeX, Building, CreditCard, Lock, Loader2, Save, RefreshCw
+  Volume2, VolumeX, Building, CreditCard, Lock, Loader2, Save, RefreshCw, Send, Bell, MessageSquare
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { useSoundSettings, playShotgunSound } from '../hooks/useSound';
@@ -76,6 +76,11 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
   const [copiedBank, setCopiedBank] = useState(false);
   const [bankSaveSuccess, setBankSaveSuccess] = useState(false);
   const [isSavingBank, setIsSavingBank] = useState(false);
+  // Telegram Bot Alert State
+  const [telegramChatId, setTelegramChatId] = useState(currentUser.telegramChatId || '');
+  const [isSavingTelegram, setIsSavingTelegram] = useState(false);
+  const [isSendingTestAlert, setIsSendingTestAlert] = useState(false);
+  const [telegramFeedback, setTelegramFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
 
   useEffect(() => {
     if (currentUser.bankName) setBankName(currentUser.bankName);
@@ -84,7 +89,55 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
     if (currentUser.bankName) setEditBankName(currentUser.bankName);
     if (currentUser.accountNumber) setEditAccountNumber(currentUser.accountNumber);
     if (currentUser.accountName) setEditAccountName(currentUser.accountName);
-  }, [currentUser.bankName, currentUser.accountNumber, currentUser.accountName]);
+    if (currentUser.telegramChatId) setTelegramChatId(currentUser.telegramChatId);
+  }, [currentUser.bankName, currentUser.accountNumber, currentUser.accountName, currentUser.telegramChatId]);
+
+  const handleSaveTelegramId = async () => {
+    setIsSavingTelegram(true);
+    setTelegramFeedback(null);
+    try {
+      if (onUpdateUser) {
+        await onUpdateUser({
+          telegramChatId: telegramChatId.trim(),
+        });
+      }
+      setTelegramFeedback({ type: 'success', msg: 'Telegram Chat ID saved permanently!' });
+      setTimeout(() => setTelegramFeedback(null), 4000);
+    } catch (err: any) {
+      setTelegramFeedback({ type: 'error', msg: err.message || 'Failed to save Telegram Chat ID' });
+    } finally {
+      setIsSavingTelegram(false);
+    }
+  };
+
+  const handleSendTestAlert = async () => {
+    if (!telegramChatId || !telegramChatId.trim()) {
+      setTelegramFeedback({ type: 'error', msg: 'Please enter a Telegram Chat ID first.' });
+      return;
+    }
+    setIsSendingTestAlert(true);
+    setTelegramFeedback(null);
+    try {
+      const res = await fetch('/api/telegram/test-alert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chatId: telegramChatId.trim(),
+          userId: currentUser.id,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTelegramFeedback({ type: 'success', msg: data.message || 'Test alert sent! Check your Telegram app.' });
+      } else {
+        setTelegramFeedback({ type: 'error', msg: data.error || 'Failed to send test alert. Make sure you started the bot on Telegram.' });
+      }
+    } catch (err: any) {
+      setTelegramFeedback({ type: 'error', msg: 'Network error sending test alert.' });
+    } finally {
+      setIsSendingTestAlert(false);
+    }
+  };
 
   const resolveBankDetails = async (accNum: string, bank: string) => {
     if (accNum.length !== 10) return;
@@ -284,7 +337,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
                 className="px-4 py-2.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2"
               >
                 <Edit3 className="w-3.5 h-3.5 text-amber-400" />
-                <span>{isEditing ? 'Cancel Edit' : 'Edit CODM Info'}</span>
+                <span>{isEditing ? 'Cancel Edit' : 'Edit Gamer Tag Info'}</span>
               </button>
 
               <button
@@ -561,6 +614,122 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
       </div>
 
       {/* ------------------------------------------------------------- */}
+      {/* 3. TELEGRAM BOT MATCH ACCEPTANCE ALERTS                       */}
+      {/* ------------------------------------------------------------- */}
+      <div className="rounded-3xl bg-neutral-900 border-2 border-sky-500/40 p-6 sm:p-7 space-y-5 shadow-2xl relative overflow-hidden">
+        <div className="absolute top-0 right-0 p-8 opacity-5 text-sky-400 pointer-events-none">
+          <Send className="w-32 h-32" />
+        </div>
+
+        {/* Card Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-neutral-800 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-sky-400 shrink-0">
+              <Send className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base sm:text-lg font-black font-heading text-white uppercase tracking-wide">
+                  Telegram Instant Match Alerts
+                </h2>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider bg-sky-500/20 text-sky-300 border border-sky-500/30">
+                  Bot Token Active
+                </span>
+              </div>
+              <p className="text-xs text-neutral-400">
+                Receive instant Telegram notifications on your phone whenever an opponent accepts your 1v1 wager match challenge!
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {telegramFeedback && (
+          <div className={`p-3.5 rounded-2xl border text-xs font-bold flex items-center gap-2 animate-in fade-in ${
+            telegramFeedback.type === 'success'
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+              : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+          }`}>
+            {telegramFeedback.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+            ) : (
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+            )}
+            <span>{telegramFeedback.msg}</span>
+          </div>
+        )}
+
+        <div className="space-y-4">
+          <div className="p-4 rounded-2xl bg-neutral-950/80 border border-neutral-800 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <span className="text-xs font-mono font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Bell className="w-4 h-4 text-sky-400" />
+                <span>How to Link Your Telegram Account</span>
+              </span>
+              <span className="text-[10px] text-neutral-500 font-mono">Bot Token: 8886701427:AAE5...</span>
+            </div>
+
+            <ol className="text-xs text-neutral-300 space-y-1.5 list-decimal list-inside font-sans">
+              <li>Open Telegram and search for <b>@userinfobot</b> or start our bot.</li>
+              <li>Send any message to <b>@userinfobot</b> to view your <b>numerical Chat ID</b> (e.g., <code>987654321</code>).</li>
+              <li>Paste your Chat ID below and tap <b>Save ID & Test Telegram Alert</b>.</li>
+            </ol>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            <div className="relative flex-1">
+              <input
+                type="text"
+                value={telegramChatId}
+                onChange={(e) => setTelegramChatId(e.target.value)}
+                placeholder="Enter Numerical Telegram Chat ID (e.g. 987654321)"
+                className="w-full px-4 py-3 rounded-2xl bg-neutral-950 border border-neutral-700 text-white font-mono-nums text-xs focus:outline-none focus:border-sky-400"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleSaveTelegramId}
+                disabled={isSavingTelegram}
+                className="px-4 py-3 rounded-2xl bg-sky-500 hover:bg-sky-400 text-neutral-950 font-black text-xs uppercase tracking-wider cursor-pointer whitespace-nowrap shadow-md flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                {isSavingTelegram ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Saving...</span>
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-3.5 h-3.5" />
+                    <span>Save ID</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSendTestAlert}
+                disabled={isSendingTestAlert || !telegramChatId.trim()}
+                className="px-4 py-3 rounded-2xl bg-neutral-800 hover:bg-neutral-700 text-amber-400 font-bold text-xs uppercase tracking-wider cursor-pointer whitespace-nowrap shadow-md flex items-center justify-center gap-1.5 border border-neutral-700 disabled:opacity-50"
+              >
+                {isSendingTestAlert ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Sending Test...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Test Telegram Alert</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ------------------------------------------------------------- */}
       {/* 2. EDIT PROFILE FORM (TOGGLE)                                  */}
       {/* ------------------------------------------------------------- */}
       {isEditing && (
@@ -605,7 +774,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider block font-mono">
-                  Call of Duty In-Game Name (IGN)
+                  In-Game Username (IGN)
                 </label>
                 <input
                   type="text"
@@ -617,7 +786,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
 
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider block font-mono">
-                  CODM Player ID (UID)
+                  Player ID / UID
                 </label>
                 <input
                   type="text"

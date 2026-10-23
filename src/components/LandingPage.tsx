@@ -27,7 +27,7 @@ const FAQS = [
   },
   {
     q: 'What if my opponent is a new user and does not have an account yet?',
-    a: 'When your opponent opens your challenge invite link, they will be prompted to enter their CODM Gamer Tag and fund their account with at least ₦1,000. That ₦1,000 is immediately escrowed upon sign-up, seamlessly locking them into the match room.',
+    a: 'When your opponent opens your challenge invite link, they will be prompted to enter their Gamer Tag and fund their account with at least ₦1,000. That ₦1,000 is immediately escrowed upon sign-up, seamlessly locking them into the match room.',
   },
   {
     q: 'How are match results verified and paid out?',
@@ -82,7 +82,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           <div className="flex items-center gap-3">
             <img
               src={CODM_IMAGES.appLogo}
-              alt="CODM Stake"
+              alt="OPS Stake"
               className="w-11 h-11 object-contain drop-shadow-md"
               referrerPolicy="no-referrer"
               onError={(e) => {
@@ -91,7 +91,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             />
             <div>
               <span className="font-heading font-black text-xl tracking-wide text-white">
-                CODM STAKE
+                OPS STAKE
               </span>
               <div className="text-[10px] text-neutral-400 font-mono-nums leading-none">
                 ESPORTS ESCROW ARENA

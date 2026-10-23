@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "CODM Stake 1v1 Esports Wagering",
-  "short_name": "CODM Stake",
-  "description": "Real-time 1v1 Call of Duty: Mobile Esports wagering platform in Nigerian Naira (₦).",
+  "name": "OPS Stake 1v1 Esports Wagering",
+  "short_name": "OPS Stake",
+  "description": "Real-time 1v1 Tactical Mobile Shooter Esports wagering platform in Nigerian Naira (₦).",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

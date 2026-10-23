@@ -248,6 +248,8 @@ export async function initDatabase() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code VARCHAR(100);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS total_referral_earnings NUMERIC DEFAULT 0;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id VARCHAR(255);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_username VARCHAR(255);
 
       CREATE TABLE IF NOT EXISTS matches (
         id VARCHAR(255) PRIMARY KEY,

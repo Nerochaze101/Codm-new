@@ -31,6 +31,8 @@ export interface UserProfile {
   totalReferralEarnings?: number;
   referralCount?: number;
   role?: string;
+  telegramChatId?: string;
+  telegramUsername?: string;
   transactions: Transaction[];
 }
 

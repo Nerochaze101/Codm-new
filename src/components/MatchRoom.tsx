@@ -39,6 +39,8 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
 }) => {
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedCreatorIgn, setCopiedCreatorIgn] = useState(false);
+  const [copiedOpponentIgn, setCopiedOpponentIgn] = useState(false);
   const [selectedClaim, setSelectedClaim] = useState<'VICTORY' | 'DEFEAT' | 'DRAW'>('VICTORY');
   const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -100,6 +102,20 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
     navigator.clipboard.writeText(link);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
+  };
+
+  const copyCreatorIgn = () => {
+    navigator.clipboard.writeText(match.creator.codmIgn);
+    setCopiedCreatorIgn(true);
+    setTimeout(() => setCopiedCreatorIgn(false), 2000);
+  };
+
+  const copyOpponentIgn = () => {
+    if (match.opponent?.codmIgn) {
+      navigator.clipboard.writeText(match.opponent.codmIgn);
+      setCopiedOpponentIgn(true);
+      setTimeout(() => setCopiedOpponentIgn(false), 2000);
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -514,7 +530,7 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
 
           <div className="space-y-1">
             <div className="text-xs font-mono text-neutral-400 uppercase tracking-widest">
-              Official CODM In-Game Private Room Number
+              Official Private Room Number
             </div>
             <div className="flex items-center justify-center gap-3">
               <span className="text-3xl sm:text-5xl font-black font-mono-nums text-amber-400 tracking-wider drop-shadow-md">
@@ -532,7 +548,7 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
           </div>
 
           <p className="text-xs text-neutral-300 max-w-lg mx-auto">
-            Open Call of Duty: Mobile &gt; Multiplayer &gt; Private Match &gt; Join or create lobby with room code <strong className="text-amber-400 font-mono-nums">#{match.roomCode}</strong>.
+            Open Mobile Shooter &gt; Multiplayer &gt; Private Match &gt; Join or create lobby with room code <strong className="text-amber-400 font-mono-nums">#{match.roomCode}</strong>.
           </p>
         </div>
       )}
@@ -609,6 +625,15 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                   UID: {match.creator.codmUid}
                 </div>
               </div>
+              <button
+                type="button"
+                onClick={copyCreatorIgn}
+                className="px-2.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-[10px] uppercase cursor-pointer flex items-center gap-1 shrink-0 transition-all active:scale-95 shadow"
+                title="One-tap copy Host CODM username"
+              >
+                {copiedCreatorIgn ? <Check className="w-3.5 h-3.5 stroke-[3]" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedCreatorIgn ? 'Copied!' : 'Copy IGN'}</span>
+              </button>
             </div>
 
             {match.creator.resultClaim && (
@@ -665,6 +690,15 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                     UID: {match.opponent.codmUid}
                   </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={copyOpponentIgn}
+                  className="px-2.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-[10px] uppercase cursor-pointer flex items-center gap-1 shrink-0 transition-all active:scale-95 shadow"
+                  title="One-tap copy Opponent CODM username"
+                >
+                  {copiedOpponentIgn ? <Check className="w-3.5 h-3.5 stroke-[3]" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedOpponentIgn ? 'Copied!' : 'Copy IGN'}</span>
+                </button>
               </div>
             ) : (
               <div className="py-2 text-center text-xs text-neutral-400">
@@ -694,14 +728,14 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
           <div className="p-5 rounded-2xl bg-neutral-900 border border-neutral-800 space-y-3">
             <h3 className="text-sm font-bold font-heading uppercase text-white flex items-center gap-2">
               <Swords className="w-4 h-4 text-amber-400" />
-              <span>CODM Private Match Instructions</span>
+              <span>Private Match Instructions</span>
             </h3>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-neutral-300">
               <div className="p-3 rounded-lg bg-neutral-950/80 border border-neutral-800/80 space-y-1">
-                <div className="font-bold text-white">1. Create Custom Room in CODM</div>
+                <div className="font-bold text-white">1. Create Custom Room In-Game</div>
                 <p className="text-neutral-400">
-                  Host opens CODM &gt; Multiplayer &gt; Private Match. Map: <strong>{match.map}</strong>. Mode: <strong>{match.gameMode}</strong>.
+                  Host opens Multiplayer &gt; Private Match. Map: <strong>{match.map}</strong>. Mode: <strong>{match.gameMode}</strong>.
                 </p>
               </div>
 

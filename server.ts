@@ -70,6 +70,8 @@ export interface UserProfile {
   referralCode?: string;
   totalReferralEarnings?: number;
   role?: string;
+  telegramChatId?: string;
+  telegramUsername?: string;
   transactions: Array<{
     id: string;
     type: 'DEPOSIT' | 'ESCROW_LOCK' | 'ESCROW_REFUND' | 'MATCH_WIN_PAYOUT' | 'WITHDRAWAL' | 'REFERRAL_EARNING';
@@ -248,6 +250,8 @@ async function getUserFromDb(idOrEmail: string): Promise<UserProfile | null> {
       referralCode: r.referral_code || r.username?.toLowerCase() || r.codm_ign?.toLowerCase(),
       totalReferralEarnings: parseFloat(r.total_referral_earnings || 0),
       role: r.role || 'user',
+      telegramChatId: r.telegram_chat_id || undefined,
+      telegramUsername: r.telegram_username || undefined,
       transactions,
     };
   } catch (err) {
@@ -298,6 +302,8 @@ async function getUserByEmailOrIgn(identifier: string): Promise<{ user: UserProf
       referralCode: r.referral_code || r.username?.toLowerCase() || r.codm_ign?.toLowerCase(),
       totalReferralEarnings: parseFloat(r.total_referral_earnings || 0),
       role: r.role || 'user',
+      telegramChatId: r.telegram_chat_id || undefined,
+      telegramUsername: r.telegram_username || undefined,
       transactions,
     };
 
@@ -320,7 +326,7 @@ async function saveUserToDb(user: UserProfile, password?: string, forceBalanceUp
       ? `balance = EXCLUDED.balance, escrow_balance = EXCLUDED.escrow_balance, total_winnings = EXCLUDED.total_winnings,`
       : `balance = users.balance, escrow_balance = users.escrow_balance, total_winnings = users.total_winnings,`;
     await pool.query(`
-      INSERT INTO users (id, username, codm_ign, codm_uid, tier, clan, email, phone, password_hash, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, created_at)
+      INSERT INTO users (id, username, codm_ign, codm_uid, tier, clan, email, phone, password_hash, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, telegram_chat_id, telegram_username, created_at)
       VALUES (
         ${escapeSql(user.id)},
         ${escapeSql(user.username)},
@@ -345,6 +351,8 @@ async function saveUserToDb(user: UserProfile, password?: string, forceBalanceUp
         ${escapeSql(user.referralCode || user.username?.toLowerCase() || user.codmIgn?.toLowerCase() || null)},
         ${escapeSql(user.totalReferralEarnings || 0)},
         ${escapeSql(user.role || 'user')},
+        ${escapeSql(user.telegramChatId || null)},
+        ${escapeSql(user.telegramUsername || null)},
         ${Date.now()}
       )
       ON CONFLICT (id) DO UPDATE SET
@@ -357,6 +365,8 @@ async function saveUserToDb(user: UserProfile, password?: string, forceBalanceUp
         phone = EXCLUDED.phone,
         password_hash = COALESCE(EXCLUDED.password_hash, users.password_hash),
         role = COALESCE(users.role, EXCLUDED.role),
+        telegram_chat_id = COALESCE(EXCLUDED.telegram_chat_id, users.telegram_chat_id),
+        telegram_username = COALESCE(EXCLUDED.telegram_username, users.telegram_username),
         ${balanceUpdateFragment}
         wins = users.wins,
         losses = users.losses,
@@ -438,7 +448,7 @@ async function getMatchFromDb(id: string): Promise<Match | null> {
 
 async function getAllMatchesFromDb(): Promise<Match[]> {
   try {
-    const res = await pool.query('SELECT * FROM matches ORDER BY created_at DESC');
+    const res = await pool.query('SELECT * FROM matches ORDER BY created_at DESC LIMIT 100');
     return res.rows.map((m) => ({
       id: m.id,
       challengeCode: m.challenge_code,
@@ -3429,7 +3439,7 @@ app.patch('/api/users/:id', async (req, res) => {
   const user = await getUserFromDb(userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  const { username, codmIgn, codmUid, email, phone, avatar, tier, clan, bankName, accountNumber, accountName } = req.body;
+  const { username, codmIgn, codmUid, email, phone, avatar, tier, clan, bankName, accountNumber, accountName, telegramChatId, telegramUsername } = req.body;
 
   await pool.query(`
     UPDATE users SET
@@ -3443,7 +3453,9 @@ app.patch('/api/users/:id', async (req, res) => {
       clan = COALESCE(${clan !== undefined ? escapeSql(clan) : 'NULL'}, clan),
       bank_name = COALESCE(${bankName !== undefined ? escapeSql(bankName) : 'NULL'}, bank_name),
       account_number = COALESCE(${accountNumber !== undefined ? escapeSql(accountNumber) : 'NULL'}, account_number),
-      account_name = COALESCE(${accountName !== undefined ? escapeSql(accountName) : 'NULL'}, account_name)
+      account_name = COALESCE(${accountName !== undefined ? escapeSql(accountName) : 'NULL'}, account_name),
+      telegram_chat_id = COALESCE(${telegramChatId !== undefined ? escapeSql(telegramChatId) : 'NULL'}, telegram_chat_id),
+      telegram_username = COALESCE(${telegramUsername !== undefined ? escapeSql(telegramUsername) : 'NULL'}, telegram_username)
     WHERE id = ${escapeSql(userId)}
   `);
 
@@ -3958,6 +3970,183 @@ app.post('/api/users/:id/clean-history', async (req, res) => {
   }
 });
 
+// ==========================================
+// 🤖 TELEGRAM BOT NOTIFICATION SERVICE
+// ==========================================
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8886701427:AAE5Oz2ZuMGEn9p6LTvHy6hXlZZXLHtqUeo';
+const TELEGRAM_PUBLIC_CHANNEL_ID = process.env.TELEGRAM_PUBLIC_CHANNEL_ID || '-1004368602897';
+
+export async function postMatchToPublicChannel(match: Match, origin: string) {
+  try {
+    // Ensure origin doesn't end with slash
+    const baseOrigin = origin.replace(/\/$/, '');
+    // Using deep link format expected by App.tsx (?join=MATCH_ID)
+    const matchUrl = `${baseOrigin}/?join=${match.id}`;
+    
+    const messageText = 
+      `🔥 <b>NEW LIVE WAGER ALERT - OPS STAKE</b> 🔥\n\n` +
+      `👤 <b>Host:</b> ${match.creator.codmIgn}\n` +
+      `💵 <b>Stake Amount:</b> ₦${match.stakeAmount.toLocaleString()}\n` +
+      `🏆 <b>Total Pot:</b> ₦${match.potAmount.toLocaleString()}\n` +
+      `🎯 <b>Game Mode:</b> ${match.gameMode}\n` +
+      `🗺️ <b>Map:</b> ${match.map}\n\n` +
+      `⚔️ <i>A gladiator is waiting for a rival! Think you have what it takes to win? Tap the button below to join the match and claim the pot!</i>`;
+
+    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_PUBLIC_CHANNEL_ID,
+        text: messageText,
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '🎮 ACCEPT WAGER NOW', url: matchUrl }
+          ]]
+        }
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      console.warn(`[Telegram Bot] Public channel post failed for ID ${TELEGRAM_PUBLIC_CHANNEL_ID}: ${data.description}`);
+    } else {
+      console.log(`✅ [Telegram Bot] Match #${match.challengeCode} posted to public channel successfully`);
+    }
+  } catch (err: any) {
+    console.error('[Telegram Bot] Public channel post exception:', err.message);
+  }
+}
+
+export async function sendTelegramMatchAcceptedAlert(match: Match, opponentIgn: string) {
+  try {
+    const creatorUser = await getUserFromDb(match.creator.id);
+    const hostChatId = creatorUser?.telegramChatId || process.env.TELEGRAM_HOST_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
+
+    const messageText = 
+      `⚔️ <b>MATCH ACCEPTED - OPS STAKE</b> ⚔️\n\n` +
+      `🎯 <b>A rival has accepted your 1v1 wager challenge!</b>\n\n` +
+      `👤 <b>Host:</b> ${match.creator.codmIgn}\n` +
+      `⚔️ <b>Opponent:</b> ${opponentIgn}\n` +
+      `💵 <b>Stake Amount:</b> ₦${match.stakeAmount.toLocaleString()}\n` +
+      `🏆 <b>Total Pot:</b> ₦${match.potAmount.toLocaleString()}\n` +
+      `🎯 <b>Game Mode:</b> ${match.gameMode}\n` +
+      `🗺️ <b>Map:</b> ${match.map}\n` +
+      `🔑 <b>In-Game Room Code:</b> <code>#${match.roomCode || 'Ready'}</code>\n` +
+      `🏷️ <b>Challenge Code:</b> #${match.challengeCode}\n\n` +
+      `🚀 <i>Open CODM, enter room code #${match.roomCode || 'Ready'}, and claim victory!</i>`;
+
+    const chatIdsToSend = new Set<string>();
+    if (hostChatId && hostChatId.trim()) chatIdsToSend.add(hostChatId.trim());
+
+    if (chatIdsToSend.size === 0) {
+      console.log(`[Telegram Bot] Host ${match.creator.codmIgn} has no Telegram Chat ID configured.`);
+      return;
+    }
+
+    for (const chatId of chatIdsToSend) {
+      const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: messageText,
+          parse_mode: 'HTML',
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        console.warn(`[Telegram Bot] Send message failed for chat ID ${chatId}: ${data.description}`);
+      } else {
+        console.log(`✅ [Telegram Bot] Match acceptance alert sent successfully to host chat ID ${chatId}`);
+      }
+    }
+  } catch (err: any) {
+    console.error('[Telegram Bot] Exception sending match alert:', err.message);
+  }
+}
+
+// Endpoint to test Telegram Bot notification
+app.post('/api/telegram/test-alert', async (req, res) => {
+  const { chatId, userId } = req.body;
+  const targetChatId = chatId || (userId ? (await getUserFromDb(userId))?.telegramChatId : null) || process.env.TELEGRAM_CHAT_ID;
+
+  if (!targetChatId) {
+    return res.status(400).json({
+      success: false,
+      error: 'Please enter a valid Telegram Chat ID. Start the bot on Telegram and get your ID from @userinfobot.',
+    });
+  }
+
+  try {
+    const testMessage = 
+      `🤖 <b>OPS STAKE TELEGRAM BOT ALERT TEST</b>\n\n` +
+      `✅ Your Telegram Chat ID <code>${targetChatId}</code> is linked successfully!\n\n` +
+      `You will receive real-time alerts whenever a rival accepts your 1v1 wager matches!`;
+
+    const tgRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: targetChatId.trim(),
+        text: testMessage,
+        parse_mode: 'HTML',
+      }),
+    });
+
+    const data = await tgRes.json();
+    if (data.ok) {
+      return res.json({
+        success: true,
+        message: `Test alert sent to Telegram chat ID ${targetChatId}! Check your Telegram messages.`,
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: data.description || 'Failed to send Telegram message. Make sure you started the bot on Telegram first.',
+      });
+    }
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Endpoint to test Telegram Public Channel post
+app.post('/api/telegram/test-channel-post', async (req, res) => {
+  const { channelId } = req.body;
+  const targetChannelId = channelId || TELEGRAM_PUBLIC_CHANNEL_ID;
+
+  try {
+    const testMessage = `🚀 <b>OPS STAKE BOT CONNECTION TEST</b>\n\nThis is a test message to verify the bot has admin access to post in this channel.`;
+
+    const tgRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: String(targetChannelId).trim(),
+        text: testMessage,
+        parse_mode: 'HTML',
+      }),
+    });
+
+    const data = await tgRes.json();
+    if (data.ok) {
+      return res.json({
+        success: true,
+        message: `Bot successfully posted to channel ${targetChannelId}!`,
+        data,
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: `Telegram Error: ${data.description}. (Hint: Make sure the Bot is an ADMIN in the channel/group).`,
+        debug: { targetChannelId, botTokenPrefix: TELEGRAM_BOT_TOKEN.split(':')[0] }
+      });
+    }
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // List all active matches directly from database
 app.get('/api/matches', async (req, res) => {
   const matchList = await getAllMatchesFromDb();
@@ -4070,11 +4259,29 @@ app.post('/api/matches', async (req, res) => {
 
     await saveMatchToDb(newMatch);
     await client.query('COMMIT');
-    if (globalIo) {
-      globalIo.emit('matchCreated', newMatch);
-      broadcastMatchStateChange(newMatch, 'NEW_MATCH_AWAITING_OPPONENT');
-    }
+    
+    // Respond to client IMMEDIATELY to stop the loading spinner on the UI
     res.json(newMatch);
+
+    // Perform non-blocking background notifications after response is sent
+    const origin = req.headers.origin || req.headers.referer || `https://${req.headers.host}`;
+    
+    setImmediate(() => {
+      try {
+        if (globalIo) {
+          globalIo.emit('matchCreated', newMatch);
+          broadcastMatchStateChange(newMatch, 'NEW_MATCH_AWAITING_OPPONENT');
+        }
+
+        if (origin) {
+          postMatchToPublicChannel(newMatch, origin).catch(err => 
+            console.warn('Telegram public post background error:', err.message)
+          );
+        }
+      } catch (bgErr: any) {
+        console.warn('Match creation background task error:', bgErr.message);
+      }
+    });
   } catch (err: any) {
     try { await client.query('ROLLBACK'); } catch (_) {}
     console.error('Create match error:', err);
@@ -4186,10 +4393,23 @@ app.post('/api/matches/:id/opponent-stake', async (req, res) => {
 
     await client.query('COMMIT');
     const updatedMatch = await getMatchFromDb(matchId);
-    if (updatedMatch) {
-      broadcastMatchStateChange(updatedMatch, 'MATCH_STARTED');
-    }
+    
+    // Respond immediately to unblock UI
     res.json(updatedMatch);
+
+    if (updatedMatch) {
+      const oppIgn = oppRow.codm_ign;
+      setImmediate(() => {
+        try {
+          broadcastMatchStateChange(updatedMatch, 'MATCH_STARTED');
+          sendTelegramMatchAcceptedAlert(updatedMatch, oppIgn).catch((err) =>
+            console.warn('Telegram match alert background error:', err.message)
+          );
+        } catch (bgErr: any) {
+          console.warn('Match start background task error:', bgErr.message);
+        }
+      });
+    }
   } catch (err: any) {
     await client.query('ROLLBACK');
     console.error('Opponent stake race condition error:', err);
@@ -4306,10 +4526,23 @@ app.post('/api/matches/:id/join', async (req, res) => {
 
     await client.query('COMMIT');
     const updatedMatch = await getMatchFromDb(matchId);
-    if (updatedMatch) {
-      broadcastMatchStateChange(updatedMatch, 'MATCH_STARTED');
-    }
+    
+    // Respond immediately to unblock UI
     res.json(updatedMatch);
+
+    if (updatedMatch) {
+      const oppIgn = oppRow.codm_ign;
+      setImmediate(() => {
+        try {
+          broadcastMatchStateChange(updatedMatch, 'MATCH_STARTED');
+          sendTelegramMatchAcceptedAlert(updatedMatch, oppIgn).catch((err) =>
+            console.warn('Telegram match alert background error:', err.message)
+          );
+        } catch (bgErr: any) {
+          console.warn('Match start background task error:', bgErr.message);
+        }
+      });
+    }
   } catch (err: any) {
     await client.query('ROLLBACK');
     console.error('Join match race condition error:', err);

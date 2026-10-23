@@ -52,6 +52,8 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedRivalIgn, setCopiedRivalIgn] = useState(false);
+  const [copiedRivalUid, setCopiedRivalUid] = useState(false);
   const [arenaCashoutConfirming, setArenaCashoutConfirming] = useState(false);
   const [isArenaCashoutSubmitting, setIsArenaCashoutSubmitting] = useState(false);
   const [isAbandoning, setIsAbandoning] = useState(false);
@@ -109,6 +111,8 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
 
   const copyCode = (code: string) => { navigator.clipboard.writeText(code); setCopiedCode(true); setTimeout(() => setCopiedCode(false), 2000); };
   const copyInviteLink = (matchId: string) => { navigator.clipboard.writeText(`${window.location.origin}/?join=${matchId}`); setCopiedLink(true); setTimeout(() => setCopiedLink(false), 2000); };
+  const copyRivalIgn = (ign: string) => { navigator.clipboard.writeText(ign); setCopiedRivalIgn(true); setTimeout(() => setCopiedRivalIgn(false), 2000); };
+  const copyRivalUid = (uid: string) => { navigator.clipboard.writeText(uid); setCopiedRivalUid(true); setTimeout(() => setCopiedRivalUid(false), 2000); };
 
   const handleResultSubmit = async (matchId: string, directClaim?: 'VICTORY' | 'DEFEAT' | 'DRAW') => {
     const claim = directClaim || selectedClaim;
@@ -243,6 +247,63 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                     <span className="text-emerald-400">Winner Payout: ₦{myActiveMatch.winnerPayout.toLocaleString()}</span>
                  </div>
 
+                 {/* Rival Player Details & One-Tap Copy Card */}
+                 {myActiveMatch && (
+                   <div className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-3">
+                     <div className="flex items-center justify-between">
+                       <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest flex items-center gap-1.5">
+                         <UserCheck size={14} className="text-amber-400" />
+                         <span>Rival In-Game Search Info ({isCreatorOfActive ? 'Opponent' : 'Host'})</span>
+                       </span>
+                       <span className="text-[10px] text-emerald-400 font-mono font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">ONE-TAP COPY</span>
+                     </div>
+                     
+                     {(() => {
+                       const rival = isCreatorOfActive ? myActiveMatch.opponent : myActiveMatch.creator;
+                       return (
+                         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 rounded-xl bg-neutral-900 border border-neutral-800/80">
+                           <div className="flex items-center gap-3 min-w-0 w-full sm:w-auto">
+                             <img src={rival?.avatar || 'https://api.dicebear.com/7.x/bottts/svg?seed=rival'} alt="" className="w-10 h-10 rounded-xl bg-neutral-800 shrink-0 object-cover" />
+                             <div className="min-w-0 flex-1">
+                               <div className="text-xs font-bold text-white truncate flex items-center gap-1">
+                                 <span>{rival?.codmIgn || 'Awaiting Opponent...'}</span>
+                               </div>
+                               <div className="text-[10px] font-mono text-neutral-400 truncate">
+                                 UID: {rival?.codmUid || 'N/A'}
+                               </div>
+                             </div>
+                           </div>
+
+                           {rival && (
+                             <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+                               <button
+                                 type="button"
+                                 onClick={() => copyRivalIgn(rival.codmIgn)}
+                                 className="flex-1 sm:flex-none px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase cursor-pointer flex items-center justify-center gap-1.5 shadow-md transition-all active:scale-95"
+                                 title="Copy opponent CODM in-game username"
+                               >
+                                 {copiedRivalIgn ? <Check size={14} className="stroke-[3]" /> : <Copy size={14} />}
+                                 <span>{copiedRivalIgn ? 'IGN Copied!' : 'Copy IGN'}</span>
+                               </button>
+                               {rival.codmUid && (
+                                 <button
+                                   type="button"
+                                   onClick={() => copyRivalUid(rival.codmUid)}
+                                   className="flex-1 sm:flex-none px-3.5 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-xs uppercase cursor-pointer flex items-center justify-center gap-1.5 border border-neutral-700 transition-all active:scale-95"
+                                   title="Copy opponent CODM UID"
+                                 >
+                                   {copiedRivalUid ? <Check size={14} className="stroke-[3] text-emerald-400" /> : <Copy size={14} />}
+                                   <span>{copiedRivalUid ? 'UID Copied!' : 'Copy UID'}</span>
+                                 </button>
+                               )}
+                             </div>
+                           )}
+                         </div>
+                       );
+                     })()}
+                   </div>
+                 )}
+
                  {myActiveMatch.status === 'PENDING_OPPONENT_STAKE' && (
                    <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 space-y-3">
                      <div className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest">Share Invite Link</div>
@@ -260,9 +321,9 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                      )}
                      {myActiveMatch.roomCode && (
                        <div className="p-5 rounded-2xl bg-amber-500/10 border-2 border-amber-400/40 text-center space-y-2">
-                         <div className="text-[10px] text-neutral-400 uppercase font-mono font-bold tracking-tighter">CODM Private Room #</div>
+                         <div className="text-[10px] text-neutral-400 uppercase font-mono font-bold tracking-tighter">Private Room #</div>
                          <div className="flex items-center justify-center gap-3"><span className="text-4xl font-black text-amber-400 font-mono tracking-widest">{myActiveMatch.roomCode}</span><button onClick={() => copyCode(myActiveMatch.roomCode!)} className="p-2 rounded-lg bg-neutral-800 text-white shadow-lg"><Copy size={18} /></button></div>
-                         <p className="text-[10px] text-neutral-400 italic">Enter code in CODM Multiplayer &gt; Private Match</p>
+                         <p className="text-[10px] text-neutral-400 italic">Enter code in In-Game Multiplayer &gt; Private Match</p>
                        </div>
                      )}
 

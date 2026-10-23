@@ -801,9 +801,9 @@ function MainApp() {
       <footer className="border-t border-neutral-900 bg-neutral-950 py-6 mt-auto">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-neutral-500">
           <div className="flex items-center gap-2">
-            <span className="font-heading font-black text-white tracking-wider">CODM STAKE</span>
+            <span className="font-heading font-black text-white tracking-wider">OPS STAKE</span>
             <span>·</span>
-            <span>Call of Duty: Mobile Esports Escrow Wagering in Nigerian Naira (₦)</span>
+            <span>Tactical Mobile Shooter Esports Escrow Wagering in Nigerian Naira (₦)</span>
           </div>
           <div className="flex items-center gap-4">
             <span className="text-neutral-400">Escrow Protected</span>
