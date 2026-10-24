@@ -4,7 +4,7 @@ import {
   User, Trophy, Award, TrendingUp, ShieldCheck, Swords,
   Edit3, Check, Copy, ArrowRight, Shield, Zap, Flame, Clock,
   Calendar, CheckCircle2, AlertCircle, Camera, Crosshair, Users, LogOut, BookOpen,
-  Volume2, VolumeX, Building, CreditCard, Lock, Loader2, Save, RefreshCw, Send, Bell, MessageSquare, Settings
+  Volume2, VolumeX, Building, CreditCard, Lock, Loader2, Save, RefreshCw, Send, Bell, MessageSquare, Settings, ExternalLink
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { useSoundSettings, playShotgunSound } from '../hooks/useSound';
@@ -82,6 +82,52 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
   const [isSavingTelegram, setIsSavingTelegram] = useState(false);
   const [isSendingTestAlert, setIsSendingTestAlert] = useState(false);
   const [telegramFeedback, setTelegramFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
+  const [botUsername, setBotUsername] = useState('OpsSTAKEBOT');
+  const [copiedBotLink, setCopiedBotLink] = useState(false);
+  const [isUnlinkingTelegram, setIsUnlinkingTelegram] = useState(false);
+  const [showManualChatId, setShowManualChatId] = useState(false);
+
+  const telegramDeepLink = `https://t.me/${botUsername}?start=link_${currentUser.id}`;
+
+  useEffect(() => {
+    fetch('/api/telegram/bot-info')
+      .then(r => r.json())
+      .then(d => {
+        if (d.botUsername) setBotUsername(d.botUsername);
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleCopyBotLink = () => {
+    navigator.clipboard.writeText(telegramDeepLink);
+    setCopiedBotLink(true);
+    setTimeout(() => setCopiedBotLink(false), 2500);
+  };
+
+  const handleUnlinkTelegram = async () => {
+    setIsUnlinkingTelegram(true);
+    setTelegramFeedback(null);
+    try {
+      const res = await fetch('/api/telegram/unlink', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (onUpdateUser) {
+          await onUpdateUser({ telegramChatId: '', telegramUsername: '' });
+        }
+        setTelegramChatId('');
+        setTelegramFeedback({ type: 'success', msg: 'Telegram Bot disconnected successfully.' });
+        setTimeout(() => setTelegramFeedback(null), 3000);
+      }
+    } catch (err: any) {
+      setTelegramFeedback({ type: 'error', msg: 'Failed to unlink Telegram.' });
+    } finally {
+      setIsUnlinkingTelegram(false);
+    }
+  };
 
   useEffect(() => {
     if (currentUser.bankName) setBankName(currentUser.bankName);
@@ -539,54 +585,169 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
                 <Send size={18} className="text-sky-400" />
                 <h3 className="text-xl font-black text-white uppercase tracking-tighter">Bot Comms</h3>
               </div>
-              <p className="text-xs text-neutral-500 font-medium leading-relaxed">Encrypted real-time match synchronization.</p>
+              <p className="text-xs text-neutral-500 font-medium leading-relaxed">Automatic Telegram battle-room deployment & payout notifications.</p>
             </div>
-            <div className="px-3 py-1 rounded bg-sky-500/10 border border-sky-500/20 text-[9px] font-black text-sky-500 uppercase tracking-widest">AES-256 Active</div>
+            {currentUser.telegramChatId ? (
+              <div className="px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-[9px] font-black text-emerald-400 uppercase tracking-widest flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                <span>SYNCED</span>
+              </div>
+            ) : (
+              <div className="px-3 py-1 rounded bg-sky-500/10 border border-sky-500/20 text-[9px] font-black text-sky-400 uppercase tracking-widest">
+                1-TAP CONNECT
+              </div>
+            )}
           </div>
 
           <div className="space-y-6 relative z-10">
-             <div className="p-6 bg-black/40 rounded-2xl border border-neutral-800 space-y-4">
-                <div className="flex items-start gap-4">
-                  <div className="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 shrink-0"><Bell size={20} /></div>
-                  <div className="space-y-1">
-                    <p className="text-[11px] font-black text-white uppercase tracking-tight">Sync Protocol</p>
-                    <p className="text-[10px] text-neutral-500 leading-relaxed">Authorize your Telegram ID to receive instant battle-room deployments and prize confirmation alerts.</p>
-                  </div>
-                </div>
-
-                <div className="space-y-4 pt-4 border-t border-neutral-800/50">
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black text-neutral-600 uppercase tracking-[0.2em] ml-2">Handshake Chat ID</label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={telegramChatId}
-                        onChange={(e) => setTelegramChatId(e.target.value)}
-                        placeholder="e.g. 987654321"
-                        className="flex-1 bg-black/80 border border-neutral-800 rounded-2xl px-5 py-4 text-sm font-mono font-bold text-sky-400 focus:border-sky-400 focus:outline-none transition-all"
-                      />
-                      <button onClick={handleSaveTelegramId} disabled={isSavingTelegram} className="px-6 bg-sky-500 text-black font-black uppercase text-[10px] tracking-widest rounded-2xl hover:bg-sky-400 transition-all disabled:opacity-30">
-                        {isSavingTelegram ? <Loader2 size={16} className="animate-spin" /> : 'SAVE'}
-                      </button>
+            {currentUser.telegramChatId ? (
+              /* ALREADY CONNECTED VIEW */
+              <div className="p-6 bg-gradient-to-b from-sky-500/10 to-black/60 rounded-2xl border-2 border-sky-500/40 space-y-4">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-sky-500/20 border border-sky-500/40 flex items-center justify-center text-sky-400 shrink-0">
+                      <CheckCircle2 size={22} className="text-emerald-400" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-black text-white uppercase tracking-tight flex items-center gap-2">
+                        <span>Telegram Bot Connected</span>
+                        <span className="text-[10px] text-sky-400 font-mono">@{currentUser.telegramUsername || botUsername}</span>
+                      </div>
+                      <p className="text-[11px] font-mono text-neutral-400">
+                        Chat ID: <span className="text-sky-300 font-bold">{currentUser.telegramChatId}</span>
+                      </p>
                     </div>
                   </div>
+                  <span className="px-2.5 py-1 rounded bg-emerald-500/20 border border-emerald-500/40 text-[9px] font-black text-emerald-400 uppercase tracking-widest">
+                    ACTIVE
+                  </span>
+                </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                    <button onClick={() => window.open('https://t.me/userinfobot', '_blank')} className="px-4 py-3 bg-neutral-800 rounded-xl text-[10px] font-black text-neutral-400 uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-neutral-700 transition-all">
-                      <User size={14} /> Get ID
+                <p className="text-xs text-neutral-300 leading-relaxed">
+                  Your Telegram is active. You will receive live notifications when a rival accepts your wagers, battle room codes, result confirmations, and instant payout notices.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleSendTestAlert}
+                    disabled={isSendingTestAlert}
+                    className="py-3 px-4 bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 rounded-xl text-[10px] font-black text-sky-300 uppercase tracking-widest flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
+                  >
+                    {isSendingTestAlert ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                    <span>Test Ping</span>
+                  </button>
+
+                  <a
+                    href={`https://t.me/${botUsername}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="py-3 px-4 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-xl text-[10px] font-black text-neutral-200 uppercase tracking-widest flex items-center justify-center gap-2 transition-all active:scale-95 cursor-pointer text-center"
+                  >
+                    <ExternalLink size={14} />
+                    <span>Open Chat</span>
+                  </a>
+
+                  <button
+                    type="button"
+                    onClick={handleUnlinkTelegram}
+                    disabled={isUnlinkingTelegram}
+                    className="py-3 px-4 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 rounded-xl text-[10px] font-black text-rose-400 uppercase tracking-widest flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
+                  >
+                    {isUnlinkingTelegram ? <Loader2 size={14} className="animate-spin" /> : <LogOut size={14} />}
+                    <span>Disconnect</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* 1-TAP DEEP LINK AUTO-CONNECT CARD */
+              <div className="p-6 bg-gradient-to-b from-sky-500/15 via-black/50 to-neutral-950 rounded-2xl border-2 border-sky-400/40 shadow-2xl space-y-5">
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 rounded-2xl bg-sky-500/20 border border-sky-400/40 flex items-center justify-center text-sky-400 shrink-0 shadow-lg">
+                    <Send size={24} className="animate-pulse" />
+                  </div>
+                  <div className="space-y-1">
+                    <h4 className="text-sm font-black text-white uppercase tracking-wider flex items-center gap-2">
+                      <span>1-Tap Automatic Telegram Sync</span>
+                      <span className="text-[9px] px-2 py-0.5 rounded bg-sky-400 text-neutral-950 font-black">FAST</span>
+                    </h4>
+                    <p className="text-xs text-neutral-300 leading-relaxed">
+                      Tap the deep link button below. Telegram will open directly with our bot. Simply press <strong className="text-sky-300 font-bold">"START"</strong> in the chat, and your account is linked automatically!
+                    </p>
+                  </div>
+                </div>
+
+                {/* Primary 1-Tap Action Button */}
+                <div className="space-y-3">
+                  <a
+                    href={telegramDeepLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-4 px-6 bg-gradient-to-r from-sky-400 via-sky-500 to-blue-600 hover:from-sky-300 hover:to-blue-500 text-neutral-950 font-black rounded-2xl text-xs uppercase tracking-widest shadow-[0_10px_30px_rgba(56,189,248,0.25)] flex items-center justify-center gap-3 transition-all active:scale-95 cursor-pointer text-center group"
+                  >
+                    <Send size={18} className="group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
+                    <span>LINK TELEGRAM BOT IN 1-TAP</span>
+                    <ExternalLink size={14} className="opacity-70" />
+                  </a>
+
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-1 text-[11px] text-neutral-400">
+                    <button
+                      type="button"
+                      onClick={handleCopyBotLink}
+                      className="text-sky-400 hover:text-sky-300 font-bold flex items-center gap-1.5 cursor-pointer underline"
+                    >
+                      {copiedBotLink ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                      <span>{copiedBotLink ? 'Deep Link Copied!' : 'Copy Direct Bot Link'}</span>
                     </button>
-                    <button onClick={handleSendTestAlert} disabled={isSendingTestAlert || !telegramChatId} className="px-4 py-3 bg-neutral-800 border border-sky-500/20 rounded-xl text-[10px] font-black text-sky-400 uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-sky-500/10 transition-all disabled:opacity-30">
-                      {isSendingTestAlert ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Ping Test
+
+                    <button
+                      type="button"
+                      onClick={() => setShowManualChatId(!showManualChatId)}
+                      className="text-neutral-500 hover:text-neutral-300 font-medium cursor-pointer"
+                    >
+                      {showManualChatId ? '▲ Hide Manual Entry' : '▼ Having trouble? Enter Chat ID manually'}
                     </button>
                   </div>
                 </div>
-             </div>
+
+                {/* Optional Manual Fallback */}
+                {showManualChatId && (
+                  <div className="p-4 bg-black/70 rounded-xl border border-neutral-800 space-y-3 animate-in slide-in-from-top-2">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black text-neutral-500 uppercase tracking-wider block">
+                        Manual Telegram Chat ID (Fallback)
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={telegramChatId}
+                          onChange={(e) => setTelegramChatId(e.target.value)}
+                          placeholder="e.g. 987654321"
+                          className="flex-1 bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3 text-xs font-mono font-bold text-sky-400 focus:border-sky-400 focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleSaveTelegramId}
+                          disabled={isSavingTelegram}
+                          className="px-5 bg-sky-500 hover:bg-sky-400 text-neutral-950 font-black uppercase text-[10px] tracking-wider rounded-xl transition-all disabled:opacity-50 cursor-pointer"
+                        >
+                          {isSavingTelegram ? <Loader2 size={14} className="animate-spin" /> : 'SAVE'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
              
-             {telegramFeedback && (
-               <div className={`p-4 rounded-xl border text-[10px] font-black uppercase tracking-widest animate-in slide-in-from-top-2 ${telegramFeedback.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400'}`}>
-                 {telegramFeedback.msg}
-               </div>
-             )}
+            {telegramFeedback && (
+              <div className={`p-4 rounded-xl border text-[10px] font-black uppercase tracking-widest animate-in slide-in-from-top-2 flex items-center gap-2 ${
+                telegramFeedback.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+              }`}>
+                {telegramFeedback.type === 'success' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+                <span>{telegramFeedback.msg}</span>
+              </div>
+            )}
           </div>
         </section>
       </div>

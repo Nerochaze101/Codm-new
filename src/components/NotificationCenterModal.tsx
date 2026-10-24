@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X, Bell, BellRing, BellOff, Swords, Zap, AlertTriangle,
-  Trophy, Shield, Trash2, Check, ExternalLink, Sparkles, Smartphone
+  Trophy, Shield, Trash2, Check, ExternalLink, Sparkles, Smartphone, Send, CheckCircle2
 } from 'lucide-react';
+import { UserProfile } from '../types';
 import {
   NotificationPayload,
   requestNotificationPermission,
@@ -19,6 +20,7 @@ interface NotificationCenterModalProps {
   notifications: NotificationPayload[];
   onClearNotifications: () => void;
   onNavigateToMatch?: (url?: string) => void;
+  currentUser?: UserProfile;
 }
 
 export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = ({
@@ -27,8 +29,19 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
   notifications,
   onClearNotifications,
   onNavigateToMatch,
+  currentUser,
 }) => {
   const [showIOSGuide, setShowIOSGuide] = useState(false);
+  const [botUsername, setBotUsername] = useState('OpsSTAKEBOT');
+
+  useEffect(() => {
+    fetch('/api/telegram/bot-info')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.botUsername) setBotUsername(d.botUsername);
+      })
+      .catch(() => {});
+  }, []);
 
   if (!isOpen) return null;
 
@@ -146,6 +159,66 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
               )}
             </div>
           </div>
+
+          {/* Telegram Bot Direct Comms Integration */}
+          {currentUser && currentUser.id !== 'guest' && (
+            <div className="mt-2.5 p-3.5 rounded-2xl bg-neutral-900 border border-neutral-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div
+                  className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                    currentUser.telegramChatId
+                      ? 'bg-sky-500/10 text-sky-400 border border-sky-500/30'
+                      : 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
+                  }`}
+                >
+                  <Send size={18} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-white">Telegram Battle Comms</span>
+                    <span
+                      className={`text-[10px] font-black uppercase px-1.5 py-0.5 rounded ${
+                        currentUser.telegramChatId
+                          ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                          : 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
+                      }`}
+                    >
+                      {currentUser.telegramChatId ? 'SYNCED' : '1-TAP LINK'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-neutral-400 mt-0.5">
+                    {currentUser.telegramChatId
+                      ? `Connected to @${botUsername} (Chat ID: ${currentUser.telegramChatId}). Instant alerts active.`
+                      : 'Never miss a challenge! Receive instant Telegram messages when rivals join or funds pay out.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="shrink-0 flex items-center gap-2">
+                {currentUser.telegramChatId ? (
+                  <a
+                    href={`https://t.me/${botUsername}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-sky-300 font-semibold text-xs rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <ExternalLink size={13} />
+                    <span>Open Bot</span>
+                  </a>
+                ) : (
+                  <a
+                    href={`https://t.me/${botUsername}?start=link_${currentUser.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 bg-gradient-to-r from-sky-400 to-blue-500 hover:from-sky-300 hover:to-blue-400 text-neutral-950 font-black text-xs uppercase rounded-xl transition-all shadow-md shadow-sky-500/20 cursor-pointer active:scale-95 flex items-center gap-1.5"
+                  >
+                    <Send size={13} />
+                    <span>Link Bot in 1-Tap</span>
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Alerts List */}

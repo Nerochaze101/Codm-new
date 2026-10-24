@@ -260,6 +260,31 @@ function MainApp() {
         setCurrentUser(updatedUser);
       }
     });
+
+    socket.on('userUpdated', (updatedUser) => {
+      if (updatedUser && updatedUser.id === currentUser.id) {
+        setCurrentUser(updatedUser);
+      }
+    });
+
+    socket.on('telegramLinked', (payload: any) => {
+      if (payload && payload.userId === currentUser.id) {
+        const tgHandle = payload.telegramUsername || payload.username;
+        triggerNotificationAlert({
+          id: `alert_tg_${Date.now()}`,
+          title: '🤖 Telegram Bot Linked Successfully!',
+          body: tgHandle
+            ? `@${tgHandle} is connected. You'll now receive instant battle wagers and escrow payout alerts!`
+            : 'Your Telegram account is connected. Instant battle notifications active!',
+          soundType: 'match_started',
+          data: { url: '/profile' },
+        });
+        // Refresh full user state
+        fetchUser(currentUser.id).then((fresh) => {
+          if (fresh && fresh.id) setCurrentUser(fresh);
+        }).catch(() => {});
+      }
+    });
     
     return () => {
       socket.off('matchCreated');
@@ -268,6 +293,8 @@ function MainApp() {
       socket.off('matchUpdated');
       socket.off('matchJoined');
       socket.off('balanceUpdated');
+      socket.off('userUpdated');
+      socket.off('telegramLinked');
     };
   }, [currentUser.id, triggerNotificationAlert]);
   const [isMatchesLoading, setIsMatchesLoading] = useState<boolean>(true);
@@ -880,6 +907,7 @@ function MainApp() {
         isOpen={isNotificationCenterOpen}
         onClose={() => setIsNotificationCenterOpen(false)}
         notifications={notifications}
+        currentUser={currentUser}
         onClearNotifications={() => {
           setNotifications([]);
           try {

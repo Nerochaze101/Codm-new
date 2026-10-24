@@ -4184,6 +4184,268 @@ app.post('/api/telegram/test-alert', async (req, res) => {
   }
 });
 
+// ==========================================
+// 🤖 TELEGRAM BOT AUTO-LINKING & POLLING
+// ==========================================
+let telegramBotRunning = false;
+let lastTelegramUpdateOffset = 0;
+let cachedTelegramBotInfo: { id: number; username: string; firstName: string } | null = null;
+
+export async function fetchTelegramBotInfo() {
+  if (!TELEGRAM_BOT_TOKEN) return null;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe`);
+    const data: any = await res.json();
+    if (data.ok && data.result) {
+      cachedTelegramBotInfo = {
+        id: data.result.id,
+        username: data.result.username,
+        firstName: data.result.first_name,
+      };
+      return cachedTelegramBotInfo;
+    }
+  } catch (err: any) {
+    console.warn('[Telegram Bot] Failed to fetch bot info:', err.message);
+  }
+  return null;
+}
+
+export async function handleTelegramMessage(message: any) {
+  if (!message || !message.chat) return;
+  const chatId = String(message.chat.id);
+  const text = (message.text || '').trim();
+  const from = message.from || {};
+  const telegramUsername = from.username || '';
+  const senderName = from.first_name ? `${from.first_name} ${from.last_name || ''}`.trim() : (telegramUsername || 'Gladiator');
+
+  console.log(`[Telegram Bot] Inbound msg from ${chatId} (@${telegramUsername || 'anon'}): "${text}"`);
+
+  // Handle /start with deep link parameter: /start link_<userId> or /start <userId>
+  if (text.startsWith('/start')) {
+    const parts = text.split(/\s+/);
+    const rawPayload = parts.length > 1 ? parts[1].trim() : '';
+    // Strip optional "link_" prefix
+    const targetUserId = rawPayload.replace(/^link_/, '').trim();
+
+    if (targetUserId) {
+      // Find matching user in database
+      let user = await getUserFromDb(targetUserId);
+      if (!user) {
+        // Try searching by referral_code, username, or codm_ign
+        const findRes = await pool.query(`
+          SELECT * FROM users 
+          WHERE id = ${escapeSql(targetUserId)} 
+             OR referral_code = ${escapeSql(targetUserId)} 
+             OR LOWER(username) = LOWER(${escapeSql(targetUserId)})
+             OR LOWER(codm_ign) = LOWER(${escapeSql(targetUserId)})
+          LIMIT 1
+        `);
+        if (findRes.rows.length > 0) {
+          user = await getUserFromDb(findRes.rows[0].id);
+        }
+      }
+
+      if (user) {
+        // Automatically link this Telegram Chat ID and username!
+        await pool.query(`
+          UPDATE users 
+          SET telegram_chat_id = ${escapeSql(chatId)},
+              telegram_username = ${telegramUsername ? escapeSql(telegramUsername) : 'telegram_username'}
+          WHERE id = ${escapeSql(user.id)}
+        `);
+
+        const updatedUser = await getUserFromDb(user.id);
+
+        // Notify client via WebSockets immediately!
+        if (globalIo) {
+          globalIo.emit('userUpdated', updatedUser);
+          globalIo.emit('telegramLinked', {
+            userId: user.id,
+            chatId,
+            telegramUsername,
+            codmIgn: user.codmIgn,
+          });
+        }
+
+        console.log(`✅ [Telegram Bot] User ${user.codmIgn} (${user.id}) automatically linked to Chat ID ${chatId}!`);
+
+        const appUrl = (process.env.APP_URL || 'https://ops-stake.app').replace(/\/$/, '');
+
+        // Send instant welcome confirmation in Telegram chat
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text:
+              `🎮 <b>OPS STAKE · TELEGRAM LINKED SUCCESSFULLY!</b> 🎮\n\n` +
+              `✅ Welcome, <b>${user.codmIgn || user.username}</b>!\n` +
+              `Your Telegram account has been <b>automatically connected</b> to your OPS STAKE profile.\n\n` +
+              `🔒 <b>Linked Profile Details:</b>\n` +
+              `• CODM IGN: <b>${user.codmIgn}</b>\n` +
+              `• Chat ID: <code>${chatId}</code>\n` +
+              `• Current Balance: <b>₦${Number(user.balance || 0).toLocaleString()}</b>\n\n` +
+              `🔔 <b>What you will receive here in real-time:</b>\n` +
+              `⚔️ Instant alert when a rival accepts your wagers\n` +
+              `🔑 In-game CODM room codes as soon as matches deploy\n` +
+              `🏆 Wager result confirmations & instant payout alerts\n` +
+              `⚠️ Match conflict notifications & referee status updates\n\n` +
+              `🚀 <i>You are ready for battle! Return to the arena to deploy or accept challenges.</i>`,
+            parse_mode: 'HTML',
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '⚔️ OPEN ARENA NOW', url: `${appUrl}/arena` }
+                ]
+              ]
+            }
+          }),
+        });
+        return;
+      }
+    }
+
+    // Default /start without payload
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text:
+          `👋 <b>Welcome to OPS STAKE Tactical Bot!</b>\n\n` +
+          `Your Telegram Chat ID: <code>${chatId}</code>\n\n` +
+          `🔗 <b>How to Link Your Account:</b>\n` +
+          `1. Open <b>OPS STAKE</b> in your browser\n` +
+          `2. Go to <b>Profile</b> > <b>Bot Comms</b>\n` +
+          `3. Tap <b>"1-Tap Connect Bot"</b> to link automatically!\n\n` +
+          `Or copy your Chat ID <code>${chatId}</code> and paste it in your profile.`,
+        parse_mode: 'HTML',
+      }),
+    });
+    return;
+  }
+
+  // Handle /status or /myid
+  if (text === '/status' || text === '/myid') {
+    const userRes = await pool.query(`SELECT id, username, codm_ign, balance FROM users WHERE telegram_chat_id = ${escapeSql(chatId)} LIMIT 1`);
+    const linkedUser = userRes.rows[0];
+
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text:
+          `🤖 <b>OPS STAKE BOT STATUS</b>\n\n` +
+          `• Chat ID: <code>${chatId}</code>\n` +
+          `• Username: @${telegramUsername || 'N/A'}\n` +
+          (linkedUser
+            ? `• Linked Account: <b>${linkedUser.codm_ign}</b> (Balance: ₦${Number(linkedUser.balance || 0).toLocaleString()})\n• Status: 🟢 <b>ACTIVE & CONNECTED</b>`
+            : `• Status: ⚪ <b>NOT LINKED</b> (Use 1-Tap Connect in OPS STAKE)`),
+        parse_mode: 'HTML',
+      }),
+    });
+    return;
+  }
+
+  // Handle /unlink
+  if (text === '/unlink') {
+    await pool.query(`UPDATE users SET telegram_chat_id = NULL, telegram_username = NULL WHERE telegram_chat_id = ${escapeSql(chatId)}`);
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: `🔌 <b>Unlinked</b>: Your Telegram account has been disconnected from OPS STAKE. You can re-link anytime with 1-Tap Connect.`,
+        parse_mode: 'HTML',
+      }),
+    });
+    return;
+  }
+}
+
+export function startTelegramBotPolling() {
+  if (!TELEGRAM_BOT_TOKEN || telegramBotRunning) return;
+  telegramBotRunning = true;
+  console.log('🤖 Starting Telegram Bot polling loop for @OpsSTAKEBOT...');
+
+  fetchTelegramBotInfo().then((info) => {
+    if (info) {
+      console.log(`✅ [Telegram Bot] Active as @${info.username} (${info.firstName})`);
+    }
+  });
+
+  const poll = async () => {
+    try {
+      const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${lastTelegramUpdateOffset}&timeout=20`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(25000) });
+      const data: any = await res.json();
+
+      if (data.ok && Array.isArray(data.result)) {
+        for (const update of data.result) {
+          lastTelegramUpdateOffset = Math.max(lastTelegramUpdateOffset, update.update_id + 1);
+          if (update.message) {
+            await handleTelegramMessage(update.message).catch(err => {
+              console.error('[Telegram Bot] Error handling message:', err.message);
+            });
+          }
+        }
+      }
+    } catch (err: any) {
+      // transient timeout or network error, ignore and continue
+    } finally {
+      if (telegramBotRunning) {
+        setTimeout(poll, 1500);
+      }
+    }
+  };
+
+  poll();
+}
+
+// Endpoint to get bot info and deep link prefix
+app.get('/api/telegram/bot-info', async (req, res) => {
+  if (!TELEGRAM_BOT_TOKEN) {
+    return res.json({ configured: false, error: 'Telegram Bot token not set' });
+  }
+
+  const info = cachedTelegramBotInfo || (await fetchTelegramBotInfo());
+  const username = info?.username || 'OpsSTAKEBOT';
+
+  res.json({
+    configured: true,
+    botUsername: username,
+    botFirstName: info?.firstName || 'OPS STAKE',
+    deepLinkPrefix: `https://t.me/${username}?start=link_`,
+  });
+});
+
+// Endpoint to unlink Telegram from web profile
+app.post('/api/telegram/unlink', async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: 'userId is required' });
+
+  await pool.query(`UPDATE users SET telegram_chat_id = NULL, telegram_username = NULL WHERE id = ${escapeSql(userId)}`);
+  const updatedUser = await getUserFromDb(userId);
+
+  if (globalIo) {
+    globalIo.emit('userUpdated', updatedUser);
+  }
+
+  res.json({ success: true, message: 'Telegram account unlinked successfully', user: updatedUser });
+});
+
+// Telegram Webhook endpoint for dual-mode support
+app.post('/api/telegram/webhook', async (req, res) => {
+  const update = req.body;
+  if (update?.message) {
+    handleTelegramMessage(update.message).catch(err => {
+      console.error('[Telegram Webhook Error]:', err.message);
+    });
+  }
+  res.json({ ok: true });
+});
+
 // Endpoint to test Telegram Public Channel post
 app.post('/api/telegram/test-channel-post', async (req, res) => {
   const { channelId } = req.body;
@@ -6280,6 +6542,13 @@ async function startServer() {
       setInterval(sweepAbandonedMatches, 3 * 60 * 1000);
     } catch (err: any) {
       console.warn('⚠️ Match sweeper init error:', err.message);
+    }
+
+    try {
+      startTelegramBotPolling();
+      console.log('✅ Telegram Bot polling service initialized');
+    } catch (err: any) {
+      console.warn('⚠️ Telegram Bot init error (handled non-fatally):', err.message);
     }
   })();
 
