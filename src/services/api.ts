@@ -31,7 +31,9 @@ export async function parseResponse<T = any>(res: Response): Promise<T> {
 }
 
 export async function fetchUser(userId: string): Promise<UserProfile> {
-  const res = await fetch(`/api/users/${userId}`);
+  const res = await fetch(`/api/users/${userId}`, {
+    headers: { 'X-User-Id': userId },
+  });
   return await parseResponse<UserProfile>(res);
 }
 
@@ -270,7 +272,7 @@ export async function updateUser(userId: string, data: Partial<UserProfile>): Pr
   try {
     const res = await fetch(`/api/users/${userId}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
       body: JSON.stringify(data),
     });
     if (res.ok) return await res.json();
@@ -311,7 +313,9 @@ export async function fetchAdminWithdrawals(adminUserId: string, status?: string
   const url = status && status !== 'all' 
     ? `/api/msksksnuwje/withdrawals?userId=${encodeURIComponent(adminUserId)}&status=${encodeURIComponent(status)}`
     : `/api/msksksnuwje/withdrawals?userId=${encodeURIComponent(adminUserId)}`;
-  const res = await fetch(url);
+  const res = await fetch(url, {
+    headers: { 'X-Admin-Id': adminUserId },
+  });
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || 'Failed to fetch withdrawal requests');
@@ -323,7 +327,7 @@ export async function fetchAdminWithdrawals(adminUserId: string, status?: string
 export async function approveAdminWithdrawal(adminUserId: string, withdrawalId: string) {
   const res = await fetch(`/api/msksksnuwje/withdrawals/${withdrawalId}/approve`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
     body: JSON.stringify({ adminUserId }),
   });
   if (!res.ok) {
@@ -336,7 +340,7 @@ export async function approveAdminWithdrawal(adminUserId: string, withdrawalId: 
 export async function rejectAdminWithdrawal(adminUserId: string, withdrawalId: string, reason?: string) {
   const res = await fetch(`/api/msksksnuwje/withdrawals/${withdrawalId}/reject`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
     body: JSON.stringify({ adminUserId, reason }),
   });
   if (!res.ok) {
@@ -350,7 +354,9 @@ export async function fetchAdminUsers(adminUserId: string, search?: string) {
   const url = search 
     ? `/api/msksksnuwje/users?userId=${encodeURIComponent(adminUserId)}&search=${encodeURIComponent(search)}`
     : `/api/msksksnuwje/users?userId=${encodeURIComponent(adminUserId)}`;
-  const res = await fetch(url);
+  const res = await fetch(url, {
+    headers: { 'X-Admin-Id': adminUserId },
+  });
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || 'Failed to fetch users');
@@ -362,7 +368,7 @@ export async function fetchAdminUsers(adminUserId: string, search?: string) {
 export async function assignUserRole(adminUserId: string, params: { targetUserId?: string; identifier?: string; role: 'admin' | 'user' }) {
   const res = await fetch('/api/msksksnuwje/assign-role', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
     body: JSON.stringify({ adminUserId, ...params }),
   });
   if (!res.ok) {
@@ -375,7 +381,7 @@ export async function assignUserRole(adminUserId: string, params: { targetUserId
 export async function claimAdminRole(userId: string, passcode?: string) {
   const res = await fetch('/api/msksksnuwje/claim-admin', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
     body: JSON.stringify({ userId, passcode }),
   });
   if (!res.ok) {
@@ -386,7 +392,9 @@ export async function claimAdminRole(userId: string, passcode?: string) {
 }
 
 export async function fetchAdminFinance(adminUserId: string) {
-  const res = await fetch(`/api/msksksnuwje/finance?userId=${encodeURIComponent(adminUserId)}`);
+  const res = await fetch(`/api/msksksnuwje/finance?userId=${encodeURIComponent(adminUserId)}`, {
+    headers: { 'X-Admin-Id': adminUserId },
+  });
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || 'Failed to load platform finance');
@@ -397,7 +405,7 @@ export async function fetchAdminFinance(adminUserId: string) {
 export async function withdrawPlatformFees(adminUserId: string, amount: number) {
   const res = await fetch('/api/msksksnuwje/withdraw', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
     body: JSON.stringify({ userId: adminUserId, amount }),
   });
   if (!res.ok) {
@@ -410,7 +418,7 @@ export async function withdrawPlatformFees(adminUserId: string, amount: number) 
 export async function adjustUserBalance(adminUserId: string, targetUserId: string, amount: number, type: 'credit' | 'debit', reason: string) {
   const res = await fetch(`/api/msksksnuwje/users/${targetUserId}/adjust-balance`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
     body: JSON.stringify({ adminUserId, amount, type, reason }),
   });
   if (!res.ok) {
@@ -424,7 +432,9 @@ export async function fetchAdminSmsAlerts(adminUserId: string, status?: string) 
   const url = status && status !== 'all'
     ? `/api/msksksnuwje/sms-alerts?userId=${encodeURIComponent(adminUserId)}&status=${encodeURIComponent(status)}`
     : `/api/msksksnuwje/sms-alerts?userId=${encodeURIComponent(adminUserId)}`;
-  const res = await fetch(url);
+  const res = await fetch(url, {
+    headers: { 'X-Admin-Id': adminUserId },
+  });
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || 'Failed to fetch SMS alerts');
@@ -436,7 +446,7 @@ export async function fetchAdminSmsAlerts(adminUserId: string, status?: string) 
 export async function assignSmsAlertToUser(adminUserId: string, alertId: string, targetUserId: string) {
   const res = await fetch(`/api/msksksnuwje/sms-alerts/${alertId}/assign`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
     body: JSON.stringify({ adminUserId, targetUserId }),
   });
   if (!res.ok) {
@@ -447,7 +457,9 @@ export async function assignSmsAlertToUser(adminUserId: string, alertId: string,
 }
 
 export async function fetchAdminDisputes(adminUserId: string): Promise<Match[]> {
-  const res = await fetch(`/api/msksksnuwje/disputes?userId=${encodeURIComponent(adminUserId)}`);
+  const res = await fetch(`/api/msksksnuwje/disputes?userId=${encodeURIComponent(adminUserId)}`, {
+    headers: { 'X-Admin-Id': adminUserId },
+  });
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || 'Failed to fetch disputes');
@@ -465,7 +477,9 @@ export interface ReviewQueueResponse {
 }
 
 export async function fetchReviewQueue(adminUserId: string): Promise<ReviewQueueResponse> {
-  const res = await fetch(`/api/msksksnuwje/review-queue?userId=${encodeURIComponent(adminUserId)}`);
+  const res = await fetch(`/api/msksksnuwje/review-queue?userId=${encodeURIComponent(adminUserId)}`, {
+    headers: { 'X-Admin-Id': adminUserId },
+  });
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || 'Failed to fetch review queue');
@@ -481,7 +495,7 @@ export async function adminResubmitMatch(params: {
 }): Promise<{ success: boolean; match: Match }> {
   const res = await fetch(`/api/msksksnuwje/matches/${params.matchId}/resubmit`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': params.adminUserId },
     body: JSON.stringify({
       userId: params.adminUserId,
       targetPlayerId: params.targetPlayerId,
@@ -502,7 +516,7 @@ export async function adminEscalateMatch(params: {
 }): Promise<{ success: boolean; match: Match }> {
   const res = await fetch(`/api/msksksnuwje/matches/${params.matchId}/escalate`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': params.adminUserId },
     body: JSON.stringify({
       userId: params.adminUserId,
       reason: params.reason,
@@ -523,7 +537,7 @@ export async function analyzeScreenshotForensic(params: {
 }) {
   const res = await fetch('/api/msksksnuwje/analyze-forensic', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': params.adminUserId },
     body: JSON.stringify(params),
   });
   if (!res.ok) {
@@ -588,7 +602,9 @@ export async function fetchAdminOpaySettings(adminUserId: string): Promise<{
     totalCreditedAmount: number;
   };
 }> {
-  const res = await fetch(`/api/msksksnuwje/opay/settings?userId=${encodeURIComponent(adminUserId)}`);
+  const res = await fetch(`/api/msksksnuwje/opay/settings?userId=${encodeURIComponent(adminUserId)}`, {
+    headers: { 'X-Admin-Id': adminUserId },
+  });
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || 'Failed to load OPay settings');
@@ -626,7 +642,9 @@ export interface AdminEmailItem {
 }
 
 export async function fetchGmailConfig(adminUserId: string): Promise<GmailIntegrationStatus> {
-  const res = await fetch(`/api/msksksnuwje/gmail/config?userId=${encodeURIComponent(adminUserId)}`);
+  const res = await fetch(`/api/msksksnuwje/gmail/config?userId=${encodeURIComponent(adminUserId)}`, {
+    headers: { 'X-Admin-Id': adminUserId },
+  });
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || 'Failed to fetch Gmail status');
@@ -642,7 +660,7 @@ export async function saveGmailCredentials(
 ) {
   const res = await fetch('/api/msksksnuwje/gmail/config', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
     body: JSON.stringify({ userId: adminUserId, gmailAddress, appPassword, autoSync }),
   });
   if (!res.ok) {
@@ -659,7 +677,7 @@ export async function testGmailApiConnection(
 ) {
   const res = await fetch('/api/msksksnuwje/gmail/test', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
     body: JSON.stringify({ userId: adminUserId, gmailAddress, appPassword }),
   });
   if (!res.ok) {
@@ -672,7 +690,7 @@ export async function testGmailApiConnection(
 export async function triggerGmailSync(adminUserId: string) {
   const res = await fetch('/api/msksksnuwje/gmail/sync', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
     body: JSON.stringify({ userId: adminUserId }),
   });
   if (!res.ok) {
@@ -685,7 +703,7 @@ export async function triggerGmailSync(adminUserId: string) {
 export async function disconnectGmailAccount(adminUserId: string) {
   const res = await fetch('/api/msksksnuwje/gmail/disconnect', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
     body: JSON.stringify({ userId: adminUserId }),
   });
   if (!res.ok) {
@@ -696,7 +714,9 @@ export async function disconnectGmailAccount(adminUserId: string) {
 }
 
 export async function fetchAdminMailbox(adminUserId: string): Promise<AdminEmailItem[]> {
-  const res = await fetch(`/api/msksksnuwje/mailbox?userId=${encodeURIComponent(adminUserId)}`);
+  const res = await fetch(`/api/msksksnuwje/mailbox?userId=${encodeURIComponent(adminUserId)}`, {
+    headers: { 'X-Admin-Id': adminUserId },
+  });
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || 'Failed to fetch mailbox');
@@ -708,7 +728,7 @@ export async function fetchAdminMailbox(adminUserId: string): Promise<AdminEmail
 export async function markAdminEmailRead(adminUserId: string, emailId: string, isRead: boolean = true) {
   const res = await fetch(`/api/msksksnuwje/mailbox/${emailId}/read`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
     body: JSON.stringify({ userId: adminUserId, isRead }),
   });
   if (!res.ok) {
@@ -721,7 +741,7 @@ export async function markAdminEmailRead(adminUserId: string, emailId: string, i
 export async function deleteAdminEmail(adminUserId: string, emailId: string) {
   const res = await fetch(`/api/msksksnuwje/mailbox/${emailId}`, {
     method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
     body: JSON.stringify({ userId: adminUserId }),
   });
   if (!res.ok) {
@@ -734,7 +754,7 @@ export async function deleteAdminEmail(adminUserId: string, emailId: string) {
 export async function cleanupVerifiedAdminMails(adminUserId: string): Promise<{ success: boolean; count: number; message: string }> {
   const res = await fetch('/api/msksksnuwje/mailbox/cleanup-verified', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
     body: JSON.stringify({ userId: adminUserId }),
   });
   if (!res.ok) {

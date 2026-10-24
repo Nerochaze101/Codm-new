@@ -730,6 +730,74 @@ app.post('/api/inbound-email', express.json({ limit: '5mb' }), async (req, res) 
   }
 });
 
+// Public Profile Sanitization Helpers to prevent PII (email, bank info, phone) leakage
+export function sanitizePublicPlayerProfile(player: any): any {
+  if (!player) return undefined;
+  return {
+    id: player.id,
+    username: player.username || player.codmIgn || 'Gladiator',
+    codmIgn: player.codmIgn || player.username || 'Gladiator',
+    codmUid: player.codmUid || '',
+    avatar: player.avatar || '',
+    staked: Boolean(player.staked),
+    resultClaim: player.resultClaim,
+    submittedAt: player.submittedAt,
+    screenshotUrl: player.screenshotUrl,
+    screenshotAnalysis: player.screenshotAnalysis,
+    systemAiDetection: player.systemAiDetection,
+    forensicAnalysis: player.forensicAnalysis,
+    resubmissionRequested: player.resubmissionRequested,
+    resubmissionReason: player.resubmissionReason,
+  };
+}
+
+export function sanitizeMatchForPublic(match: Match): Match {
+  if (!match) return match;
+  return {
+    ...match,
+    creator: sanitizePublicPlayerProfile(match.creator),
+    opponent: match.opponent ? sanitizePublicPlayerProfile(match.opponent) : undefined,
+  };
+}
+
+async function isUserOrAdmin(req: any, targetUserId: string): Promise<boolean> {
+  const requesterId = req.headers['x-user-id'] || req.headers['x-admin-id'] || req.body?.userId || req.body?.adminUserId || req.query?.userId || req.query?.adminUserId;
+  if (!requesterId) return false;
+  if (String(requesterId) === String(targetUserId)) return true;
+  const requesterUser = await getUserFromDb(String(requesterId));
+  return Boolean(requesterUser && requesterUser.role === 'admin');
+}
+
+// Strict Admin Authorization Middleware for all /api/msksksnuwje/ endpoints
+async function requireAdminAuth(req: any, res: any, next: any) {
+  // Allow claim-admin endpoint to bypass middleware (it verifies passcode & owner email)
+  if (req.path === '/claim-admin' || req.path === '/claim-admin/') {
+    return next();
+  }
+
+  const userId =
+    req.headers['x-admin-id'] ||
+    req.headers['x-user-id'] ||
+    req.body?.adminUserId ||
+    req.body?.userId ||
+    req.query?.adminUserId ||
+    req.query?.userId;
+
+  if (!userId) {
+    return res.status(403).json({ error: 'Forbidden: Missing admin authentication credentials' });
+  }
+
+  const user = await getUserFromDb(String(userId));
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+  }
+
+  req.adminUser = user;
+  next();
+}
+
+app.use('/api/msksksnuwje', requireAdminAuth);
+
 // REST API ROUTES
 app.post('/api/msksksnuwje/withdraw', async (req, res) => {
   const { userId, amount } = req.body;
@@ -3348,10 +3416,45 @@ app.post('/api/flutterwave/resolve-account', handleResolveBankAccount);
 
 // Fetch user profile directly from PostgreSQL database
 app.get('/api/users/:id', async (req, res) => {
-  const user = await getUserFromDb(req.params.id);
+  const targetId = req.params.id;
+  const user = await getUserFromDb(targetId);
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
+
+  const requesterId = (req.headers['x-user-id'] || req.headers['x-admin-id'] || req.query.requesterId) as string;
+  let isAuthorized = false;
+
+  if (requesterId) {
+    if (String(requesterId) === String(targetId)) {
+      isAuthorized = true;
+    } else {
+      const requesterUser = await getUserFromDb(String(requesterId));
+      if (requesterUser && requesterUser.role === 'admin') {
+        isAuthorized = true;
+      }
+    }
+  }
+
+  // If unauthorized to view private details, return public profile fields only
+  if (!isAuthorized) {
+    const publicProfile = {
+      id: user.id,
+      username: user.username,
+      codmIgn: user.codmIgn,
+      codmUid: user.codmUid,
+      tier: user.tier,
+      clan: user.clan,
+      avatar: user.avatar,
+      wins: user.wins,
+      losses: user.losses,
+      draws: user.draws,
+      totalWinnings: user.totalWinnings,
+      role: user.role,
+    };
+    return res.json(publicProfile);
+  }
+
   res.json(user);
 });
 
@@ -3515,6 +3618,10 @@ app.post('/api/users', async (req, res) => {
 // Update User Profile directly in database - atomic update of profile fields only (never touches balance or ledger)
 app.patch('/api/users/:id', async (req, res) => {
   const userId = req.params.id;
+  if (!(await isUserOrAdmin(req, userId))) {
+    return res.status(403).json({ error: 'Unauthorized: Cannot modify profile of another user' });
+  }
+
   const user = await getUserFromDb(userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
@@ -3546,6 +3653,9 @@ app.patch('/api/users/:id', async (req, res) => {
 app.put('/api/users/:id/bank-details', async (req, res) => {
   try {
     const userId = req.params.id;
+    if (!(await isUserOrAdmin(req, userId))) {
+      return res.status(403).json({ error: 'Unauthorized: Cannot modify bank details of another user' });
+    }
     const { bankName, accountNumber, accountName } = req.body;
 
     if (!bankName || !accountNumber || !accountName) {
@@ -3583,6 +3693,9 @@ app.put('/api/users/:id/bank-details', async (req, res) => {
 app.post('/api/users/:id/bank-details', async (req, res) => {
   try {
     const userId = req.params.id;
+    if (!(await isUserOrAdmin(req, userId))) {
+      return res.status(403).json({ error: 'Unauthorized: Cannot modify bank details of another user' });
+    }
     const { bankName, accountNumber, accountName } = req.body;
 
     if (!bankName || !accountNumber || !accountName) {
@@ -4215,6 +4328,28 @@ app.post('/api/telegram/test-alert', async (req, res) => {
   }
 });
 
+// Endpoint to fetch Telegram Bot info and official channel URL
+app.get('/api/telegram/bot-info', async (req, res) => {
+  const info = await fetchTelegramBotInfo();
+  res.json({
+    botUsername: info?.username || process.env.TELEGRAM_BOT_USERNAME || 'OpsSTAKEBOT',
+    channelUrl: 'https://t.me/OpsSTAKE',
+  });
+});
+
+// Endpoint to unlink Telegram account for user
+app.post('/api/telegram/unlink', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (userId) {
+      await pool.query(`UPDATE users SET telegram_chat_id = NULL, telegram_username = NULL WHERE id = ${escapeSql(userId)}`);
+    }
+    res.json({ success: true, message: 'Telegram account unlinked successfully' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to unlink Telegram account' });
+  }
+});
+
 // ==========================================
 // 🤖 TELEGRAM BOT AUTO-LINKING & POLLING
 // ==========================================
@@ -4242,8 +4377,8 @@ export async function fetchTelegramBotInfo() {
 }
 
 async function checkChannelMembership(userId: number | string): Promise<boolean> {
-  const channelName = process.env.TELEGRAM_CHANNEL_USERNAME || '@OpsSTAKE';
-  if (!TELEGRAM_BOT_TOKEN) return true;
+  const channelName = process.env.TELEGRAM_CHANNEL_USERNAME;
+  if (!channelName || !TELEGRAM_BOT_TOKEN) return true;
   try {
     const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${encodeURIComponent(channelName)}&user_id=${userId}`);
     const data: any = await res.json();
@@ -4254,7 +4389,7 @@ async function checkChannelMembership(userId: number | string): Promise<boolean>
   } catch (err: any) {
     console.warn('[Telegram Bot] Channel membership check error:', err.message);
   }
-  return false;
+  return true;
 }
 
 export async function handleTelegramCallbackQuery(cq: any) {
@@ -4687,14 +4822,14 @@ app.post('/api/telegram/test-channel-post', async (req, res) => {
 // List all active matches directly from database
 app.get('/api/matches', async (req, res) => {
   const matchList = await getAllMatchesFromDb();
-  res.json(matchList);
+  res.json(matchList.map(m => sanitizeMatchForPublic(m)));
 });
 
 // Get match by id directly from database
 app.get('/api/matches/:id', async (req, res) => {
   const match = await getMatchFromDb(req.params.id);
   if (!match) return res.status(404).json({ error: 'Match not found' });
-  res.json(match);
+  res.json(sanitizeMatchForPublic(match));
 });
 
 // Create new 1v1 match challenge directly in database

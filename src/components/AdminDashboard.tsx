@@ -240,7 +240,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     try {
       const res = await fetch('/api/telegram/test-channel-post', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Id': currentUser.id },
         body: JSON.stringify({ userId: currentUser.id }),
       });
       const data = await res.json();
