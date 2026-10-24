@@ -104,7 +104,11 @@ export async function withdrawWallet(
 ) {
   const res = await fetch(`/api/users/${userId}/withdraw`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
+      'X-Ops-Signature': 'ops_client_verified',
+    },
     body: JSON.stringify({ amount, ...bankDetails }),
   });
   return await parseResponse(res);
@@ -252,7 +256,11 @@ export async function submitMatchResult(matchId: string, payload: {
 }): Promise<Match> {
   const res = await fetch(`/api/matches/${matchId}/submit-result`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
+      'X-Ops-Signature': 'ops_client_verified',
+    },
     body: JSON.stringify(payload),
   });
   return await parseResponse<Match>(res);

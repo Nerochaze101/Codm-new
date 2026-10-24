@@ -35,6 +35,37 @@ process.on('unhandledRejection', (reason, promise) => {
 
 let globalIo: any = null;
 
+// Rate limiter and request signing security middleware for critical money movements & match results
+const requestRateLimits = new Map<string, { count: number; resetTime: number }>();
+
+function rateLimitMiddleware(maxRequests: number = 15, windowMs: number = 60000) {
+  return (req: any, res: any, next: any) => {
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    const key = `${ip}_${req.path}`;
+    const now = Date.now();
+
+    let record = requestRateLimits.get(key);
+    if (!record || now > record.resetTime) {
+      record = { count: 1, resetTime: now + windowMs };
+      requestRateLimits.set(key, record);
+    } else {
+      record.count++;
+      if (record.count > maxRequests) {
+        return res.status(429).json({ error: 'Rate limit exceeded: Too many requests. Automated bot protection active.' });
+      }
+    }
+    next();
+  };
+}
+
+function secureSignatureMiddleware(req: any, res: any, next: any) {
+  const sig = req.headers['x-ops-signature'] || req.headers['x-requested-with'] || req.headers['authorization'];
+  if (!sig && process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ error: 'Forbidden: Missing secure request signature or validation token.' });
+  }
+  next();
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -3792,7 +3823,7 @@ app.post('/api/msksksnuwje/test-cashout', async (req, res) => {
 const activeWithdrawalLocks = new Set<string>();
 
 // Wallet withdrawal with Flutterwave & Paystack Transfers API & atomic database update
-app.post('/api/users/:id/withdraw', async (req, res) => {
+app.post('/api/users/:id/withdraw', rateLimitMiddleware(10, 60000), secureSignatureMiddleware, async (req, res) => {
   const userId = req.params.id;
   if (activeWithdrawalLocks.has(userId)) {
     return res.status(429).json({ error: 'A withdrawal is currently in progress for this account. Please wait a moment.' });
@@ -4210,6 +4241,97 @@ export async function fetchTelegramBotInfo() {
   return null;
 }
 
+async function checkChannelMembership(userId: number | string): Promise<boolean> {
+  const channelName = process.env.TELEGRAM_CHANNEL_USERNAME || '@OpsSTAKE';
+  if (!TELEGRAM_BOT_TOKEN) return true;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${encodeURIComponent(channelName)}&user_id=${userId}`);
+    const data: any = await res.json();
+    if (data.ok && data.result) {
+      const status = data.result.status;
+      return ['member', 'creator', 'administrator'].includes(status);
+    }
+  } catch (err: any) {
+    console.warn('[Telegram Bot] Channel membership check error:', err.message);
+  }
+  return false;
+}
+
+export async function handleTelegramCallbackQuery(cq: any) {
+  if (!cq || !cq.data || !cq.message) return;
+  const chatId = String(cq.message.chat.id);
+  const data = cq.data;
+  const from = cq.from || {};
+  const userId = from.id;
+  const telegramUsername = from.username || '';
+
+  if (data.startsWith('verify_link_')) {
+    const targetUserId = data.replace('verify_link_', '').trim();
+    const isMember = await checkChannelMembership(userId);
+
+    if (isMember) {
+      let user = await getUserFromDb(targetUserId);
+      if (user) {
+        await pool.query(`
+          UPDATE users 
+          SET telegram_chat_id = ${escapeSql(chatId)},
+              telegram_username = ${telegramUsername ? escapeSql(telegramUsername) : 'telegram_username'}
+          WHERE id = ${escapeSql(user.id)}
+        `);
+        const updatedUser = await getUserFromDb(user.id);
+        if (globalIo) {
+          globalIo.emit('userUpdated', updatedUser);
+          globalIo.emit('telegramLinked', {
+            userId: user.id,
+            chatId,
+            telegramUsername,
+            codmIgn: user.codmIgn,
+          });
+        }
+
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ callback_query_id: cq.id, text: '✅ Channel verified! Account linked successfully.' }),
+        });
+
+        const appUrl = (process.env.APP_URL || 'https://ops-stake.app').replace(/\/$/, '');
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text:
+              `🎮 <b>OPS STAKE · TELEGRAM LINKED SUCCESSFULLY!</b> 🎮\n\n` +
+              `✅ Welcome, <b>${user.codmIgn || user.username}</b>!\n` +
+              `Channel membership verified in <b>@OpsSTAKE</b>. Your account is now fully connected.\n\n` +
+              `🔔 <b>What you will receive here in real-time:</b>\n` +
+              `⚔️ Instant alert when a rival accepts your wagers\n` +
+              `🔑 In-game CODM room codes as soon as matches deploy\n` +
+              `🏆 Wager result confirmations & instant payout alerts\n\n` +
+              `🚀 <i>You are ready for battle!</i>`,
+            parse_mode: 'HTML',
+            reply_markup: {
+              inline_keyboard: [[ { text: '⚔️ OPEN ARENA NOW', url: `${appUrl}/arena` } ]]
+            }
+          }),
+        });
+        return;
+      }
+    } else {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          callback_query_id: cq.id,
+          text: '❌ You have not joined @OpsSTAKE yet! Please join the channel first.',
+          show_alert: true,
+        }),
+      });
+    }
+  }
+}
+
 export async function handleTelegramMessage(message: any) {
   if (!message || !message.chat) return;
   const chatId = String(message.chat.id);
@@ -4246,6 +4368,39 @@ export async function handleTelegramMessage(message: any) {
       }
 
       if (user) {
+        // Enforce channel membership join check!
+        const isMember = await checkChannelMembership(from.id);
+        const channelName = process.env.TELEGRAM_CHANNEL_USERNAME || '@OpsSTAKE';
+
+        if (!isMember) {
+          await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text:
+                `📢 <b>MANDATORY CHANNEL SUBSCRIPTION REQUIRED!</b> 📢\n\n` +
+                `Hello <b>${user.codmIgn || user.username}</b>!\n` +
+                `To link your Telegram account and receive instant match room codes, escrow wagers, and payout alerts, you must join our official live updates channel: <b>${channelName}</b>.\n\n` +
+                `<b>How to complete linking:</b>\n` +
+                `1. Tap <b>'📢 1. JOIN CHANNEL NOW'</b> below\n` +
+                `2. Join the channel, then return here and tap <b>'✅ 2. I HAVE JOINED (FINISH LINKING)'</b>`,
+              parse_mode: 'HTML',
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: '📢 1. JOIN CHANNEL NOW', url: `https://t.me/${channelName.replace('@', '')}` }
+                  ],
+                  [
+                    { text: '✅ 2. I HAVE JOINED (FINISH LINKING)', callback_data: `verify_link_${user.id}` }
+                  ]
+                ]
+              }
+            }),
+          });
+          return;
+        }
+
         // Automatically link this Telegram Chat ID and username!
         await pool.query(`
           UPDATE users 
@@ -4387,6 +4542,10 @@ export function startTelegramBotPolling() {
           if (update.message) {
             await handleTelegramMessage(update.message).catch(err => {
               console.error('[Telegram Bot] Error handling message:', err.message);
+            });
+          } else if (update.callback_query) {
+            await handleTelegramCallbackQuery(update.callback_query).catch(err => {
+              console.error('[Telegram Bot] Error handling callback query:', err.message);
             });
           }
         }
@@ -5319,7 +5478,7 @@ export function computeMatchConflictReasons(match: any): { conflictReason: strin
 }
 
 // Submit screenshot and match claim directly in database
-app.post('/api/matches/:id/submit-result', async (req, res) => {
+app.post('/api/matches/:id/submit-result', rateLimitMiddleware(15, 60000), secureSignatureMiddleware, async (req, res) => {
   const match = await getMatchFromDb(req.params.id);
   if (!match) return res.status(404).json({ error: 'Match not found' });
 
@@ -5517,7 +5676,32 @@ app.post('/api/matches/:id/submit-result', async (req, res) => {
     match.status = 'SETTLED';
     match.winnerId = winnerObj.id;
     match.winnerIgn = winnerObj.codmIgn;
-    await updatePlatformFinance(match.platformFee);
+
+    // Process referral bonuses from platform fee (10% to each referrer)
+    const platformFee = match.platformFee || Math.round(match.potAmount * 0.10);
+    const bonusPerReferrer = Math.floor(platformFee * 0.10);
+    const referrers = [];
+    if (winnerUser?.referredBy) referrers.push(winnerUser.referredBy);
+    if (loserUser?.referredBy) referrers.push(loserUser.referredBy);
+    
+    for (const referrerId of [...new Set(referrers)]) { // Unique referrers
+      await pool.query(`
+        UPDATE users 
+        SET balance = balance + ${escapeSql(bonusPerReferrer)},
+            total_referral_earnings = COALESCE(total_referral_earnings, 0) + ${escapeSql(bonusPerReferrer)}
+        WHERE id = ${escapeSql(referrerId)}
+      `);
+      await saveTransactionToDb(referrerId, {
+        id: `tx_ref_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+        type: 'REFERRAL_EARNING',
+        amount: bonusPerReferrer,
+        description: `10% Referral bonus from match #${match.roomCode || match.challengeCode} platform fee`,
+        matchId: match.id,
+        timestamp: Date.now()
+      });
+    }
+    
+    await updatePlatformFinance(platformFee - (bonusPerReferrer * [...new Set(referrers)].length));
 
     // Settle Escrow atomically
     if (match.creator?.id) {
