@@ -215,6 +215,54 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
         </div>
       </div>
 
+      {/* Pending Rival Confirmation Top Banner */}
+      {match.status !== 'SETTLED' && match.status !== 'ABANDONED' && match.status !== 'ABANDONED_AND_SETTLED' && myClaim && (
+        <div className="p-6 rounded-2xl bg-gradient-to-b from-amber-500/15 via-neutral-900 to-neutral-950 border-2 border-amber-400/40 shadow-xl space-y-4 animate-in fade-in">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 border-b border-neutral-800/80 pb-3">
+            <div className="flex items-center gap-3">
+              <span className="w-3 h-3 rounded-full bg-amber-400 animate-ping shrink-0" />
+              <div>
+                <h3 className="text-sm sm:text-base font-black text-white uppercase tracking-tight">
+                  Result Submitted · Awaiting Rival Confirmation
+                </h3>
+                <p className="text-neutral-400 text-xs">
+                  Your claim is registered. Waiting for <strong>{opponentObj?.codmIgn || 'Rival'}</strong> to confirm before final settlement.
+                </p>
+              </div>
+            </div>
+            <span className="px-3 py-1 bg-amber-400/10 border border-amber-400/30 text-amber-400 font-mono text-xs font-bold rounded-lg shrink-0">
+              Escrow Pot: ₦{match.potAmount.toLocaleString()}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            <div className="p-3 rounded-xl bg-black/60 border border-neutral-800 space-y-1">
+              <span className="text-[10px] text-neutral-500 font-black uppercase tracking-wider block">1. Your Submission</span>
+              <span className="font-bold text-emerald-400 flex items-center gap-1.5">
+                <CheckCircle2 size={14} />
+                <span>{myClaim === 'VICTORY' ? 'I Won 🏆' : myClaim === 'DEFEAT' ? 'I Lost ❌' : 'Draw ⚖️'}</span>
+              </span>
+            </div>
+
+            <div className="p-3 rounded-xl bg-black/60 border border-amber-400/30 space-y-1">
+              <span className="text-[10px] text-amber-400 font-black uppercase tracking-wider block">2. Rival Confirmation</span>
+              <span className="font-bold text-amber-300 flex items-center gap-1.5 animate-pulse">
+                <Clock size={14} />
+                <span>Waiting for {opponentObj?.codmIgn || 'Rival'}...</span>
+              </span>
+            </div>
+
+            <div className="p-3 rounded-xl bg-black/60 border border-neutral-800 space-y-1">
+              <span className="text-[10px] text-neutral-500 font-black uppercase tracking-wider block">3. Payout Release</span>
+              <span className="font-bold text-neutral-400 flex items-center gap-1.5">
+                <Lock size={14} />
+                <span>₦{match.winnerPayout.toLocaleString()} in Escrow</span>
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Settle Banner / Winner Announcement */}
       {(match.status === 'SETTLED' || match.status === 'ABANDONED_AND_SETTLED') && (
         <div className={`p-6 rounded-2xl border shadow-2xl relative overflow-hidden text-center space-y-4 ${
@@ -902,23 +950,56 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
               </div>
             ) : myClaim ? (
               /* Already submitted, waiting for opponent */
-              <div className="p-5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-3.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-emerald-400 text-sm font-bold">
-                    <CheckCircle2 className="w-5 h-5" />
-                    <span>Your Result Confirmed: {myClaim === 'VICTORY' ? 'I Won 🏆' : myClaim === 'DEFEAT' ? 'I Lost ❌' : 'Draw ⚖️'}</span>
+              <div className="p-6 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-4 animate-in fade-in">
+                <div className="flex items-center justify-between border-b border-neutral-800/80 pb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
+                    <span className="text-xs font-black text-amber-400 uppercase tracking-widest">
+                      Awaiting Rival Confirmation
+                    </span>
                   </div>
                   <span className="text-xs text-amber-400 font-mono font-bold">₦{match.winnerPayout.toLocaleString()} Payout</span>
                 </div>
 
-                <div className="p-4 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-neutral-300 space-y-1.5">
-                  <div className="font-semibold text-white">
-                    ⏳ Waiting for {opponentObj?.codmIgn || 'Opponent'} to confirm...
+                <div className="p-4 rounded-xl bg-neutral-900 border border-neutral-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-neutral-400 font-bold uppercase tracking-wider">Your Submitted Outcome:</span>
+                    <span className={`text-xs font-black px-2.5 py-1 rounded-lg border font-mono ${
+                      myClaim === 'VICTORY'
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                        : myClaim === 'DEFEAT'
+                        ? 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                        : 'bg-amber-400/10 border-amber-400/30 text-amber-400'
+                    }`}>
+                      {myClaim === 'VICTORY' ? 'I Won 🏆' : myClaim === 'DEFEAT' ? 'I Lost ❌' : 'Draw ⚖️'}
+                    </span>
                   </div>
-                  <p className="text-neutral-400 text-[11px]">
-                    ⚡ Fast instant payout: as soon as both players agree, funds will be released immediately to the winner's wallet without any screenshot delay.
-                  </p>
+
+                  <div className="p-3.5 rounded-xl bg-black/60 border border-neutral-800/80 flex items-start gap-3">
+                    <Clock className="w-5 h-5 text-amber-400 shrink-0 mt-0.5 animate-spin" />
+                    <div className="space-y-1 text-xs">
+                      <div className="font-bold text-white">
+                        Waiting for {opponentObj?.codmIgn || 'Opponent'} to confirm on their screen...
+                      </div>
+                      <p className="text-neutral-400 text-[11px] leading-relaxed">
+                        The referee system will not declare a winner or loser until both players have submitted. Once {opponentObj?.codmIgn || 'your rival'} confirms, the match will settle immediately and funds will be released!
+                      </p>
+                    </div>
+                  </div>
                 </div>
+
+                {onSimulateOpponentResult && (
+                  <div className="pt-2 border-t border-neutral-800/80 flex items-center justify-between text-[10px] text-neutral-500">
+                    <span>Testing on single device?</span>
+                    <button
+                      type="button"
+                      onClick={() => onSimulateOpponentResult(myClaim === 'VICTORY' ? 'DEFEAT' : 'VICTORY')}
+                      className="text-amber-400 hover:text-amber-300 font-bold underline cursor-pointer"
+                    >
+                      Simulate Rival Response ({myClaim === 'VICTORY' ? 'Opponent Concedes' : 'Opponent Claims Win'})
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               /* 3-BUTTON SUBMISSION FORM (NO SCREENSHOT REQUIRED) */

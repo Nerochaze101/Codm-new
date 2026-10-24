@@ -24,12 +24,42 @@ import {
 
 dotenv.config();
 
+// Process-level crash prevention guards
+process.on('uncaughtException', (err) => {
+  console.error('[Process] Uncaught Exception (handled safely):', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Process] Unhandled Rejection (handled safely):', reason);
+});
+
 let globalIo: any = null;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+// Port resolution: Dev server MUST run on port 3000 in AI Studio / Cloud Run container.
+// Never bind to 8080 (which is reserved for Nginx reverse-proxy ingress).
+const PORT = (() => {
+  const portArgIndex = process.argv.indexOf('--port');
+  if (portArgIndex !== -1 && process.argv[portArgIndex + 1]) {
+    const parsed = parseInt(process.argv[portArgIndex + 1], 10);
+    if (!isNaN(parsed) && parsed > 0 && parsed !== 8080) return parsed;
+  }
+  if (process.env.DEFAULT_APP_PORT) {
+    const parsed = parseInt(process.env.DEFAULT_APP_PORT, 10);
+    if (!isNaN(parsed) && parsed > 0 && parsed !== 8080) return parsed;
+  }
+  if (process.env.APP_PORT) {
+    const parsed = parseInt(process.env.APP_PORT, 10);
+    if (!isNaN(parsed) && parsed > 0 && parsed !== 8080) return parsed;
+  }
+  if (process.env.PORT && process.env.PORT !== '8080') {
+    const parsed = parseInt(process.env.PORT, 10);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  return 3000;
+})();
 
 // Initialize Google GenAI if key available
 let ai: GoogleGenAI | null = null;
@@ -5164,12 +5194,9 @@ app.post('/api/matches/:id/submit-result', async (req, res) => {
       timestamp: Date.now(),
     });
 
-    // 1. If this player admitted defeat ("I Lost"), immediate concession!
-    if (claim === 'DEFEAT') {
-      resolveWinner = isCreator ? 'opponent' : 'creator';
-    }
-    // 2. If both players have submitted
-    else if (cClaim && oClaim) {
+    // Require BOTH players to submit their match outcome before settling winner or loser!
+    // When only one player has tapped (I Won, I Lost, or Draw), the match stays pending for the other player.
+    if (cClaim && oClaim) {
       if (cClaim === 'VICTORY' && oClaim === 'DEFEAT') {
         resolveWinner = 'creator';
       } else if (cClaim === 'DEFEAT' && oClaim === 'VICTORY') {
@@ -5185,9 +5212,8 @@ app.post('/api/matches/:id/submit-result', async (req, res) => {
         // Conflicting results (e.g. VICTORY vs DRAW)
         resolveWinner = 'dispute';
       }
-    }
-    // 3. Only one player has submitted so far
-    else {
+    } else {
+      // ONLY ONE PLAYER HAS SUBMITTED - PENDING FOR THE OTHER PLAYER'S CONFIRMATION!
       resolveWinner = null;
     }
   }
@@ -5292,7 +5318,9 @@ app.post('/api/matches/:id/submit-result', async (req, res) => {
     });
   } else {
     match.status = 'SUBMITTING_RESULTS';
-    match.resolutionNotes = `${playerIgn} claimed "${claim === 'VICTORY' ? 'I Won 🏆' : 'Draw ⚖️'}". Waiting for opponent to confirm or dispute.`;
+    const waitingForIgn = isCreator ? (match.opponent?.codmIgn || 'Rival') : match.creator.codmIgn;
+    const submittedLabel = claim === 'VICTORY' ? 'I Won 🏆' : claim === 'DEFEAT' ? 'I Lost ❌' : 'Draw ⚖️';
+    match.resolutionNotes = `${playerIgn} submitted "${submittedLabel}". Pending result confirmation from ${waitingForIgn} before final settlement.`;
   }
 
   // If system forensic analysis detected suspicious/AI signatures, notify match room
@@ -5312,6 +5340,13 @@ app.post('/api/matches/:id/submit-result', async (req, res) => {
   match.conflictReasonsList = conflictInfo.conflictReasonsList;
 
   await saveMatchToDb(match);
+
+  // Broadcast real-time match update to both players via WebSockets
+  if (globalIo) {
+    globalIo.emit('matchUpdated', match);
+    globalIo.to(match.id).emit('matchUpdated', match);
+  }
+
   res.json(match);
 });
 
@@ -6223,14 +6258,30 @@ app.post(['/api/inbound-mail', '/api/msksksnuwje/mail/webhook'], async (req, res
 });
 
 async function startServer() {
-  // 1. Initialize Supabase PostgreSQL database
-  await initDatabase();
-  await initGmailTables();
-  startGmailAutoSyncService();
+  // Background non-blocking initialization of database, gmail sync, and match sweeper
+  (async () => {
+    try {
+      await initDatabase();
+      console.log('✅ Supabase PostgreSQL database initialized');
+    } catch (err: any) {
+      console.warn('⚠️ Supabase database init error (handled non-fatally):', err.message);
+    }
 
-  // Start background auto-sweep for abandoned / expired matches
-  sweepAbandonedMatches().catch(e => console.warn('Initial sweepAbandonedMatches error:', e));
-  setInterval(sweepAbandonedMatches, 3 * 60 * 1000);
+    try {
+      await initGmailTables();
+      startGmailAutoSyncService();
+      console.log('✅ Gmail sync service initialized');
+    } catch (err: any) {
+      console.warn('⚠️ Gmail sync init error (handled non-fatally):', err.message);
+    }
+
+    try {
+      sweepAbandonedMatches().catch(e => console.warn('Initial sweepAbandonedMatches error:', e));
+      setInterval(sweepAbandonedMatches, 3 * 60 * 1000);
+    } catch (err: any) {
+      console.warn('⚠️ Match sweeper init error:', err.message);
+    }
+  })();
 
   // Always serve static public assets
   const publicPath = path.resolve(__dirname, 'public');

@@ -332,8 +332,79 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                          <div className="flex gap-3"><div className="w-10 h-10 rounded-xl bg-rose-500/20 flex items-center justify-center shrink-0"><AlertTriangle className="text-rose-400" /></div><div><div className="text-sm font-black text-white uppercase">Dispute Detected!</div><p className="text-[11px] text-neutral-400">Conflicting scores. Upload scoreboard screenshot to resolve.</p></div></div>
                          <div className="space-y-3"><input type="file" accept="image/*" className="w-full text-xs text-neutral-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:bg-rose-500 file:text-white" onChange={e => { const f = e.target.files?.[0]; if(f){ const r=new FileReader(); r.onload=()=>setScreenshotPreview(r.result as string); r.readAsDataURL(f); } }} />{screenshotPreview && <div className="h-40 rounded-xl overflow-hidden border border-rose-500/50 bg-black"><img src={screenshotPreview} className="w-full h-full object-contain" alt="" /></div>}<button onClick={() => handleResultSubmit(myActiveMatch.id)} disabled={isSubmitting || !screenshotPreview} className="w-full py-3 bg-rose-500 text-white font-black rounded-xl text-xs uppercase shadow-xl">{isSubmitting ? 'Verifying...' : 'Submit Proof & Resolve'}</button></div>
                        </div>
+                     ) : (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) ? (
+                       <div className="p-6 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-4 animate-in fade-in">
+                         <div className="flex items-center justify-between border-b border-neutral-800/80 pb-3">
+                           <div className="flex items-center gap-2">
+                             <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
+                             <span className="text-xs font-black text-amber-400 uppercase tracking-widest">
+                               Awaiting Rival Confirmation
+                             </span>
+                           </div>
+                           <span className="text-[10px] font-mono font-bold text-neutral-400">
+                             Pot: ₦{myActiveMatch.potAmount.toLocaleString()}
+                           </span>
+                         </div>
+
+                         <div className="p-4 rounded-xl bg-neutral-900/80 border border-neutral-800 space-y-3">
+                           <div className="flex items-center justify-between">
+                             <span className="text-xs text-neutral-400 font-bold uppercase tracking-wider">Your Submitted Outcome:</span>
+                             <span className={`text-xs font-black px-2.5 py-1 rounded-lg border font-mono ${
+                               (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) === 'VICTORY'
+                                 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                                 : (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) === 'DEFEAT'
+                                 ? 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                                 : 'bg-amber-400/10 border-amber-400/30 text-amber-400'
+                             }`}>
+                               {(isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) === 'VICTORY'
+                                 ? 'I Won 🏆'
+                                 : (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) === 'DEFEAT'
+                                 ? 'I Lost ❌'
+                                 : 'Draw ⚖️'}
+                             </span>
+                           </div>
+
+                           <div className="p-3.5 rounded-xl bg-black/60 border border-neutral-800/80 flex items-start gap-3">
+                             <Clock className="w-5 h-5 text-amber-400 shrink-0 mt-0.5 animate-spin" />
+                             <div className="space-y-1 text-xs">
+                               <div className="font-bold text-white">
+                                 Waiting for {isCreatorOfActive ? (myActiveMatch.opponent?.codmIgn || 'Opponent') : myActiveMatch.creator.codmIgn} to confirm...
+                               </div>
+                               <p className="text-neutral-400 text-[11px] leading-relaxed">
+                                 Your result has been registered. The referee system is waiting for your rival to submit on their screen. Once both players submit, the match will resolve and winner payout (₦{myActiveMatch.winnerPayout.toLocaleString()}) will release immediately!
+                               </p>
+                             </div>
+                           </div>
+                         </div>
+
+                         <div className="pt-2 border-t border-neutral-800/80 flex items-center justify-between text-[10px] text-neutral-500">
+                           <span>Testing on single device?</span>
+                           <button
+                             type="button"
+                             onClick={() => handleResultSubmit(myActiveMatch.id, (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) === 'VICTORY' ? 'DEFEAT' : 'VICTORY')}
+                             className="text-amber-400 hover:text-amber-300 font-bold underline cursor-pointer"
+                           >
+                             Simulate Rival Confirmation
+                           </button>
+                         </div>
+                       </div>
                      ) : (
                        <div className="p-5 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-4">
+                         {(isCreatorOfActive ? myActiveMatch.opponent?.resultClaim : myActiveMatch.creator.resultClaim) && (
+                           <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-center gap-2.5 animate-in fade-in">
+                             <Sparkles className="w-4 h-4 text-amber-400 shrink-0 animate-pulse" />
+                             <span>
+                               <strong>{isCreatorOfActive ? (myActiveMatch.opponent?.codmIgn || 'Opponent') : myActiveMatch.creator.codmIgn}</strong> declared: <strong className="underline uppercase">
+                                 {(isCreatorOfActive ? myActiveMatch.opponent?.resultClaim : myActiveMatch.creator.resultClaim) === 'VICTORY'
+                                   ? 'I Won 🏆'
+                                   : (isCreatorOfActive ? myActiveMatch.opponent?.resultClaim : myActiveMatch.creator.resultClaim) === 'DEFEAT'
+                                   ? 'I Lost ❌'
+                                   : 'Draw ⚖️'}
+                               </strong>. Select your outcome below to settle!
+                             </span>
+                           </div>
+                         )}
+
                          <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-widest text-neutral-400"><span>Match Ended? Confirm Result</span><span className="text-amber-400">Winner: ₦{myActiveMatch.winnerPayout.toLocaleString()}</span></div>
                          <div className="grid grid-cols-3 gap-2">
                            {(['VICTORY', 'DEFEAT', 'DRAW'] as const).map(claim => (
