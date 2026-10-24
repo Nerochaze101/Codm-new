@@ -9,6 +9,7 @@ import { Logo } from './Logo';
 
 interface AuthPageProps {
   initialMode?: 'signin' | 'signup';
+  initialReferralCode?: string;
   onSignUp: (data: {
     email: string;
     password: string;
@@ -51,6 +52,7 @@ const NIGERIAN_BANKS = [
 
 export const AuthPage: React.FC<AuthPageProps> = ({
   initialMode = 'signup',
+  initialReferralCode,
   onSignUp,
   onSignIn,
   onBackToLanding,
@@ -70,7 +72,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   const [nubanResolved, setNubanResolved] = useState(false);
   const [nubanError, setNubanError] = useState<string | null>(null);
   const [showSignupPassword, setShowSignupPassword] = useState(false);
-  const [signupReferralCode, setSignupReferralCode] = useState('');
+  
+  const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams();
+  const defaultRef = urlParams.get('ref') || initialReferralCode || '';
+  const [signupReferralCode, setSignupReferralCode] = useState(defaultRef);
 
   // Sign In Form State
   const [signinIdentifier, setSigninIdentifier] = useState('');

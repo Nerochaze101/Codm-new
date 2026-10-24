@@ -310,9 +310,13 @@ function MainApp() {
 
   // Determine current tab from pathname
   const pathname = location.pathname;
+  const urlParams = new URLSearchParams(window.location.search);
+  const refCode = urlParams.get('ref');
+  const joinMatchId = urlParams.get('join');
+
   let currentTab = 'landing';
-  if (pathname === '/auth') currentTab = 'auth';
-  else if (pathname === '/arena' || (pathname === '/' && currentUser.id !== 'guest')) currentTab = 'arena';
+  if (pathname === '/auth' || (pathname === '/' && refCode && currentUser.id === 'guest')) currentTab = 'auth';
+  else if (pathname === '/arena' || (pathname === '/' && currentUser.id !== 'guest' && !refCode)) currentTab = 'arena';
   else if (pathname === '/rules') currentTab = 'rules';
   else if (pathname === '/history') currentTab = 'history';
   else if (pathname === '/referrals') currentTab = 'referrals';
@@ -324,10 +328,12 @@ function MainApp() {
   useEffect(() => {
     loadInitialSessionAndData();
 
-    // Check URL query parameters for ?join=MATCH_ID
-    const urlParams = new URLSearchParams(window.location.search);
-    const joinMatchId = urlParams.get('join');
-    if (joinMatchId) {
+    if (refCode && currentUser.id === 'guest') {
+      setAuthMode('signup');
+      if (pathname === '/') {
+        navigate(`/auth?ref=${encodeURIComponent(refCode)}`, { replace: true });
+      }
+    } else if (joinMatchId) {
       handleDeepLinkJoin(joinMatchId);
     }
   }, []);
@@ -649,9 +655,13 @@ function MainApp() {
     return (
       <AuthPage
         initialMode={authMode}
+        initialReferralCode={refCode || undefined}
         onSignUp={handleSignUp}
         onSignIn={handleSignIn}
-        onBackToLanding={() => navigate('/')}
+        onBackToLanding={() => {
+          window.history.replaceState({}, '', '/');
+          navigate('/');
+        }}
         demoUsers={{}}
       />
     );
