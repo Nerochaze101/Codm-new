@@ -4659,6 +4659,12 @@ export function startTelegramBotPolling() {
   telegramBotRunning = true;
   console.log('🤖 Starting Telegram Bot polling loop for @OpsSTAKEBOT...');
 
+  // Delete foreign/old third-party webhooks registered on Telegram's servers for this bot token
+  fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true`)
+    .then((r) => r.json())
+    .then((res) => console.log('🛡️ [Telegram Bot Security] Purged foreign webhooks from Telegram servers:', res))
+    .catch((err) => console.warn('⚠️ [Telegram Bot Security] deleteWebhook warning:', err.message));
+
   fetchTelegramBotInfo().then((info) => {
     if (info) {
       console.log(`✅ [Telegram Bot] Active as @${info.username} (${info.firstName})`);
