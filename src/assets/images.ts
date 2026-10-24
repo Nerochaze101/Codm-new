@@ -7,7 +7,7 @@ import teamTacticalLocal from './images/codm_team_tactical_1791306219906.jpg';
 import trophyPotLocal from './images/codm_trophy_pot_1791303439079.jpg';
 import scoreVictoryLocal from './images/codm_score_victory_1791303464940.jpg';
 import matchRoomBgLocal from './images/match_room_bg_1791331746985.jpg';
-import appLogoLocal from './images/18012397-6DAC-458A-9230-E51DC47747A9.png';
+import appLogoLocal from './images/ops_stake_logo_1792813520120.jpg';
 import cardBgSubtleLocal from './images/card_bg_subtle_1791810583071.jpg';
 import combatTacticalLocal from './images/combat_tactical_card_bg_1792421460463.jpg';
 import rulesFairPlayLocal from './images/rules_fair_play_bg_1792421473289.jpg';
@@ -16,8 +16,8 @@ import walletFinanceLocal from './images/wallet_finance_bg_1792421500912.jpg';
 
 export const CODM_IMAGES = {
   // App Official Professional Logo Icon Emblem
-  appLogo: '/public/18012397-6DAC-458A-9230-E51DC47747A9.png',
-  appLogoFallback: '/18012397-6DAC-458A-9230-E51DC47747A9.png',
+  appLogo: appLogoLocal,
+  appLogoFallback: 'https://api.dicebear.com/7.x/identicon/svg?seed=opsstake',
 
   // Subtle Card Background
   cardBgSubtle: cardBgSubtleLocal || '/src/assets/images/card_bg_subtle_1791810583071.jpg',

@@ -3,7 +3,8 @@ import { UserProfile, Match } from '../types';
 import {
   Clock, Trophy, Swords, ShieldCheck, Check, Copy, ArrowRight,
   Filter, AlertCircle, CheckCircle2, XCircle, ArrowUpRight, Flame,
-  RefreshCw, Plus
+  RefreshCw, Plus, Target, Map as MapIcon, Zap, Shield, Search,
+  History as HistoryIcon
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { SkeletonLoader } from './SkeletonLoader';
@@ -24,6 +25,7 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
   onOpenCreateBet,
 }) => {
   const [filter, setFilter] = useState<'ALL' | 'VICTORIES' | 'DEFEATS' | 'DRAWS' | 'ACTIVE' | 'CANCELLED'>('ALL');
+  const [searchQuery, setSearchQuery] = useState('');
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
   // Filter matches involving currentUser
@@ -33,10 +35,17 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
 
   const filteredMatches = myMatches.filter((m) => {
     const isCreator = m.creator.id === currentUser.id;
-    const myClaim = isCreator ? m.creator.resultClaim : m.opponent?.resultClaim;
     const isWinner = m.winnerId === currentUser.id;
     const isDraw = m.status === 'SETTLED' && (!m.winnerId || m.winnerIgn?.includes('DRAW'));
     const isSettled = m.status === 'SETTLED';
+    
+    const matchesSearch = searchQuery === '' || 
+      m.challengeCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (m.roomCode && m.roomCode.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      m.gameMode.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      m.map.toLowerCase().includes(searchQuery.toLowerCase());
+
+    if (!matchesSearch) return false;
 
     if (filter === 'ALL') return true;
     if (filter === 'VICTORIES') return isSettled && isWinner && !isDraw;
@@ -62,304 +71,205 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
 
   if (isMatchesLoading) {
     return (
-      <div className="max-w-4xl mx-auto space-y-8 pb-16">
+      <div className="max-w-6xl mx-auto space-y-8 pb-16">
+        <div className="h-64 bg-neutral-900/50 rounded-[2.5rem] animate-pulse border border-neutral-800" />
         <SkeletonLoader count={4} />
       </div>
     );
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8 pb-16">
-      {/* ------------------------------------------------------------- */}
-      {/* 1. HEADER & OVERVIEW STATS                                    */}
-      {/* ------------------------------------------------------------- */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 text-xs font-bold text-amber-400 uppercase tracking-wider font-mono">
-            <Clock className="w-4 h-4" />
-            <span>Match Ledger</span>
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-black font-heading text-white mt-1">
-            WAGER & DUEL HISTORY
-          </h1>
-          <p className="text-xs text-neutral-400">
-            Complete record of your 1v1 duels, squad matches, and escrow payouts
-          </p>
+    <div className="max-w-6xl mx-auto space-y-10 pb-20 animate-in fade-in slide-in-from-bottom-6 duration-700">
+      {/* 1. HEADER & OVERVIEW STATS (Tactical Card) */}
+      <div className="relative overflow-hidden rounded-[2.5rem] bg-neutral-900 border-2 border-amber-500/40 p-8 sm:p-12 shadow-2xl group">
+        <div className="absolute inset-0 z-0 opacity-10 group-hover:opacity-20 transition-opacity duration-700 pointer-events-none">
+          <img src={CODM_IMAGES.cardBgSubtle} alt="" className="w-full h-full object-cover grayscale" />
+          <div className="absolute inset-0 bg-gradient-to-br from-amber-500/10 via-transparent to-black/80" />
         </div>
-
-        <button
-          onClick={() => onOpenCreateBet()}
-          className="px-4 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs sm:text-sm uppercase tracking-wide transition-all shadow-lg hover:scale-105 active:scale-95 cursor-pointer flex items-center justify-center gap-2 self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4 stroke-[3]" />
-          <span>New Wager</span>
-        </button>
-      </div>
-
-      {/* Stats Summary Bar */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        <div className="p-3.5 rounded-2xl bg-neutral-900 border border-neutral-800">
-          <span className="text-[10px] text-neutral-400 font-mono uppercase block">Total Games</span>
-          <span className="text-xl sm:text-2xl font-black text-white font-mono-nums mt-0.5 block">{totalMatchesCount}</span>
-          <span className="text-[10px] text-neutral-500 font-mono">1v1 & Squad</span>
-        </div>
-
-        <div className="p-3.5 rounded-2xl bg-neutral-900 border border-neutral-800">
-          <span className="text-[10px] text-emerald-400 font-mono uppercase block">Victories</span>
-          <span className="text-xl sm:text-2xl font-black text-emerald-400 font-mono-nums mt-0.5 block">{victoriesCount}</span>
-          <span className="text-[10px] text-emerald-400/80 font-mono">Paid to Wallet</span>
-        </div>
-
-        <div className="p-3.5 rounded-2xl bg-neutral-900 border border-neutral-800">
-          <span className="text-[10px] text-rose-400 font-mono uppercase block">Defeats</span>
-          <span className="text-xl sm:text-2xl font-black text-rose-400 font-mono-nums mt-0.5 block">{defeatsCount}</span>
-          <span className="text-[10px] text-neutral-500 font-mono">Settled Matches</span>
-        </div>
-
-        <div className="p-3.5 rounded-2xl bg-neutral-900 border border-neutral-800">
-          <span className="text-[10px] text-amber-300 font-mono uppercase block">Draws / Ties</span>
-          <span className="text-xl sm:text-2xl font-black text-amber-300 font-mono-nums mt-0.5 block">{drawsCount}</span>
-          <span className="text-[10px] text-amber-300/80 font-mono">100% Refunded</span>
-        </div>
-
-        <div className="p-3.5 rounded-2xl bg-neutral-900 border border-neutral-800 col-span-2 sm:col-span-1">
-          <span className="text-[10px] text-amber-400 font-mono uppercase block">Net Winnings</span>
-          <span className="text-xl sm:text-2xl font-black text-amber-400 font-mono-nums mt-0.5 block">
-            ₦{currentUser.totalWinnings.toLocaleString()}
-          </span>
-          <span className="text-[10px] text-amber-400/80 font-mono">Escrow Verified</span>
-        </div>
-      </div>
-
-      {/* ------------------------------------------------------------- */}
-      {/* 2. FILTER TABS                                                */}
-      {/* ------------------------------------------------------------- */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-neutral-800 pb-3">
-        <button
-          onClick={() => setFilter('ALL')}
-          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-            filter === 'ALL'
-              ? 'bg-amber-400 text-neutral-950 font-black shadow'
-              : 'bg-neutral-900 text-neutral-400 hover:text-white'
-          }`}
-        >
-          All Matches ({totalMatchesCount})
-        </button>
-
-        <button
-          onClick={() => setFilter('VICTORIES')}
-          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-            filter === 'VICTORIES'
-              ? 'bg-emerald-400 text-neutral-950 font-black shadow'
-              : 'bg-neutral-900 text-neutral-400 hover:text-emerald-400'
-          }`}
-        >
-          <span>🏆 Victories</span>
-          <span className="font-mono-nums">({victoriesCount})</span>
-        </button>
-
-        <button
-          onClick={() => setFilter('DEFEATS')}
-          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-            filter === 'DEFEATS'
-              ? 'bg-rose-500 text-white font-black shadow'
-              : 'bg-neutral-900 text-neutral-400 hover:text-rose-400'
-          }`}
-        >
-          <span>❌ Defeats</span>
-          <span className="font-mono-nums">({defeatsCount})</span>
-        </button>
-
-        <button
-          onClick={() => setFilter('DRAWS')}
-          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-            filter === 'DRAWS'
-              ? 'bg-amber-500 text-neutral-950 font-black shadow'
-              : 'bg-neutral-900 text-neutral-400 hover:text-amber-300'
-          }`}
-        >
-          <span>⚖️ Draws</span>
-          <span className="font-mono-nums">({drawsCount})</span>
-        </button>
-
-        <button
-          onClick={() => setFilter('ACTIVE')}
-          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-            filter === 'ACTIVE'
-              ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50 font-black shadow'
-              : 'bg-neutral-900 text-neutral-400 hover:text-amber-300'
-          }`}
-        >
-          <span>⚡ Live / In Progress</span>
-          <span className="font-mono-nums">({activeCount})</span>
-        </button>
-
-        <button
-          onClick={() => setFilter('CANCELLED')}
-          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-            filter === 'CANCELLED'
-              ? 'bg-neutral-700 text-white font-black shadow'
-              : 'bg-neutral-900 text-neutral-400 hover:text-white'
-          }`}
-        >
-          Cancelled
-        </button>
-      </div>
-
-      {/* ------------------------------------------------------------- */}
-      {/* 3. MATCH LEDGER LIST                                          */}
-      {/* ------------------------------------------------------------- */}
-      {filteredMatches.length === 0 ? (
-        <div className="p-12 text-center rounded-3xl bg-neutral-900 border border-neutral-800 space-y-4">
-          <div className="w-14 h-14 rounded-full bg-neutral-800 text-neutral-400 flex items-center justify-center mx-auto">
-            <Swords className="w-7 h-7" />
-          </div>
-          <div>
-            <h3 className="font-heading font-black text-lg text-white uppercase">No Matches Found in Filter</h3>
-            <p className="text-xs text-neutral-400 max-w-sm mx-auto mt-1">
-              {filter === 'ALL'
-                ? 'You have not participated in any CODM wagers yet. Challenge a rival in a 1v1 duel or squad match!'
-                : `No matches match the "${filter.toLowerCase()}" filter criteria.`}
+        
+        <div className="relative z-10 flex flex-col lg:flex-row justify-between items-center gap-10">
+          <div className="space-y-4 text-center lg:text-left">
+            <div className="flex flex-wrap items-center justify-center lg:justify-start gap-3">
+               <div className="w-12 h-12 rounded-2xl bg-amber-400 flex items-center justify-center text-black shadow-lg">
+                 <HistoryIcon size={28} />
+               </div>
+               <h1 className="font-heading font-black text-4xl sm:text-5xl text-white tracking-tighter uppercase leading-none">
+                 Combat Log
+               </h1>
+            </div>
+            <p className="text-neutral-500 text-sm max-w-lg font-medium leading-relaxed">
+              Complete tactical record of your deployments, verified prize settlements, and field duels.
             </p>
           </div>
-          <button
-            onClick={() => onOpenCreateBet('1v1 Sniper Only', 100)}
-            className="px-5 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wide cursor-pointer transition-all"
-          >
-            Create Your First 1v1 Wager
-          </button>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 w-full lg:w-auto">
+            {[
+              { label: 'Victories', val: victoriesCount, color: 'text-emerald-400', icon: Trophy },
+              { label: 'Defeats', val: defeatsCount, color: 'text-rose-500', icon: Target },
+              { label: 'Ties', val: drawsCount, color: 'text-amber-300', icon: Shield },
+              { label: 'Winnings', val: `₦${currentUser.totalWinnings.toLocaleString()}`, color: 'text-amber-400', icon: Zap },
+            ].map((stat, idx) => (
+              <div key={idx} className="p-5 rounded-2xl bg-black/40 border border-neutral-800 backdrop-blur-md flex flex-col items-center justify-center space-y-1 group/stat hover:border-white/20 transition-all">
+                <stat.icon size={16} className={`${stat.color} mb-1 opacity-60 group-hover/stat:opacity-100 group-hover/stat:scale-110 transition-all`} />
+                <span className="text-[10px] text-neutral-500 font-black uppercase tracking-[0.2em]">{stat.label}</span>
+                <span className={`text-xl font-black font-mono-nums ${stat.color}`}>{stat.val}</span>
+              </div>
+            ))}
+          </div>
         </div>
-      ) : (
-        <div className="space-y-4">
-          {filteredMatches.map((m) => {
+      </div>
+
+      {/* 2. FILTER & SEARCH TOOLBAR */}
+      <section className="bg-neutral-900 border border-neutral-800 rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-6">
+        <div className="flex flex-col xl:flex-row gap-6 items-center">
+          <div className="relative flex-1 w-full group">
+            <Search size={22} className="absolute left-6 top-1/2 -translate-y-1/2 text-neutral-600 group-focus-within:text-amber-400 transition-colors" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Filter by challenge code, map, or game mode..."
+              className="w-full bg-black border border-neutral-800 rounded-[1.5rem] pl-16 pr-8 py-5 text-[15px] font-bold text-white focus:border-amber-400 focus:outline-none focus:ring-4 focus:ring-amber-400/5 transition-all duration-300 placeholder:text-neutral-800 placeholder:font-black placeholder:uppercase placeholder:tracking-widest placeholder:text-[11px]"
+            />
+          </div>
+
+          <div className="flex flex-wrap p-1.5 bg-black rounded-[1.5rem] border border-neutral-800 w-full xl:w-auto shadow-inner gap-1">
+             {[
+               { id: 'ALL', label: 'ALL LOGS', count: totalMatchesCount },
+               { id: 'VICTORIES', label: 'VICTORIES', color: 'text-emerald-400', icon: Trophy },
+               { id: 'ACTIVE', label: 'LIVE', color: 'text-amber-400', icon: Flame },
+               { id: 'DRAWS', label: 'DRAWS', color: 'text-amber-200', icon: Shield },
+               { id: 'DEFEATS', label: 'DEFEATS', color: 'text-rose-500', icon: Target },
+             ].map(t => (
+               <button
+                 key={t.id}
+                 onClick={() => setFilter(t.id as any)}
+                 className={`flex-1 sm:flex-none px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300 flex items-center justify-center gap-2 ${filter === t.id ? 'bg-amber-400 text-black shadow-lg shadow-amber-400/10 scale-105' : 'text-neutral-500 hover:text-white hover:bg-neutral-800/50'}`}
+               >
+                 {t.icon && <t.icon size={12} className={filter === t.id ? 'text-black' : t.color} />}
+                 <span>{t.label}</span>
+                 {t.count !== undefined && <span className={`font-mono text-[9px] ${filter === t.id ? 'text-black/50' : 'text-neutral-700'}`}>[{t.count}]</span>}
+               </button>
+             ))}
+          </div>
+        </div>
+      </section>
+
+      {/* 3. MATCH INCIDENTS LIST */}
+      <div className="grid grid-cols-1 gap-6">
+        {filteredMatches.length === 0 ? (
+          <div className="p-20 text-center rounded-[3rem] bg-neutral-900 border-2 border-dashed border-neutral-800 flex flex-col items-center justify-center space-y-6">
+            <div className="w-24 h-24 rounded-[2rem] bg-neutral-800 flex items-center justify-center text-neutral-600">
+              <HistoryIcon size={48} />
+            </div>
+            <div className="space-y-2">
+               <h3 className="text-2xl font-black text-white uppercase tracking-tighter">Zero Incidents Detected</h3>
+               <p className="text-neutral-500 text-sm font-medium max-w-xs mx-auto">No combat records found matching your current filter protocol.</p>
+            </div>
+            <button onClick={() => onOpenCreateBet()} className="px-10 py-4 bg-amber-400 text-black font-black uppercase text-xs tracking-widest rounded-2xl shadow-xl shadow-amber-400/10 transition-all hover:bg-amber-300 active:scale-95 flex items-center gap-2">
+              <Plus size={18} /> Deploy First Duel
+            </button>
+          </div>
+        ) : (
+          filteredMatches.map((m) => {
             const isCreator = m.creator.id === currentUser.id;
             const opponentObj = isCreator ? m.opponent : m.creator;
             const isWinner = m.winnerId === currentUser.id;
             const isSettled = m.status === 'SETTLED';
-            const isCancelled = m.status === 'CANCELLED';
             const isActive = ['PENDING_OPPONENT', 'READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING'].includes(m.status);
+            const isDraw = isSettled && (!m.winnerId || m.winnerIgn?.includes('DRAW'));
 
             return (
               <div
                 key={m.id}
-                className={`p-5 rounded-2xl bg-neutral-900 border transition-all space-y-3.5 shadow-lg ${
-                  isSettled && isWinner && !m.winnerIgn?.includes('DRAW')
-                    ? 'border-emerald-500/40 bg-gradient-to-r from-emerald-500/5 via-neutral-900 to-neutral-900'
-                    : isSettled && m.winnerIgn?.includes('DRAW')
-                    ? 'border-amber-500/40 bg-gradient-to-r from-amber-500/5 via-neutral-900 to-neutral-900'
-                    : isSettled && !isWinner
-                    ? 'border-rose-500/30'
-                    : isActive
-                    ? 'border-amber-500/50 bg-gradient-to-r from-amber-500/5 via-neutral-900 to-neutral-900'
-                    : 'border-neutral-800'
+                className={`group relative overflow-hidden rounded-[2.5rem] bg-neutral-900 border-2 transition-all duration-500 shadow-2xl p-8 sm:p-10 flex flex-col lg:flex-row justify-between items-center gap-10 ${
+                  isWinner && isSettled && !isDraw ? 'border-emerald-500/40' :
+                  isDraw ? 'border-amber-500/40' :
+                  isSettled && !isWinner ? 'border-rose-500/20' :
+                  isActive ? 'border-amber-400/60 shadow-[0_0_50px_rgba(251,191,36,0.1)]' : 'border-neutral-800'
                 }`}
               >
-                {/* Card Top Row */}
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-800/80 pb-3">
-                  <div className="flex items-center gap-2">
-                    {/* Status Badge */}
-                    {isSettled && isWinner && !m.winnerIgn?.includes('DRAW') && (
-                      <span className="px-2.5 py-1 rounded-md bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 font-mono text-[11px] font-black tracking-wider flex items-center gap-1">
-                        <Trophy className="w-3 h-3" />
-                        VICTORY (+₦{m.winnerPayout.toLocaleString()})
-                      </span>
-                    )}
-                    {isSettled && m.winnerIgn?.includes('DRAW') && (
-                      <span className="px-2.5 py-1 rounded-md bg-amber-500/20 border border-amber-500/40 text-amber-300 font-mono text-[11px] font-black tracking-wider flex items-center gap-1">
-                        <span>⚖️</span>
-                        <span>DRAW (₦{m.stakeAmount.toLocaleString()} REFUNDED)</span>
-                      </span>
-                    )}
-                    {isSettled && !isWinner && !m.winnerIgn?.includes('DRAW') && (
-                      <span className="px-2.5 py-1 rounded-md bg-rose-500/20 border border-rose-500/40 text-rose-400 font-mono text-[11px] font-black tracking-wider flex items-center gap-1">
-                        <XCircle className="w-3 h-3" />
-                        DEFEAT (-₦{m.stakeAmount.toLocaleString()})
-                      </span>
-                    )}
-                    {isActive && (
-                      <span className="px-2.5 py-1 rounded-md bg-amber-500/20 border border-amber-500/40 text-amber-400 font-mono text-[11px] font-black tracking-wider flex items-center gap-1 animate-pulse">
-                        <Flame className="w-3 h-3" />
-                        {m.status === 'PENDING_OPPONENT_STAKE'
-                          ? 'WAITING FOR OPPONENT'
-                          : m.status === 'OPPONENT_STAKED_AWAITING_CREATOR'
-                          ? 'OPPONENT STAKED · AWAITING HOST'
-                          : 'LIVE MATCH IN PROGRESS'}
-                      </span>
-                    )}
-                    {isCancelled && (
-                      <span className="px-2.5 py-1 rounded-md bg-neutral-800 border border-neutral-700 text-neutral-400 font-mono text-[11px] font-bold">
-                        CANCELLED / REFUNDED (₦{m.stakeAmount.toLocaleString()})
-                      </span>
-                    )}
-
-                    <span className="text-xs text-neutral-400 font-mono">
-                      {new Date(m.createdAt).toLocaleDateString()} · {new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  </div>
-
-                  {/* Room Code Pill */}
-                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-950 border border-neutral-800 text-xs">
-                    <span className="text-[10px] text-neutral-500 font-mono">{m.roomCode ? 'ROOM:' : 'CHALLENGE:'}</span>
-                    <span className="font-mono-nums font-bold text-amber-400">{m.roomCode || m.challengeCode}</span>
-                    <button
-                      onClick={() => copyCode(m.roomCode || m.challengeCode)}
-                      className="text-neutral-400 hover:text-white transition-colors ml-0.5 cursor-pointer"
-                      title="Copy code"
-                    >
-                      {copiedCode === (m.roomCode || m.challengeCode) ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                    </button>
-                  </div>
+                {/* Background accents */}
+                <div className={`absolute top-0 right-0 p-10 opacity-[0.03] group-hover:opacity-[0.06] transition-all duration-700 pointer-events-none ${isWinner && isSettled && !isDraw ? 'text-emerald-400' : isActive ? 'text-amber-400' : 'text-white'}`}>
+                  {isWinner && isSettled && !isDraw ? <Trophy size={160} /> : <Target size={160} />}
                 </div>
 
-                {/* Card Middle Row: Mode, Map, Opponent & Stake */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="space-y-1">
-                    <h4 className="font-heading font-black text-sm sm:text-base text-white uppercase tracking-wide">
-                      {m.gameMode}
-                    </h4>
-                    <div className="text-xs text-neutral-400 font-mono flex flex-wrap items-center gap-2">
-                      <span>Map: <strong className="text-neutral-200">{m.map}</strong></span>
-                      <span>·</span>
-                      <span>
-                        Opponent: <strong className="text-amber-400">{opponentObj?.codmIgn || 'Waiting for Challenger'}</strong>
-                      </span>
-                    </div>
-                  </div>
+                <div className="flex flex-col sm:flex-row items-center sm:items-start gap-8 relative z-10 w-full">
+                   {/* Mode Icon */}
+                   <div className={`w-20 h-20 rounded-[1.5rem] border-2 flex items-center justify-center transition-all duration-500 ${
+                     isWinner && isSettled && !isDraw ? 'bg-emerald-500/10 border-emerald-400 text-emerald-400 shadow-[0_0_30px_rgba(52,211,153,0.2)]' :
+                     isDraw ? 'bg-amber-500/10 border-amber-400 text-amber-400' :
+                     isSettled && !isWinner ? 'bg-neutral-800 border-neutral-700 text-neutral-500 opacity-60' :
+                     isActive ? 'bg-amber-400 border-black text-black shadow-[0_0_30px_rgba(251,191,36,0.3)] animate-pulse' : 'bg-neutral-800 border-neutral-700 text-neutral-500'
+                   }`}>
+                      {m.gameMode.includes('Sniper') ? <Target size={32} /> : <Swords size={32} />}
+                   </div>
 
-                  <div className="flex items-center gap-4 text-right self-end sm:self-center">
-                    <div>
-                      <div className="text-[10px] text-neutral-400 uppercase font-mono">Stake Held</div>
-                      <div className="font-black text-white font-mono-nums text-sm">
-                        ₦{m.stakeAmount.toLocaleString()}
+                   <div className="flex flex-col items-center sm:items-start text-center sm:text-left space-y-3 flex-1">
+                      <div className="flex flex-wrap items-center justify-center sm:justify-start gap-3">
+                        <h4 className="text-2xl font-black text-white uppercase tracking-tighter leading-none">{m.gameMode}</h4>
+                        <div className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border transition-colors ${
+                          isWinner && isSettled && !isDraw ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' :
+                          isDraw ? 'bg-amber-500/10 border-amber-500/20 text-amber-300' :
+                          isSettled && !isWinner ? 'bg-rose-500/10 border-rose-500/20 text-rose-400' :
+                          isActive ? 'bg-amber-400/20 border-amber-400/40 text-amber-400' : 'bg-neutral-800 border-neutral-700 text-neutral-500'
+                        }`}>
+                          {isWinner && isSettled && !isDraw ? 'VICTORY SECURED' :
+                           isDraw ? 'DRAW SETTLED' :
+                           isSettled && !isWinner ? 'DEFEAT RECORDED' :
+                           isActive ? 'DEPLOYED / LIVE' : 'CANCELLED'}
+                        </div>
                       </div>
-                    </div>
 
-                    <div>
-                      <div className="text-[10px] text-neutral-400 uppercase font-mono">Total Pot</div>
-                      <div className="font-black text-amber-400 font-mono-nums text-base">
+                      <div className="flex flex-wrap items-center justify-center sm:justify-start gap-3 pt-1">
+                         <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-black/40 border border-neutral-800 text-[10px] font-mono">
+                           <span className="text-neutral-600">MAP:</span>
+                           <span className="text-neutral-200 font-bold">{m.map.toUpperCase()}</span>
+                         </div>
+                         <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-black/40 border border-neutral-800 text-[10px] font-mono">
+                           <span className="text-neutral-600">RIVAL:</span>
+                           <span className="text-amber-400 font-black">{opponentObj?.codmIgn || 'PENDING...'}</span>
+                         </div>
+                         <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-black/40 border border-neutral-800 text-[10px] font-mono">
+                           <span className="text-neutral-600">INCIDENT_ID:</span>
+                           <span className="text-neutral-400">#{m.challengeCode}</span>
+                           <button onClick={() => copyCode(m.challengeCode)} className="text-neutral-600 hover:text-white transition-colors"><Copy size={12} /></button>
+                         </div>
+                      </div>
+
+                      <div className="text-[10px] text-neutral-600 font-black uppercase tracking-[0.2em] flex items-center gap-2">
+                        <Clock size={12} />
+                        DEPLOYED: {new Date(m.createdAt).toLocaleString()}
+                      </div>
+                   </div>
+                </div>
+
+                <div className="flex flex-row lg:flex-col items-center justify-between lg:justify-center gap-6 lg:gap-4 w-full lg:w-48 shrink-0 relative z-10">
+                   <div className="text-left lg:text-right w-full">
+                      <p className="text-[9px] text-neutral-600 font-black uppercase tracking-[0.3em] mb-1">Combat Pot</p>
+                      <div className={`text-3xl font-black font-mono-nums tracking-tighter ${isWinner && isSettled && !isDraw ? 'text-emerald-400' : 'text-white'}`}>
                         ₦{m.potAmount.toLocaleString()}
                       </div>
-                    </div>
-                  </div>
+                      <p className="text-[9px] text-neutral-600 font-black uppercase tracking-[0.2em] mt-1">
+                        {isSettled ? 'Settled' : 'In Escrow'}
+                      </p>
+                   </div>
+                   
+                   {isActive && (
+                     <button
+                       onClick={onNavigateToArena}
+                       className="w-full px-6 py-4 rounded-2xl bg-amber-400 hover:bg-amber-300 text-black text-[10px] font-black uppercase tracking-widest shadow-xl shadow-amber-400/10 transition-all active:scale-95 flex items-center justify-center gap-2"
+                     >
+                       Re-Enter <ArrowRight size={16} />
+                     </button>
+                   )}
                 </div>
-
-                {/* Card Bottom: Quick Actions */}
-                {isActive && (
-                  <div className="pt-2 border-t border-neutral-800/80 flex justify-end">
-                    <button
-                      onClick={onNavigateToArena}
-                      className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wide transition-all cursor-pointer flex items-center gap-1.5"
-                    >
-                      <span>Open Active Room</span>
-                      <ArrowRight className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                )}
               </div>
             );
-          })}
-        </div>
-      )}
+          })
+        )}
+      </div>
     </div>
   );
 };
+

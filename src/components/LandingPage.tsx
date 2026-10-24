@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { calculateMatchEconomics, TIERED_COMMISSION_SCHEDULE } from '../utils/pricing';
+import { Logo } from './Logo';
 
 export interface LandingPageProps {
   matches: Match[];
@@ -80,15 +81,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-18 flex items-center justify-between">
           {/* Brand Wordmark with Official Emblem */}
           <div className="flex items-center gap-3">
-            <img
-              src={CODM_IMAGES.appLogo}
-              alt="OPS Stake"
-              className="w-11 h-11 object-contain drop-shadow-md"
-              referrerPolicy="no-referrer"
-              onError={(e) => {
-                (e.target as HTMLImageElement).src = CODM_IMAGES.appLogoFallback;
-              }}
-            />
+            <Logo size={44} />
             <div>
               <span className="font-heading font-black text-xl tracking-wide text-white">
                 OPS STAKE

@@ -16,7 +16,7 @@ import {
   Zap,
   TrendingUp,
   Coins,
-  History,
+  History as HistoryIcon,
   ArrowUpRight,
   PlusCircle,
   MinusCircle,
@@ -30,7 +30,8 @@ import {
   Settings,
   Loader2,
   Shield,
-  Target
+  Target,
+  Send
 } from 'lucide-react';
 import {
   fetchAdminUsers,
@@ -146,6 +147,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     isSubmitting: false,
     error: null,
   });
+
+  // Telegram Diagnostic State
+  const [telegramTesting, setTelegramTesting] = useState(false);
+  const [telegramTestMsg, setTelegramTestMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const handleTelegramTest = async () => {
+    setTelegramTesting(true);
+    setTelegramTestMsg(null);
+    try {
+      const res = await fetch('/api/telegram/test-channel-post', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: currentUser.id }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTelegramTestMsg({ type: 'success', text: data.message || 'Telegram post successful!' });
+      } else {
+        setTelegramTestMsg({ type: 'error', text: data.error || 'Telegram post failed' });
+      }
+    } catch (err: any) {
+      setTelegramTestMsg({ type: 'error', text: 'Network error testing Telegram' });
+    } finally {
+      setTelegramTesting(false);
+    }
+  };
 
   // Passcode claim for unassigned admin
   const [adminPasscode, setAdminPasscode] = useState('');
@@ -575,6 +602,92 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
               )}
             </section>
 
+            {/* TELEGRAM DIAGNOSTICS */}
+            <section className="bg-neutral-900 border border-neutral-800 rounded-[2.5rem] p-8 sm:p-10 shadow-2xl relative overflow-hidden group">
+               <div className="absolute top-0 right-0 p-8 opacity-[0.03] text-sky-400 pointer-events-none group-hover:opacity-5 transition-opacity duration-700">
+                <Send size={160} />
+              </div>
+
+              <div className="flex flex-col md:flex-row justify-between items-center gap-6 relative z-10 border-b border-neutral-800/50 pb-8 mb-8">
+                 <div className="flex items-center gap-5">
+                   <div className="w-16 h-16 rounded-[1.5rem] bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 shadow-lg shadow-sky-500/5 shrink-0">
+                     <Send size={32} />
+                   </div>
+                   <div>
+                     <h3 className="text-2xl font-black text-white uppercase tracking-tighter leading-tight">Bot Infrastructure</h3>
+                     <p className="text-neutral-500 text-sm font-medium">Verify public channel connectivity and bot admin permissions.</p>
+                   </div>
+                 </div>
+                 
+                 <div className="px-4 py-2 rounded-xl bg-sky-500/10 border border-sky-500/20 text-[10px] font-black text-sky-500 uppercase tracking-widest">
+                   System Ready
+                 </div>
+              </div>
+
+              <div className="space-y-6 relative z-10">
+                 <div className="p-6 bg-black/40 rounded-2xl border border-neutral-800 space-y-4">
+                    <p className="text-[10px] font-black text-neutral-500 uppercase tracking-[0.2em] ml-2">Diagnostic Target ID</p>
+                    <div className="flex flex-col sm:flex-row gap-3">
+                      <input 
+                        type="text"
+                        placeholder="Default Channel ID (-100...)"
+                        defaultValue="-1004368602897"
+                        id="debug_channel_id"
+                        className="flex-1 bg-black border border-neutral-800 rounded-xl px-5 py-4 text-sm font-mono text-sky-400 focus:border-sky-400 focus:outline-none"
+                      />
+                      <button
+                        onClick={async () => {
+                          const cid = (document.getElementById('debug_channel_id') as HTMLInputElement)?.value;
+                          setTelegramTesting(true);
+                          setTelegramTestMsg(null);
+                          try {
+                            const res = await fetch('/api/telegram/test-channel-post', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ userId: currentUser.id, channelId: cid }),
+                            });
+                            const data = await res.json();
+                            if (data.success) {
+                              setTelegramTestMsg({ type: 'success', text: data.message || 'SUCCESS: Signal Delivered' });
+                            } else {
+                              setTelegramTestMsg({ type: 'error', text: data.error || 'FAILED: Link Broken' });
+                            }
+                          } catch (err: any) {
+                            setTelegramTestMsg({ type: 'error', text: 'CONNECTION_ERROR' });
+                          } finally {
+                            setTelegramTesting(false);
+                          }
+                        }}
+                        disabled={telegramTesting}
+                        className="px-8 py-4 bg-sky-500 text-black font-black text-xs uppercase tracking-widest rounded-xl shadow-xl transition-all active:scale-95 flex items-center justify-center gap-3 disabled:opacity-50"
+                      >
+                        {telegramTesting ? <Loader2 size={18} className="animate-spin" /> : <Zap size={18} />}
+                        <span>Execute Test Post</span>
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-neutral-600 font-medium leading-relaxed italic">
+                      Note: This will post a "CONNECTION TEST" message to the target channel. Ensure the bot is an Admin with "Post Messages" permission.
+                    </p>
+                 </div>
+
+                 {telegramTestMsg && (
+                   <div className={`p-5 rounded-2xl border text-xs font-black uppercase tracking-widest animate-in slide-in-from-top-2 flex flex-col gap-3 ${telegramTestMsg.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400'}`}>
+                     <div className="flex items-center gap-3">
+                       {telegramTestMsg.type === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
+                       {telegramTestMsg.text}
+                     </div>
+                     {telegramTestMsg.type === 'error' && (
+                       <div className="pt-3 border-t border-rose-500/10 space-y-2">
+                         <p className="text-[10px] text-rose-300 normal-case font-medium leading-relaxed italic">
+                           <b>Troubleshooting:</b> 1. Ensure the bot is an <b>ADMIN</b> in the channel. 2. Ensure you are using the correct <b>numerical ID</b> (usually starting with -100). 3. If it's a private group, send a message to the bot first.
+                         </p>
+                       </div>
+                     )}
+                   </div>
+                 )}
+              </div>
+            </section>
+
             <section className="bg-neutral-900 border border-neutral-800 rounded-[2.5rem] overflow-hidden shadow-2xl">
               <div className="p-10 border-b border-neutral-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-gradient-to-b from-black/20 to-transparent">
                 <div className="space-y-1">
@@ -627,7 +740,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                       <tr>
                         <td colSpan={4} className="px-10 py-20 text-center">
                           <div className="flex flex-col items-center gap-4 opacity-20">
-                            <History size={64} className="text-neutral-500" />
+                            <HistoryIcon size={64} className="text-neutral-500" />
                             <p className="text-xs font-black uppercase tracking-[0.3em] text-neutral-400">Ledger Empty</p>
                           </div>
                         </td>

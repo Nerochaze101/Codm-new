@@ -1,6 +1,6 @@
 {
-  "name": "OPS STAKE 1v1 - Mobile Shooter Esports Escrow",
-  "description": "Escrow-backed 1v1 Tactical Mobile Shooter wagering platform in Nigerian Naira (₦). Create stakes, invite rivals, track custom room matches, and automatically verify victory screenshots with AI for instant payouts.",
+  "name": "Ops Stake",
+  "description": "Secure 1v1 tactical mobile shooter wagering platform with automated escrow and AI result verification.",
   "requestFramePermissions": ["microphone", "camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

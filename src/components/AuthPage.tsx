@@ -5,6 +5,7 @@ import {
   Phone, Building2, CreditCard, ArrowRight, ArrowLeft, AlertCircle, CheckCircle2, Sparkles, UserCheck, Loader2
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
+import { Logo } from './Logo';
 
 interface AuthPageProps {
   initialMode?: 'signin' | 'signup';
@@ -240,15 +241,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
         </button>
 
         <div className="flex items-center gap-3">
-          <img
-            src={CODM_IMAGES.appLogo}
-            alt="CODM Stake"
-            className="w-10 h-10 object-contain drop-shadow-md"
-            referrerPolicy="no-referrer"
-            onError={(e) => {
-              (e.target as HTMLImageElement).src = CODM_IMAGES.appLogoFallback;
-            }}
-          />
+          <Logo size={40} />
           <div>
             <span className="font-heading font-black text-lg tracking-wide text-white">
               OPS STAKE

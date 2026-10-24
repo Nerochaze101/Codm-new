@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { useSound } from '../hooks/useSound';
+import { Logo } from './Logo';
 
 export interface NavbarProps {
   currentUser: UserProfile;
@@ -134,15 +135,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               className="flex items-center gap-2.5 group text-left focus:outline-none cursor-pointer"
               title="Go to Home / Landing Page"
             >
-              <img
-                src={CODM_IMAGES.appLogo}
-                alt="OPS Stake"
-                className="w-10 h-10 object-contain group-hover:scale-105 transition-transform drop-shadow-md"
-                referrerPolicy="no-referrer"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).src = CODM_IMAGES.appLogoFallback;
-                }}
-              />
+              <Logo size={40} />
               <div>
                 <span className="font-heading font-black text-lg sm:text-xl tracking-wider text-white group-hover:text-amber-400 transition-colors">
                   OPS STAKE

@@ -3973,15 +3973,26 @@ app.post('/api/users/:id/clean-history', async (req, res) => {
 // ==========================================
 // 🤖 TELEGRAM BOT NOTIFICATION SERVICE
 // ==========================================
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8886701427:AAE5Oz2ZuMGEn9p6LTvHy6hXlZZXLHtqUeo';
-const TELEGRAM_PUBLIC_CHANNEL_ID = process.env.TELEGRAM_PUBLIC_CHANNEL_ID || '-1004368602897';
+const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || '8886701427:AAE5Oz2ZuMGEn9p6LTvHy6hXlZZXLHtqUeo').trim();
+const TELEGRAM_PUBLIC_CHANNEL_ID = (process.env.TELEGRAM_PUBLIC_CHANNEL_ID || '-1004368602897').trim();
 
-export async function postMatchToPublicChannel(match: Match, origin: string) {
+/**
+ * Dispatches a real-time wager alert to the configured public Telegram channel.
+ */
+export async function postMatchToPublicChannel(match: Match, origin?: string) {
+  console.log(`[Telegram Bot] Attempting public post for Match #${match.challengeCode} to Channel ${TELEGRAM_PUBLIC_CHANNEL_ID}`);
+
   try {
+    if (!TELEGRAM_PUBLIC_CHANNEL_ID || TELEGRAM_PUBLIC_CHANNEL_ID === 'undefined' || TELEGRAM_PUBLIC_CHANNEL_ID === 'null') {
+      console.warn('[Telegram Bot] Public channel ID is invalid or not configured. Skipping post.');
+      return;
+    }
+
     // Ensure origin doesn't end with slash
-    const baseOrigin = origin.replace(/\/$/, '');
+    const baseOrigin = (origin || '').replace(/\/$/, '');
+    
     // Using deep link format expected by App.tsx (?join=MATCH_ID)
-    const matchUrl = `${baseOrigin}/?join=${match.id}`;
+    const matchUrl = `${baseOrigin || 'https://ops-stake.app'}/?join=${match.id}`;
     
     const messageText = 
       `🔥 <b>NEW LIVE WAGER ALERT - OPS STAKE</b> 🔥\n\n` +
@@ -3991,6 +4002,8 @@ export async function postMatchToPublicChannel(match: Match, origin: string) {
       `🎯 <b>Game Mode:</b> ${match.gameMode}\n` +
       `🗺️ <b>Map:</b> ${match.map}\n\n` +
       `⚔️ <i>A gladiator is waiting for a rival! Think you have what it takes to win? Tap the button below to join the match and claim the pot!</i>`;
+
+    console.log(`[Telegram Bot] Dispatching sendMessage request to Telegram API...`);
 
     const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
@@ -4006,14 +4019,21 @@ export async function postMatchToPublicChannel(match: Match, origin: string) {
         }
       }),
     });
-    const data = await res.json();
+
+    const data: any = await res.json();
     if (!data.ok) {
-      console.warn(`[Telegram Bot] Public channel post failed for ID ${TELEGRAM_PUBLIC_CHANNEL_ID}: ${data.description}`);
+      console.error(`❌ [Telegram Bot] Public channel post FAILED for ID ${TELEGRAM_PUBLIC_CHANNEL_ID}`);
+      console.error(`[Telegram Bot] Error Description: ${data.description}`);
+      console.error(`[Telegram Bot] Error Code: ${data.error_code}`);
+      
+      if (data.description === 'chat not found') {
+        console.warn(`[Telegram Bot] HINT: The Bot must be an ADMIN in the channel/group ${TELEGRAM_PUBLIC_CHANNEL_ID}. Also ensure the ID includes the -100 prefix if it is a channel.`);
+      }
     } else {
-      console.log(`✅ [Telegram Bot] Match #${match.challengeCode} posted to public channel successfully`);
+      console.log(`✅ [Telegram Bot] Match #${match.challengeCode} posted to public channel ${TELEGRAM_PUBLIC_CHANNEL_ID} successfully (Message ID: ${data.result?.message_id})`);
     }
   } catch (err: any) {
-    console.error('[Telegram Bot] Public channel post exception:', err.message);
+    console.error('❌ [Telegram Bot] Critical exception during public channel post:', err.message);
   }
 }
 
@@ -4113,36 +4133,78 @@ app.post('/api/telegram/test-alert', async (req, res) => {
 // Endpoint to test Telegram Public Channel post
 app.post('/api/telegram/test-channel-post', async (req, res) => {
   const { channelId } = req.body;
-  const targetChannelId = channelId || TELEGRAM_PUBLIC_CHANNEL_ID;
+  const targetChannelId = (channelId || TELEGRAM_PUBLIC_CHANNEL_ID).trim();
 
   try {
-    const testMessage = `🚀 <b>OPS STAKE BOT CONNECTION TEST</b>\n\nThis is a test message to verify the bot has admin access to post in this channel.`;
+    // 1. First, verify the bot identity and token validity
+    const getMeRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe`);
+    const meData: any = await getMeRes.json();
+    
+    if (!meData.ok) {
+      return res.status(401).json({
+        success: false,
+        error: `Invalid Bot Token: ${meData.description}`,
+        hint: 'The token provided in TELEGRAM_BOT_TOKEN environment variable is rejected by Telegram.'
+      });
+    }
+
+    const botInfo = meData.result;
+    console.log(`[Telegram Bot] Verified identity: @${botInfo.username} (${botInfo.first_name})`);
+
+    const testMessage = `🚀 <b>OPS STAKE BOT CONNECTION TEST</b>\n\n` +
+      `This is a test message from <b>@${botInfo.username}</b> to verify admin access.\n\n` +
+      `<b>Diagnostic Info:</b>\n` +
+      `- Target ID: <code>${targetChannelId}</code>\n` +
+      `- Bot ID: <code>${botInfo.id}</code>\n` +
+      `- Timestamp: <code>${new Date().toISOString()}</code>\n\n` +
+      `<b>Action Required:</b> If you see this, the bot has correctly identified the channel. If not, check if the bot is an <b>ADMIN</b> with <b>Post Messages</b> permission.`;
+
+    console.log(`[Telegram Bot] Manual test triggered for Channel ${targetChannelId}`);
 
     const tgRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        chat_id: String(targetChannelId).trim(),
+        chat_id: targetChannelId,
         text: testMessage,
         parse_mode: 'HTML',
       }),
     });
 
-    const data = await tgRes.json();
+    const data: any = await tgRes.json();
     if (data.ok) {
+      console.log(`✅ [Telegram Bot] Manual test successful for Channel ${targetChannelId}`);
       return res.json({
         success: true,
         message: `Bot successfully posted to channel ${targetChannelId}!`,
         data,
       });
     } else {
+      console.error(`❌ [Telegram Bot] Manual test failed for Channel ${targetChannelId}: ${data.description}`);
+      
+      // Attempt to diagnose admin status
+      let adminHint = 'Make sure the Bot is an ADMIN in the channel/group.';
+      try {
+        const adminRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getChatAdministrators?chat_id=${targetChannelId}`);
+        const adminData: any = await adminRes.json();
+        if (!adminData.ok) {
+          adminHint = `Diagnostic: ${adminData.description}. (Hint: This usually means the bot is not in the chat or has no admin rights).`;
+        }
+      } catch (e) {}
+
       return res.status(400).json({
         success: false,
-        error: `Telegram Error: ${data.description}. (Hint: Make sure the Bot is an ADMIN in the channel/group).`,
-        debug: { targetChannelId, botTokenPrefix: TELEGRAM_BOT_TOKEN.split(':')[0] }
+        error: `Telegram Error: ${data.description}`,
+        hint: adminHint,
+        debug: { 
+          targetChannelId, 
+          botTokenPrefix: TELEGRAM_BOT_TOKEN.split(':')[0],
+          errorCode: data.error_code
+        }
       });
     }
   } catch (err: any) {
+    console.error(`❌ [Telegram Bot] Manual test exception:`, err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -4274,6 +4336,7 @@ app.post('/api/matches', async (req, res) => {
         }
 
         if (origin) {
+          console.log(`[Server] Triggering Telegram public post for match ${newMatch.challengeCode}...`);
           postMatchToPublicChannel(newMatch, origin).catch(err => 
             console.warn('Telegram public post background error:', err.message)
           );
