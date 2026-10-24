@@ -5,6 +5,7 @@ import {
   Copy, Check, Film, Target, Crosshair, Users, Sparkles, Flame,
   Share2, Camera, CheckCircle2
 } from 'lucide-react';
+import { Logo } from './Logo';
 
 interface DashboardProps {
   currentUser: UserProfile;
@@ -46,48 +47,80 @@ export const Dashboard: React.FC<DashboardProps> = ({
       : 0;
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto pb-16 md:pb-6">
-      {/* 1. Quick Icon Action Grid (Clean, Touch-Friendly, Icon-Focused) */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+    <div className="space-y-8 max-w-7xl mx-auto pb-20 md:pb-6 animate-in fade-in duration-700">
+      {/* 1. Tactical Header with Logo */}
+      <header className="flex flex-col sm:flex-row justify-between items-center gap-6 bg-neutral-900 border border-neutral-800 rounded-[2.5rem] p-8 shadow-2xl relative overflow-hidden group">
+        <div className="absolute inset-0 bg-gradient-to-r from-amber-400/[0.03] via-transparent to-transparent pointer-events-none" />
+        <div className="flex items-center gap-6 relative z-10">
+          <div className="w-20 h-20 sm:w-24 sm:h-24">
+            <Logo size={96} glow={true} />
+          </div>
+          <div className="space-y-1">
+            <h1 className="text-3xl sm:text-4xl font-black text-white uppercase tracking-tighter leading-none">
+              OPS STAKE <span className="text-amber-400">HQ</span>
+            </h1>
+            <p className="text-neutral-500 text-xs font-black uppercase tracking-[0.3em] flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              Arena Status: Active
+            </p>
+          </div>
+        </div>
+        
+        <div className="flex items-center gap-4 relative z-10 w-full sm:w-auto">
+          <div className="flex-1 sm:flex-none p-4 px-6 bg-black/60 border border-neutral-800 rounded-3xl space-y-0.5">
+             <p className="text-[10px] text-neutral-500 font-black uppercase tracking-widest">Liquid Funds</p>
+             <div className="text-xl font-black text-emerald-400 font-mono tracking-tighter">₦{currentUser.balance.toLocaleString()}</div>
+          </div>
+          <button 
+            onClick={onOpenWallet}
+            className="p-4 bg-amber-400 hover:bg-amber-300 text-black rounded-3xl shadow-xl shadow-amber-400/10 transition-all active:scale-95 flex items-center justify-center shrink-0"
+          >
+            <Plus className="w-8 h-8 stroke-[3]" />
+          </button>
+        </div>
+      </header>
+
+      {/* 2. Quick Icon Action Grid */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Action 1: Create 1v1 Bet */}
         <button
           onClick={onOpenCreateBet}
-          className="p-4 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-500 text-neutral-950 font-black flex flex-col justify-between items-start shadow-lg hover:shadow-amber-400/20 active:scale-95 transition-all cursor-pointer group text-left"
+          className="p-6 rounded-[2rem] bg-neutral-900 border border-amber-500/30 hover:border-amber-400 transition-all duration-500 group relative overflow-hidden text-left shadow-xl"
         >
-          <div className="w-10 h-10 rounded-xl bg-neutral-950/20 flex items-center justify-center text-neutral-950 mb-3 group-hover:scale-110 transition-transform">
-            <Swords className="w-5 h-5 stroke-[2.5]" />
+          <div className="absolute top-0 right-0 p-4 opacity-[0.03] group-hover:opacity-[0.07] transition-all group-hover:scale-110 duration-700 text-amber-400"><Swords size={120} /></div>
+          <div className="w-14 h-14 rounded-2xl bg-amber-400 flex items-center justify-center text-black mb-6 shadow-lg shadow-amber-400/20 group-hover:scale-110 transition-transform">
+            <Swords size={28} className="stroke-[2.5]" />
           </div>
-          <div>
-            <div className="text-sm font-extrabold tracking-tight leading-tight">Create 1v1 Bet</div>
-            <div className="text-xs text-neutral-900/80 font-mono-nums font-semibold">Min ₦1,000 Stake</div>
+          <div className="space-y-1 relative z-10">
+            <div className="text-lg font-black text-white uppercase tracking-tight leading-none group-hover:text-amber-400 transition-colors">Host Duel</div>
+            <div className="text-[10px] text-neutral-500 font-black uppercase tracking-widest">Min ₦1,000 Stake</div>
           </div>
         </button>
 
-        {/* Action 2: Wallet & Balance */}
-        <button
-          onClick={onOpenWallet}
-          className="p-4 rounded-2xl bg-neutral-900 border border-neutral-800 hover:border-emerald-500/50 flex flex-col justify-between items-start active:scale-95 transition-all cursor-pointer group text-left"
-        >
-          <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 mb-3 group-hover:scale-110 transition-transform">
-            <ArrowUpRight className="w-5 h-5" />
+        {/* Action 2: Winnings HQ */}
+        <div className="p-6 rounded-[2rem] bg-neutral-900 border border-neutral-800 transition-all duration-500 group relative overflow-hidden text-left shadow-xl">
+          <div className="absolute top-0 right-0 p-4 opacity-[0.03] text-emerald-400"><Trophy size={120} /></div>
+          <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 mb-6">
+            <Trophy size={28} />
           </div>
-          <div>
-            <div className="text-xs text-neutral-400 font-medium">Available Balance</div>
-            <div className="text-base sm:text-lg font-black text-emerald-400 font-mono-nums">
-              ₦{currentUser.balance.toLocaleString()}
-            </div>
+          <div className="space-y-1 relative z-10">
+            <div className="text-lg font-black text-white uppercase tracking-tight leading-none">Net Prize</div>
+            <div className="text-xl font-black text-emerald-400 font-mono tracking-tighter">₦{currentUser.totalWinnings.toLocaleString()}</div>
           </div>
-        </button>
+        </div>
 
-        {/* Action 3: Escrow Winnings / Record */}
-        <div className="p-4 rounded-2xl bg-neutral-900 border border-neutral-800 flex flex-col justify-between items-start text-left">
-          <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 mb-3">
-            <Trophy className="w-5 h-5" />
+        {/* Action 3: Combat Stats */}
+        <div className="p-6 rounded-[2rem] bg-neutral-900 border border-neutral-800 transition-all duration-500 group relative overflow-hidden text-left shadow-xl">
+          <div className="absolute top-0 right-0 p-4 opacity-[0.03] text-blue-400"><Target size={120} /></div>
+          <div className="w-14 h-14 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 mb-6">
+            <Flame size={28} />
           </div>
-          <div>
-            <div className="text-xs text-neutral-400 font-medium">Winnings ({currentUser.wins}W - {currentUser.losses}L)</div>
-            <div className="text-base sm:text-lg font-black text-amber-400 font-mono-nums">
-              ₦{currentUser.totalWinnings.toLocaleString()}
+          <div className="space-y-1 relative z-10">
+            <div className="text-lg font-black text-white uppercase tracking-tight leading-none">Record</div>
+            <div className="text-xl font-black text-white font-mono tracking-tighter flex items-center gap-2">
+               <span className="text-emerald-400">{currentUser.wins}W</span>
+               <span className="text-neutral-700">/</span>
+               <span className="text-rose-500">{currentUser.losses}L</span>
             </div>
           </div>
         </div>
@@ -95,16 +128,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
         {/* Action 4: Watch Video Trailer */}
         <button
           onClick={onWatchVideo}
-          className="p-4 rounded-2xl bg-neutral-900 border border-neutral-800 hover:border-amber-400/50 flex flex-col justify-between items-start active:scale-95 transition-all cursor-pointer group text-left"
+          className="p-6 rounded-[2rem] bg-neutral-900 border border-neutral-800 hover:border-white/20 transition-all duration-500 group relative overflow-hidden text-left shadow-xl"
         >
-          <div className="w-10 h-10 rounded-xl bg-neutral-800 flex items-center justify-center text-neutral-300 group-hover:text-amber-400 mb-3 group-hover:scale-110 transition-transform">
-            <Play className="w-5 h-5 fill-current ml-0.5" />
+          <div className="absolute top-0 right-0 p-4 opacity-[0.03] text-white"><Play size={120} /></div>
+          <div className="w-14 h-14 rounded-2xl bg-neutral-800 flex items-center justify-center text-white mb-6 group-hover:bg-white group-hover:text-black transition-all">
+            <Play size={28} className="fill-current ml-1" />
           </div>
-          <div>
-            <div className="text-sm font-bold text-white group-hover:text-amber-400 transition-colors">
-              Animated Trailer
-            </div>
-            <div className="text-xs text-neutral-400 font-medium">Watch CODM Reel</div>
+          <div className="space-y-1 relative z-10">
+            <div className="text-lg font-black text-white uppercase tracking-tight leading-none group-hover:translate-x-1 transition-transform">Trailer</div>
+            <div className="text-[10px] text-neutral-500 font-black uppercase tracking-widest">Cinema Experience</div>
           </div>
         </button>
       </div>

@@ -4,7 +4,7 @@ import {
   User, Trophy, Award, TrendingUp, ShieldCheck, Swords,
   Edit3, Check, Copy, ArrowRight, Shield, Zap, Flame, Clock,
   Calendar, CheckCircle2, AlertCircle, Camera, Crosshair, Users, LogOut, BookOpen,
-  Volume2, VolumeX, Building, CreditCard, Lock, Loader2, Save, RefreshCw, Send, Bell, MessageSquare
+  Volume2, VolumeX, Building, CreditCard, Lock, Loader2, Save, RefreshCw, Send, Bell, MessageSquare, Settings
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { useSoundSettings, playShotgunSound } from '../hooks/useSound';
@@ -258,14 +258,12 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
 
   return (
     <div className="max-w-6xl mx-auto space-y-10 pb-20 animate-in fade-in slide-in-from-bottom-6 duration-700">
-      {/* ------------------------------------------------------------- */}
-      {/* 1. TACTICAL CALLING CARD IDENTITY                             */}
-      {/* ------------------------------------------------------------- */}
-      <div className="relative overflow-hidden rounded-[2.5rem] bg-neutral-900 border-2 border-amber-500/40 p-8 sm:p-12 shadow-2xl group">
+      {/* 1. TACTICAL CALLING CARD IDENTITY */}
+      <div className="relative overflow-hidden rounded-[3rem] bg-neutral-900 border-2 border-amber-500/40 p-8 sm:p-12 shadow-[0_0_50px_rgba(0,0,0,0.5)] group">
         {/* Ambient tactical backgrounds */}
         <div className="absolute inset-0 z-0 opacity-20 group-hover:opacity-30 transition-opacity duration-700">
           <img src={CODM_IMAGES.cardBgSubtle} alt="" className="w-full h-full object-cover" />
-          <div className="absolute inset-0 bg-gradient-to-br from-amber-500/10 via-transparent to-black/80" />
+          <div className="absolute inset-0 bg-gradient-to-br from-amber-500/10 via-transparent to-black/90" />
         </div>
         
         {/* Animated corner glows */}
@@ -276,7 +274,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
           {/* Player Identity Block */}
           <div className="flex flex-col sm:flex-row items-center sm:items-start gap-8">
             <div className="relative shrink-0">
-              <div className="w-32 h-32 sm:w-40 sm:h-32 rounded-[2rem] overflow-hidden border-4 border-amber-400 shadow-[0_0_30px_rgba(251,191,36,0.3)] bg-neutral-800">
+              <div className="w-32 h-32 sm:w-40 sm:h-40 rounded-[2.5rem] overflow-hidden border-4 border-amber-400 shadow-[0_0_40px_rgba(251,191,36,0.2)] bg-neutral-800">
                 <img
                   src={currentUser.avatar}
                   alt={currentUser.codmIgn}
@@ -285,52 +283,52 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
                   onError={(e) => { (e.target as HTMLImageElement).src = AVATAR_OPTIONS[0]; }}
                 />
               </div>
-              <div className="absolute -bottom-3 -right-3 px-4 py-1 rounded-xl bg-black border-2 border-amber-400 text-[10px] font-black font-mono text-amber-400 shadow-xl tracking-tighter">
+              <div className="absolute -bottom-3 -right-3 px-5 py-2 rounded-2xl bg-black border-2 border-amber-400 text-[11px] font-black font-mono text-amber-400 shadow-xl tracking-tighter">
                 LVL 150
               </div>
             </div>
 
-            <div className="flex flex-col items-center sm:items-start text-center sm:text-left space-y-4">
-              <div className="space-y-1">
-                <div className="flex flex-wrap items-center justify-center sm:justify-start gap-3">
-                  <h1 className="font-heading font-black text-4xl sm:text-5xl text-white tracking-tighter uppercase leading-none">
+            <div className="flex flex-col items-center sm:items-start text-center sm:text-left space-y-5">
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-center sm:justify-start gap-4">
+                  <h1 className="font-heading font-black text-4xl sm:text-6xl text-white tracking-tighter uppercase leading-none">
                     {currentUser.codmIgn}
                   </h1>
-                  <div className="px-4 py-1 rounded-full bg-amber-500/20 border border-amber-500/30 text-amber-400 font-mono text-[10px] font-black tracking-[0.2em] flex items-center gap-2 shadow-lg">
-                    <Award size={14} className="animate-bounce" />
+                  <div className="px-5 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 font-mono text-[10px] font-black tracking-[0.2em] flex items-center gap-2 shadow-inner">
+                    <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
                     LEGENDARY TIER
                   </div>
                 </div>
-                <div className="flex flex-wrap items-center justify-center sm:justify-start gap-3 pt-1">
-                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-black/40 border border-neutral-800 text-xs font-mono">
-                    <span className="text-neutral-500 uppercase tracking-tighter">UID:</span>
+                <div className="flex flex-wrap items-center justify-center sm:justify-start gap-3 pt-2">
+                  <div className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-black/60 border border-neutral-800 text-xs font-mono group/uid">
+                    <span className="text-neutral-500 uppercase tracking-tighter font-black">SECTOR ID:</span>
                     <span className="text-neutral-200 font-bold tracking-widest">{currentUser.codmUid}</span>
-                    <button onClick={handleCopyUid} className="ml-1 text-neutral-500 hover:text-amber-400 transition-colors p-1 cursor-pointer">
-                      {copiedUid ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                    <button onClick={handleCopyUid} className="ml-1 text-neutral-600 hover:text-amber-400 transition-colors p-1 cursor-pointer">
+                      {copiedUid ? <Check size={16} className="text-emerald-400" /> : <Copy size={16} />}
                     </button>
                   </div>
-                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-black/40 border border-neutral-800 text-xs font-mono">
-                    <span className="text-neutral-500 uppercase tracking-tighter">CLAN:</span>
+                  <div className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-black/60 border border-neutral-800 text-xs font-mono">
+                    <span className="text-neutral-500 uppercase tracking-tighter font-black">CLAN:</span>
                     <span className="text-amber-400 font-black tracking-widest">[1V1_PRO]</span>
                   </div>
                 </div>
               </div>
 
               {/* Combat Summary stats row */}
-              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-4 pt-2">
-                 <div className="space-y-0.5">
-                   <p className="text-[10px] text-neutral-500 font-black uppercase tracking-[0.2em]">Victory Record</p>
-                   <div className="flex items-center gap-2">
-                     <span className="text-2xl font-black text-emerald-400 font-mono">{currentUser.wins}W</span>
-                     <div className="h-4 w-px bg-neutral-800" />
-                     <span className="text-2xl font-black text-rose-500 font-mono">{currentUser.losses}L</span>
+              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-6 pt-2">
+                 <div className="space-y-1">
+                   <p className="text-[10px] text-neutral-600 font-black uppercase tracking-[0.3em]">Victory Record</p>
+                   <div className="flex items-center gap-3">
+                     <span className="text-3xl font-black text-emerald-400 font-mono">{currentUser.wins}W</span>
+                     <div className="h-6 w-px bg-neutral-800" />
+                     <span className="text-3xl font-black text-rose-500 font-mono">{currentUser.losses}L</span>
                    </div>
                  </div>
-                 <div className="h-10 w-px bg-neutral-800 hidden sm:block" />
-                 <div className="space-y-0.5">
-                   <p className="text-[10px] text-neutral-500 font-black uppercase tracking-[0.2em]">Combat Earnings</p>
-                   <div className="text-2xl font-black text-white font-mono tracking-tighter flex items-baseline gap-1">
-                     <span className="text-amber-400">₦</span>{currentUser.totalWinnings.toLocaleString()}
+                 <div className="h-12 w-px bg-neutral-800 hidden sm:block" />
+                 <div className="space-y-1">
+                   <p className="text-[10px] text-neutral-600 font-black uppercase tracking-[0.3em]">Combat Earnings</p>
+                   <div className="text-3xl font-black text-white font-mono tracking-tighter flex items-baseline gap-1.5">
+                     <span className="text-amber-400 text-xl">₦</span>{currentUser.totalWinnings.toLocaleString()}
                    </div>
                  </div>
               </div>
@@ -338,46 +336,40 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
           </div>
 
           {/* Action Buttons Column */}
-          <div className="flex flex-row lg:flex-col items-center justify-center gap-4 shrink-0">
+          <div className="flex flex-row lg:flex-col items-center justify-center gap-5 shrink-0">
              <button
                onClick={() => setIsEditing(!isEditing)}
-               className="w-full sm:w-auto px-6 py-4 rounded-2xl bg-neutral-800 hover:bg-neutral-700 text-white text-xs font-black uppercase tracking-widest transition-all active:scale-95 border border-neutral-700 shadow-xl flex items-center justify-center gap-3 group"
+               className="w-full sm:w-auto px-8 py-5 rounded-[1.75rem] bg-neutral-800 hover:bg-neutral-700 text-white text-[11px] font-black uppercase tracking-[0.2em] transition-all active:scale-95 border border-neutral-700 shadow-xl flex items-center justify-center gap-3 group"
              >
-               <Edit3 size={18} className="text-amber-400 group-hover:rotate-12 transition-transform" />
+               <Settings size={20} className="text-neutral-500 group-hover:text-amber-400 group-hover:rotate-45 transition-all" />
                <span>Settings</span>
              </button>
              
              <button
                onClick={() => onOpenCreateBet('1v1 Sniper Only', 1000)}
-               className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-amber-400 hover:bg-amber-300 text-black text-xs font-black uppercase tracking-widest transition-all active:scale-95 shadow-[0_10px_30px_rgba(251,191,36,0.2)] flex items-center justify-center gap-3 group"
+               className="w-full sm:w-auto px-10 py-5 rounded-[1.75rem] bg-amber-400 hover:bg-amber-300 text-black text-[11px] font-black uppercase tracking-[0.2em] transition-all active:scale-95 shadow-[0_15px_40px_rgba(251,191,36,0.15)] flex items-center justify-center gap-3 group"
              >
-               <Swords size={18} className="animate-pulse" />
-               <span>Host Duel</span>
+               <Swords size={20} className="group-hover:scale-110 transition-transform" />
+               <span>Deploy Duel</span>
              </button>
-
-             {onSignOut && (
-               <button
-                 onClick={onSignOut}
-                 className="hidden sm:flex px-4 py-4 rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 text-xs font-black uppercase transition-all border border-rose-500/20"
-                 title="Logout"
-               >
-                 <LogOut size={18} />
-               </button>
-             )}
           </div>
         </div>
 
         {/* Level Progression Bar */}
-        <div className="mt-12 relative z-10 space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Shield size={14} className="text-amber-400" />
-              <span className="text-[10px] font-black text-neutral-400 uppercase tracking-widest">Global Rank Progression</span>
+        <div className="mt-12 relative z-10 space-y-4">
+          <div className="flex items-center justify-between px-2">
+            <div className="flex items-center gap-3">
+              <Shield size={16} className="text-amber-400" />
+              <span className="text-[10px] font-black text-neutral-500 uppercase tracking-[0.3em]">Global Rank Progression</span>
             </div>
-            <span className="text-[10px] font-black text-amber-400 uppercase tracking-widest">TOP 1% ACTIVE GLADIATORS</span>
+            <div className="flex items-center gap-4">
+               <span className="text-[10px] font-black text-neutral-600 uppercase tracking-widest">TOP 1% ACTIVE</span>
+               <div className="h-1 w-8 bg-neutral-800 rounded-full" />
+               <span className="text-[11px] font-black text-amber-400 uppercase tracking-widest">SEASON 09</span>
+            </div>
           </div>
-          <div className="h-3 w-full bg-black/60 rounded-full border border-neutral-800 overflow-hidden p-0.5">
-            <div className="h-full bg-gradient-to-r from-amber-600 via-amber-400 to-amber-200 rounded-full shadow-[0_0_15px_rgba(251,191,36,0.4)] animate-shimmer" style={{ width: '85%' }} />
+          <div className="h-4 w-full bg-black/60 rounded-full border border-neutral-800/50 overflow-hidden p-1 shadow-inner">
+            <div className="h-full bg-gradient-to-r from-amber-600 via-amber-400 to-amber-200 rounded-full shadow-[0_0_20px_rgba(251,191,36,0.3)] animate-shimmer" style={{ width: '85%' }} />
           </div>
         </div>
       </div>

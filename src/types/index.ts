@@ -36,6 +36,22 @@ export interface UserProfile {
   transactions: Transaction[];
 }
 
+export interface SystemAiDetection {
+  isLikelyFake: boolean;
+  confidenceScore: number;
+  fakeRiskScore: number;
+  verdict: string;
+  dimensions: { width: number; height: number } | null;
+  aspectRatio: string;
+  fileType: string;
+  fileSizeKb: number;
+  headerHex: string;
+  isStandardType: boolean;
+  detectedSoftware: string | null;
+  redFlags: string[];
+  positiveSignals: string[];
+}
+
 export interface MatchPlayer {
   id: string;
   username: string;
@@ -52,6 +68,21 @@ export interface MatchPlayer {
     scoreSummary?: string;
     reasoning?: string;
   };
+  forensicAnalysis?: {
+    isLikelyFake: boolean;
+    confidenceScore: number;
+    aiDetected: boolean;
+    manipulationDetected: boolean;
+    detectedPlayerName: string;
+    detectedOutcome: string;
+    technicalNotes: string;
+    redFlags: string[];
+    verdict: string;
+    fileInfo?: any;
+  };
+  systemAiDetection?: SystemAiDetection;
+  resubmissionRequested?: boolean;
+  resubmissionReason?: string;
   submittedAt?: number;
 }
 
@@ -96,6 +127,15 @@ export interface Match {
   winnerIgn?: string;
   chatMessages: ChatMessage[];
   resolutionNotes?: string;
+  conflictReason?: string;
+  conflictReasonsList?: string[];
+  reviewStatus?: 'PENDING_REVIEW' | 'ESCALATED' | 'RESUBMISSION_REQUESTED' | 'CLEAN';
+  resubmissionNotice?: {
+    targetPlayerId?: string;
+    targetPlayerIgn?: string;
+    reason: string;
+    timestamp: number;
+  };
   isPublic?: boolean;
 }
 

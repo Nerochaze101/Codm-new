@@ -4,6 +4,7 @@ import {
   CheckCircle2, Lock, Sparkles, Users, Crosshair, ArrowRight, Clock
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
+import { Logo } from './Logo';
 
 interface RulesPageProps {
   onOpenCreateBet: (mode?: string, stake?: number) => void;
@@ -17,19 +18,29 @@ export const RulesPage: React.FC<RulesPageProps> = ({
   return (
     <div className="max-w-5xl mx-auto space-y-8 pb-16">
       {/* 1. Header Banner */}
-      <div className="relative overflow-hidden rounded-3xl bg-neutral-900 border border-amber-500/40 p-6 sm:p-10 shadow-2xl text-center space-y-4">
-        <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-xs font-mono font-bold uppercase tracking-wider">
-          <ShieldCheck className="w-4 h-4" />
-          <span>Official Esports Integrity & Escrow Handbook</span>
+      <div className="relative overflow-hidden rounded-[3rem] bg-neutral-900 border-2 border-amber-500/30 p-8 sm:p-12 shadow-2xl text-center space-y-6 group">
+        <div className="absolute inset-0 bg-gradient-to-b from-amber-400/[0.02] to-transparent pointer-events-none" />
+        
+        <div className="flex flex-col items-center space-y-6 relative z-10">
+          <div className="w-24 h-24">
+            <Logo size={96} glow={true} />
+          </div>
+          
+          <div className="space-y-4">
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[10px] font-black uppercase tracking-[0.2em]">
+              <ShieldCheck size={14} className="animate-pulse" />
+              <span>Esports Integrity & Escrow Handbook</span>
+            </div>
+
+            <h1 className="text-4xl sm:text-6xl font-black font-heading text-white uppercase tracking-tighter leading-none">
+              ARENA <span className="text-amber-400">PROTOCOLS</span>
+            </h1>
+
+            <p className="text-xs sm:text-sm text-neutral-400 max-w-2xl mx-auto leading-relaxed font-medium">
+              Every wager is backed by real-time automated escrow. Learn the tournament rules, weapon loadouts, and AI scoreboard verification protocol.
+            </p>
+          </div>
         </div>
-
-        <h1 className="text-3xl sm:text-5xl font-black font-heading text-white uppercase tracking-wide">
-          CODM 1V1 FAIR PLAY & RULES
-        </h1>
-
-        <p className="text-xs sm:text-sm text-neutral-300 max-w-2xl mx-auto leading-relaxed">
-          Every wager is backed by real-time automated escrow. Learn the tournament rules, allowed sniper weapons, prohibited tactics, and AI scoreboard verification protocol.
-        </p>
 
         <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
           <button

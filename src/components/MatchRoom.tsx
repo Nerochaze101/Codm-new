@@ -798,23 +798,46 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                   This wager has concluded. Winning funds have been credited to the winner's wallet.
                 </p>
               </div>
-            ) : match.status === 'DISPUTED' ? (
-              /* CONFLICT DETECTED - SCREENSHOT REQUIRED ONLY HERE */
+            ) : match.status === 'DISPUTED' || match.resubmissionNotice || (isCreator ? match.creator.resubmissionRequested : match.opponent?.resubmissionRequested) ? (
+              /* CONFLICT DETECTED OR RESUBMISSION REQUESTED - SCREENSHOT REQUIRED */
               <div className="p-5 rounded-2xl bg-rose-950/40 border-2 border-rose-500/60 space-y-4">
                 <div className="flex items-start gap-3">
                   <div className="p-2 rounded-xl bg-rose-500/20 text-rose-400 shrink-0">
                     <AlertTriangle className="w-6 h-6" />
                   </div>
-                  <div>
+                  <div className="space-y-2 flex-1">
                     <div className="text-sm font-black text-rose-300 font-heading uppercase tracking-wide">
-                      ⚠️ Conflict Detected: Both Players Submitted Conflicting Results!
+                      {match.resubmissionNotice ? '⚠️ Referee Notice: Screenshot Resubmission Required' : '⚠️ Conflict Detected: Both Players Submitted Conflicting Claims'}
                     </div>
-                    <p className="text-xs text-neutral-300 mt-1">
-                      Both players claimed conflicting outcomes. The <strong>₦{match.potAmount.toLocaleString()}</strong> pot is held safely in escrow.
+
+                    {/* Transparent Conflict Explanation for Users */}
+                    <div className="p-3.5 bg-black/70 rounded-xl border border-rose-500/30 text-xs text-neutral-200 leading-relaxed space-y-1.5">
+                      <div className="text-[10px] text-amber-400 font-black uppercase tracking-wider font-mono">
+                        Conflict Reason:
+                      </div>
+                      <p className="font-semibold text-white">
+                        {match.conflictReason || match.resolutionNotes || 'Both players claimed conflicting outcomes. The escrow pot is securely frozen.'}
+                      </p>
+                      {(isCreator ? match.creator.resubmissionReason : match.opponent?.resubmissionReason) && (
+                        <div className="text-[11px] text-amber-300 font-medium pt-1.5 border-t border-rose-500/20">
+                          <strong className="text-amber-400">Rejection Notice:</strong> "{(isCreator ? match.creator.resubmissionReason : match.opponent?.resubmissionReason)}"
+                        </div>
+                      )}
+                    </div>
+
+                    <p className="text-xs text-neutral-300">
+                      The <strong>₦{match.potAmount.toLocaleString()}</strong> pot is held safely in escrow. Please upload your post-match CODM scoreboard screenshot proof to resolve the conflict and release your winnings.
                     </p>
-                    <p className="text-xs text-amber-400 font-semibold mt-1">
-                      📸 Please upload your post-match CODM scoreboard screenshot proof to resolve the conflict and release your winnings.
-                    </p>
+
+                    {/* Anti-Cheat & Forensic System Standards */}
+                    <div className="p-3 rounded-xl bg-neutral-900/90 border border-neutral-800 text-[11px] text-neutral-400 space-y-1">
+                      <div className="font-bold text-neutral-300 uppercase tracking-widest text-[9px]">Proof Verification Standards:</div>
+                      <div className="space-y-0.5 text-neutral-400">
+                        <div>· Must be a full-screen <strong>landscape</strong> mobile screenshot (16:9 to 20:9 phone display).</div>
+                        <div>· Room Code #{match.roomCode || match.challengeCode} and victory/defeat scoreboard must be clearly visible.</div>
+                        <div>· System logic automatically verifies image headers and flags synthetic AI-generated 1:1 images.</div>
+                      </div>
+                    </div>
                   </div>
                 </div>
 

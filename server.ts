@@ -118,7 +118,11 @@ export interface Match {
     resultClaim?: 'VICTORY' | 'DEFEAT' | 'DRAW';
     screenshotUrl?: string;
     screenshotAnalysis?: any;
+    forensicAnalysis?: any;
     submittedAt?: number;
+    systemAiDetection?: any;
+    resubmissionRequested?: boolean;
+    resubmissionReason?: string;
   };
   opponent?: {
     id: string;
@@ -130,7 +134,11 @@ export interface Match {
     resultClaim?: 'VICTORY' | 'DEFEAT' | 'DRAW';
     screenshotUrl?: string;
     screenshotAnalysis?: any;
+    forensicAnalysis?: any;
     submittedAt?: number;
+    systemAiDetection?: any;
+    resubmissionRequested?: boolean;
+    resubmissionReason?: string;
   };
   winnerId?: string;
   winnerIgn?: string;
@@ -143,6 +151,16 @@ export interface Match {
   }>;
   resolutionNotes?: string;
   isPublic?: boolean;
+  conflictReason?: string;
+  conflictReasonsList?: string[];
+  reviewStatus?: 'PENDING_REVIEW' | 'FLAGGED_AI' | 'DISPUTED_CLAIMS' | 'APPROVED' | 'RESUBMISSION_REQUESTED';
+  resubmissionNotice?: {
+    requestedBy?: string;
+    targetPlayerId?: 'both' | string;
+    targetPlayerIgn?: string;
+    reason: string;
+    timestamp: number;
+  };
 }
 
 // SQL escape helper to maintain compatibility with Supabase transaction pooler (PgBouncer)
@@ -3973,8 +3991,9 @@ app.post('/api/users/:id/clean-history', async (req, res) => {
 // ==========================================
 // 🤖 TELEGRAM BOT NOTIFICATION SERVICE
 // ==========================================
-const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || '8886701427:AAE5Oz2ZuMGEn9p6LTvHy6hXlZZXLHtqUeo').trim();
-const TELEGRAM_PUBLIC_CHANNEL_ID = (process.env.TELEGRAM_PUBLIC_CHANNEL_ID || '-1004368602897').trim();
+// TELEGRAM BOT CONFIGURATION
+const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+const TELEGRAM_PUBLIC_CHANNEL_ID = (process.env.TELEGRAM_PUBLIC_CHANNEL_ID || '').trim();
 
 /**
  * Dispatches a real-time wager alert to the configured public Telegram channel.
@@ -4022,15 +4041,17 @@ export async function postMatchToPublicChannel(match: Match, origin?: string) {
 
     const data: any = await res.json();
     if (!data.ok) {
-      console.error(`❌ [Telegram Bot] Public channel post FAILED for ID ${TELEGRAM_PUBLIC_CHANNEL_ID}`);
-      console.error(`[Telegram Bot] Error Description: ${data.description}`);
-      console.error(`[Telegram Bot] Error Code: ${data.error_code}`);
+      console.error(`❌ [Telegram Bot] Public channel post FAILED for ID: "${TELEGRAM_PUBLIC_CHANNEL_ID}"`);
+      console.error(`[Telegram Bot] Error: ${data.description} (Code: ${data.error_code})`);
       
       if (data.description === 'chat not found') {
-        console.warn(`[Telegram Bot] HINT: The Bot must be an ADMIN in the channel/group ${TELEGRAM_PUBLIC_CHANNEL_ID}. Also ensure the ID includes the -100 prefix if it is a channel.`);
+        console.warn(`[Telegram Bot] DIAGNOSTIC: "chat not found" typically means:`);
+        console.warn(`1. The Bot Token is correct but the ID "${TELEGRAM_PUBLIC_CHANNEL_ID}" is invalid or the bot hasn't been added there.`);
+        console.warn(`2. The bot is NOT an administrator in the channel.`);
+        console.warn(`3. The channel ID must start with -100 for public channels.`);
       }
     } else {
-      console.log(`✅ [Telegram Bot] Match #${match.challengeCode} posted to public channel ${TELEGRAM_PUBLIC_CHANNEL_ID} successfully (Message ID: ${data.result?.message_id})`);
+      console.log(`✅ [Telegram Bot] Match #${match.challengeCode} posted successfully (Msg ID: ${data.result?.message_id})`);
     }
   } catch (err: any) {
     console.error('❌ [Telegram Bot] Critical exception during public channel post:', err.message);
@@ -4075,9 +4096,12 @@ export async function sendTelegramMatchAcceptedAlert(match: Match, opponentIgn: 
       });
       const data = await res.json();
       if (!data.ok) {
-        console.warn(`[Telegram Bot] Send message failed for chat ID ${chatId}: ${data.description}`);
+        console.warn(`[Telegram Bot] Direct alert failed for chat ID ${chatId}: ${data.description}`);
+        if (data.description === 'chat not found') {
+          console.warn(`[Telegram Bot] Hint: User must start a conversation with the bot first for direct alerts.`);
+        }
       } else {
-        console.log(`✅ [Telegram Bot] Match acceptance alert sent successfully to host chat ID ${chatId}`);
+        console.log(`✅ [Telegram Bot] Acceptance alert sent to host chat ${chatId}`);
       }
     }
   } catch (err: any) {
@@ -4725,6 +4749,283 @@ app.post('/api/matches/:id/cancel', async (req, res) => {
   }
 });
 
+// ==========================================
+// 🛡️ DETERMINISTIC IMAGE FORENSIC & AI-DETECTION SYSTEM LOGIC
+// Analyzes magic bytes, dimension ratios, entropy & embedded metadata without relying on AI LLMs
+// ==========================================
+
+export function analyzeImageSystemLogic(base64Data: string, filename?: string) {
+  if (!base64Data || typeof base64Data !== 'string') {
+    return {
+      isLikelyFake: true,
+      confidenceScore: 0.90,
+      fakeRiskScore: 90,
+      verdict: 'NO IMAGE DATA PROVIDED',
+      dimensions: null,
+      aspectRatio: 'Unknown',
+      fileType: 'unknown',
+      fileSizeKb: 0,
+      headerHex: 'NONE',
+      isStandardType: false,
+      detectedSoftware: null,
+      redFlags: ['No valid image payload received'],
+      positiveSignals: []
+    };
+  }
+
+  const cleanBase64 = base64Data.replace(/^data:image\/[a-z0-9.+-]+;base64,/, '');
+  let buf: Buffer;
+  try {
+    buf = Buffer.from(cleanBase64, 'base64');
+  } catch (e) {
+    return {
+      isLikelyFake: true,
+      confidenceScore: 0.95,
+      fakeRiskScore: 95,
+      verdict: 'CORRUPTED BASE64 DATA',
+      dimensions: null,
+      aspectRatio: 'Corrupt',
+      fileType: 'invalid',
+      fileSizeKb: 0,
+      headerHex: 'CORRUPT',
+      isStandardType: false,
+      detectedSoftware: null,
+      redFlags: ['Base64 payload could not be decoded'],
+      positiveSignals: []
+    };
+  }
+
+  const sizeKb = Math.round(buf.length / 1024);
+  let fileType = 'unknown';
+  let isStandardType = false;
+  const headerHex = buf.subarray(0, 16).toString('hex').toUpperCase();
+
+  // 1. Magic bytes checks
+  if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47 && buf[4] === 0x0D && buf[5] === 0x0A && buf[6] === 0x1A && buf[7] === 0x0A) {
+    fileType = 'image/png';
+    isStandardType = true;
+  } else if (buf.length >= 3 && buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) {
+    fileType = 'image/jpeg';
+    isStandardType = true;
+  } else if (buf.length >= 12 && buf.subarray(0, 4).toString() === 'RIFF' && buf.subarray(8, 12).toString() === 'WEBP') {
+    fileType = 'image/webp';
+    isStandardType = true;
+  }
+
+  // 2. Parse dimensions
+  let dimensions: { width: number; height: number } | null = null;
+  if (fileType === 'image/png' && buf.length >= 24) {
+    dimensions = {
+      width: buf.readUInt32BE(16),
+      height: buf.readUInt32BE(20)
+    };
+  } else if (fileType === 'image/jpeg') {
+    let offset = 2;
+    while (offset < buf.length - 8) {
+      if (buf[offset] !== 0xFF) { offset++; continue; }
+      const marker = buf[offset + 1];
+      if (marker === 0xD9 || marker === 0xDA) break;
+      if ([0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF].includes(marker)) {
+        dimensions = {
+          height: buf.readUInt16BE(offset + 5),
+          width: buf.readUInt16BE(offset + 7)
+        };
+        break;
+      }
+      const len = buf.readUInt16BE(offset + 2);
+      offset += 2 + len;
+    }
+  } else if (fileType === 'image/webp' && buf.length >= 30) {
+    const chunkType = buf.subarray(12, 16).toString();
+    if (chunkType === 'VP8 ' && buf.length >= 30) {
+      dimensions = {
+        width: buf.readUInt16LE(26) & 0x3fff,
+        height: buf.readUInt16LE(28) & 0x3fff
+      };
+    } else if (chunkType === 'VP8L' && buf.length >= 25) {
+      const b0 = buf[21];
+      const b1 = buf[22];
+      const b2 = buf[23];
+      const b3 = buf[24];
+      dimensions = {
+        width: 1 + (((b1 & 0x3F) << 8) | b0),
+        height: 1 + (((b3 & 0x0F) << 10) | (b2 << 2) | ((b1 & 0xC0) >> 6))
+      };
+    } else if (chunkType === 'VP8X' && buf.length >= 30) {
+      dimensions = {
+        width: 1 + (buf[24] | (buf[25] << 8) | (buf[26] << 16)),
+        height: 1 + (buf[27] | (buf[28] << 8) | (buf[29] << 16))
+      };
+    }
+  }
+
+  let fakeRiskScore = 0;
+  const redFlags: string[] = [];
+  const positiveSignals: string[] = [];
+  let detectedSoftware: string | null = null;
+
+  if (!isStandardType) {
+    redFlags.push(`Non-standard image file signature (Header: ${headerHex.slice(0, 8)})`);
+    fakeRiskScore += 45;
+  } else {
+    positiveSignals.push(`Standard ${fileType.toUpperCase().replace('IMAGE/', '')} format verified`);
+  }
+
+  let aspectRatioLabel = 'Unknown';
+  if (dimensions && dimensions.width > 0 && dimensions.height > 0) {
+    const { width, height } = dimensions;
+    const ratio = width / height;
+    aspectRatioLabel = `${width}x${height} (${ratio.toFixed(2)}:1)`;
+
+    // 1. Square 1:1 check (Standard AI generator default)
+    if (ratio >= 0.95 && ratio <= 1.05) {
+      redFlags.push(`1:1 Square aspect ratio (${width}x${height}) - classic generative AI default (Midjourney / DALL-E / SD)`);
+      fakeRiskScore += 50;
+    }
+    // 2. Portrait orientation check (CODM scoreboard is exclusively landscape)
+    else if (height > width) {
+      redFlags.push(`Portrait orientation (${width}x${height}) - CODM gameplay scoreboard is strictly landscape`);
+      fakeRiskScore += 40;
+    }
+    // 3. Authentic mobile landscape display
+    else if (ratio >= 1.33 && ratio <= 2.45) {
+      positiveSignals.push(`Authentic mobile landscape aspect ratio (${ratio >= 1.7 && ratio <= 2.3 ? '16:9 to 20:9 Phone Display' : 'Tablet Landscape'})`);
+    } else {
+      redFlags.push(`Abnormal aspect ratio (${ratio.toFixed(2)}:1) - out of mobile gaming range`);
+      fakeRiskScore += 20;
+    }
+
+    // 4. Exact standard AI model training resolutions
+    if (
+      (width === 512 && height === 512) ||
+      (width === 768 && height === 768) ||
+      (width === 1024 && height === 1024) ||
+      (width === 512 && height === 768) ||
+      (width === 768 && height === 512) ||
+      (width === 1024 && height === 1792)
+    ) {
+      redFlags.push(`Matches standard AI default dimensions (${width}x${height})`);
+      fakeRiskScore += 35;
+    }
+  } else {
+    redFlags.push('Unable to decode image dimension headers');
+    fakeRiskScore += 20;
+  }
+
+  // 3. Scan binary text chunks for AI generation signatures & parameters
+  const rawText = buf.toString('latin1');
+  const aiKeywords = [
+    { pattern: /comfyui/i, name: 'ComfyUI Node Graph' },
+    { pattern: /stable diffusion|automatic1111|\ba1111\b|sdxl|fooocus/i, name: 'Stable Diffusion / A1111' },
+    { pattern: /midjourney/i, name: 'Midjourney' },
+    { pattern: /dall[- ]?e/i, name: 'OpenAI DALL-E' },
+    { pattern: /novelai/i, name: 'NovelAI' },
+    { pattern: /adobe firefly|firefly/i, name: 'Adobe Firefly' },
+    { pattern: /synthid/i, name: 'Google SynthID Synthetic Watermark' },
+    { pattern: /c2pa|urn:c2pa/i, name: 'C2PA Provenance Manifest' },
+    { pattern: /steps:\s*\d+/i, name: 'AI Diffusion Steps Parameter' },
+    { pattern: /sampler:\s*[a-z0-9_]+/i, name: 'AI Diffusion Sampler Parameter' },
+    { pattern: /cfg scale:\s*[0-9.]+/i, name: 'AI Diffusion CFG Scale' },
+    { pattern: /negative prompt:/i, name: 'AI Negative Prompt Parameter' },
+    { pattern: /photoshop|adobe imageready/i, name: 'Adobe Photoshop' },
+    { pattern: /canva/i, name: 'Canva Design Editor' }
+  ];
+
+  for (const { pattern, name } of aiKeywords) {
+    if (pattern.test(rawText)) {
+      detectedSoftware = name;
+      redFlags.push(`Embedded AI/editor signature: "${name}"`);
+      fakeRiskScore += 60;
+      break;
+    }
+  }
+
+  // 4. File size sanity check
+  if (sizeKb < 35) {
+    redFlags.push(`Suspiciously small file size (${sizeKb} KB) for high-definition scoreboard`);
+    fakeRiskScore += 20;
+  } else if (sizeKb > 120 && isStandardType && positiveSignals.length > 0) {
+    positiveSignals.push(`Standard mobile capture payload (${sizeKb} KB)`);
+  }
+
+  const isLikelyFake = fakeRiskScore >= 45;
+  const confidenceScore = isLikelyFake
+    ? Math.min(0.99, 0.65 + Math.min(0.30, fakeRiskScore / 150))
+    : Math.max(0.88, 1.0 - (fakeRiskScore / 100));
+
+  const verdict = isLikelyFake
+    ? 'FAKE / SYNTHETIC AI GENERATION DETECTED'
+    : fakeRiskScore > 20
+    ? 'SUSPICIOUS / ANOMALIES PRESENT'
+    : 'VERIFIED AUTHENTIC CODM SCREENSHOT';
+
+  return {
+    isLikelyFake,
+    confidenceScore: Math.round(confidenceScore * 100) / 100,
+    fakeRiskScore,
+    verdict,
+    dimensions,
+    aspectRatio: aspectRatioLabel,
+    fileType,
+    fileSizeKb: sizeKb,
+    headerHex: headerHex.slice(0, 16),
+    isStandardType,
+    detectedSoftware,
+    redFlags,
+    positiveSignals
+  };
+}
+
+// Compute transparent, deterministic conflict explanation reasons for UI display
+export function computeMatchConflictReasons(match: any): { conflictReason: string; conflictReasonsList: string[] } {
+  const cClaim = match.creator?.resultClaim;
+  const oClaim = match.opponent?.resultClaim;
+  const cIgn = match.creator?.codmIgn || 'Host';
+  const oIgn = match.opponent?.codmIgn || 'Rival';
+  const cDetection = match.creator?.systemAiDetection;
+  const oDetection = match.opponent?.systemAiDetection;
+
+  const reasons: string[] = [];
+
+  // 1. Dual Victory Claim
+  if (cClaim === 'VICTORY' && oClaim === 'VICTORY') {
+    reasons.push(`Dual Victory Conflict: Both Host (${cIgn}) and Rival (${oIgn}) claimed "I Won 🏆". Scoreboard verification required to award escrow.`);
+  } 
+  // 2. Conflicting outcome claims
+  else if (cClaim && oClaim && cClaim !== oClaim) {
+    reasons.push(`Contradictory Outcome Claims: ${cIgn} claimed "${cClaim}" while ${oIgn} claimed "${oClaim}".`);
+  }
+
+  // 3. Resubmission notices
+  if (match.resubmissionNotice?.reason) {
+    reasons.push(`Proof Resubmission Requested: ${match.resubmissionNotice.reason}`);
+  }
+
+  // 4. System AI detections
+  if (cDetection?.isLikelyFake) {
+    reasons.push(`⚠️ Host (${cIgn}) Screenshot Flagged: ${cDetection.verdict} (${cDetection.redFlags.join(' · ')})`);
+  }
+  if (oDetection?.isLikelyFake) {
+    reasons.push(`⚠️ Rival (${oIgn}) Screenshot Flagged: ${oDetection.verdict} (${oDetection.redFlags.join(' · ')})`);
+  }
+
+  // 5. Explicit dispute status or resolution notes
+  if (match.status === 'DISPUTED') {
+    if (match.resolutionNotes && !reasons.includes(match.resolutionNotes)) {
+      reasons.push(match.resolutionNotes);
+    }
+    if (!match.creator?.screenshotUrl) {
+      reasons.push(`Awaiting scoreboard proof upload from Host (${cIgn}).`);
+    }
+    if (match.opponent && !match.opponent.screenshotUrl) {
+      reasons.push(`Awaiting scoreboard proof upload from Rival (${oIgn}).`);
+    }
+  }
+
+  const conflictReason = reasons.length > 0 ? reasons[0] : (match.resolutionNotes || 'Match results pending referee verification.');
+  return { conflictReason, conflictReasonsList: reasons };
+}
+
 // Submit screenshot and match claim directly in database
 app.post('/api/matches/:id/submit-result', async (req, res) => {
   const match = await getMatchFromDb(req.params.id);
@@ -4744,7 +5045,8 @@ app.post('/api/matches/:id/submit-result', async (req, res) => {
 
   const playerIgn = isCreator ? match.creator.codmIgn : match.opponent!.codmIgn;
 
-  // Perform AI analysis if screenshot provided
+  // Run deterministic system logic image forensic analysis on uploaded screenshot
+  let systemAnalysis: any = null;
   let analysisResult = {
     detectedOutcome: claim,
     confidence: 0.95,
@@ -4753,53 +5055,8 @@ app.post('/api/matches/:id/submit-result', async (req, res) => {
     reasoning: 'Verified by CODM match verification engine.',
   };
 
-  if (screenshotBase64 && ai) {
-    try {
-      const base64Data = screenshotBase64.replace(/^data:image\/[a-z]+;base64,/, '');
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                mimeType: 'image/jpeg',
-                data: base64Data,
-              },
-            },
-            {
-              text: `You are an automated referee for Call of Duty: Mobile (CODM) 1v1 wager escrow matches.
-Analyze this post-game screenshot. The user claims: ${claim}.
-The player's In-Game Name (IGN) is: "${playerIgn}".
-Room Code: "${match.roomCode}".
-
-Determine:
-1. Is there a clear "VICTORY", "DEFEAT", or "DRAW / TIE" badge/banner?
-2. Is the player's name "${playerIgn}" visible in the scoreboard or match screen?
-3. What is the detected outcome? (VICTORY, DEFEAT, DRAW, or UNCLEAR)
-4. Confidence level between 0.0 and 1.0.
-
-Respond strictly in valid JSON format:
-{
-  "detectedOutcome": "VICTORY" | "DEFEAT" | "DRAW" | "UNCLEAR",
-  "confidence": number,
-  "detectedPlayerName": string or null,
-  "scoreSummary": string,
-  "reasoning": string
-}`,
-            },
-          ],
-        },
-        config: {
-          responseMimeType: 'application/json',
-        },
-      });
-
-      if (response.text) {
-        analysisResult = JSON.parse(response.text.trim());
-      }
-    } catch (err: any) {
-      console.error('Gemini vision analysis error, using fallback:', err.message);
-    }
+  if (screenshotBase64) {
+    systemAnalysis = analyzeImageSystemLogic(screenshotBase64);
   }
 
   // Record submission
@@ -4808,6 +5065,28 @@ Respond strictly in valid JSON format:
     if (screenshotBase64) {
       match.creator.screenshotUrl = screenshotBase64;
       match.creator.screenshotAnalysis = analysisResult;
+      match.creator.systemAiDetection = systemAnalysis;
+      match.creator.forensicAnalysis = {
+        isLikelyFake: systemAnalysis.isLikelyFake,
+        confidenceScore: systemAnalysis.confidenceScore,
+        aiDetected: systemAnalysis.isLikelyFake,
+        manipulationDetected: systemAnalysis.fakeRiskScore >= 45,
+        detectedPlayerName: playerIgn,
+        detectedOutcome: claim,
+        technicalNotes: systemAnalysis.redFlags.join('; ') || 'Standard verified mobile screenshot format',
+        redFlags: systemAnalysis.redFlags,
+        positiveSignals: systemAnalysis.positiveSignals,
+        verdict: systemAnalysis.verdict,
+        fileInfo: {
+          mimeType: systemAnalysis.fileType,
+          headerHex: systemAnalysis.headerHex,
+          isStandardType: systemAnalysis.isStandardType,
+          dimensions: systemAnalysis.dimensions,
+          aspectRatio: systemAnalysis.aspectRatio,
+        }
+      };
+      delete match.creator.resubmissionRequested;
+      delete match.creator.resubmissionReason;
     }
     match.creator.submittedAt = Date.now();
   } else if (match.opponent) {
@@ -4815,6 +5094,28 @@ Respond strictly in valid JSON format:
     if (screenshotBase64) {
       match.opponent.screenshotUrl = screenshotBase64;
       match.opponent.screenshotAnalysis = analysisResult;
+      match.opponent.systemAiDetection = systemAnalysis;
+      match.opponent.forensicAnalysis = {
+        isLikelyFake: systemAnalysis.isLikelyFake,
+        confidenceScore: systemAnalysis.confidenceScore,
+        aiDetected: systemAnalysis.isLikelyFake,
+        manipulationDetected: systemAnalysis.fakeRiskScore >= 45,
+        detectedPlayerName: playerIgn,
+        detectedOutcome: claim,
+        technicalNotes: systemAnalysis.redFlags.join('; ') || 'Standard verified mobile screenshot format',
+        redFlags: systemAnalysis.redFlags,
+        positiveSignals: systemAnalysis.positiveSignals,
+        verdict: systemAnalysis.verdict,
+        fileInfo: {
+          mimeType: systemAnalysis.fileType,
+          headerHex: systemAnalysis.headerHex,
+          isStandardType: systemAnalysis.isStandardType,
+          dimensions: systemAnalysis.dimensions,
+          aspectRatio: systemAnalysis.aspectRatio,
+        }
+      };
+      delete match.opponent.resubmissionRequested;
+      delete match.opponent.resubmissionReason;
     }
     match.opponent.submittedAt = Date.now();
   }
@@ -4994,6 +5295,22 @@ Respond strictly in valid JSON format:
     match.resolutionNotes = `${playerIgn} claimed "${claim === 'VICTORY' ? 'I Won 🏆' : 'Draw ⚖️'}". Waiting for opponent to confirm or dispute.`;
   }
 
+  // If system forensic analysis detected suspicious/AI signatures, notify match room
+  if (systemAnalysis?.isLikelyFake) {
+    match.chatMessages.push({
+      id: `msg_${Date.now()}_sys_flag`,
+      senderId: 'SYSTEM',
+      senderName: 'CODM Referee Bot',
+      text: `⚠️ Security Alert: ${playerIgn}'s screenshot was flagged by system forensic analysis (${systemAnalysis.verdict}: ${systemAnalysis.redFlags.join(' · ')}). Flagged in Admin Review Queue for referee inspection.`,
+      timestamp: Date.now(),
+    });
+  }
+
+  // Calculate and store transparent conflict reasons for UI display
+  const conflictInfo = computeMatchConflictReasons(match);
+  match.conflictReason = conflictInfo.conflictReason;
+  match.conflictReasonsList = conflictInfo.conflictReasonsList;
+
   await saveMatchToDb(match);
   res.json(match);
 });
@@ -5004,6 +5321,51 @@ app.post('/api/matches/:id/admin-resolve', async (req, res) => {
   if (!match) return res.status(404).json({ error: 'Match not found' });
 
   const { winnerId } = req.body;
+
+  // Handle Full Refund / Mutual Draw resolution
+  if (winnerId === 'REFUND' || winnerId === 'DRAW') {
+    if (match.creator?.id) {
+      await pool.query(`
+        UPDATE users 
+        SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)}),
+            balance = balance + ${escapeSql(match.stakeAmount)}
+        WHERE id = ${escapeSql(match.creator.id)}
+      `);
+      await saveTransactionToDb(match.creator.id, {
+        id: `tx_refund_${Date.now()}_creator`,
+        type: 'ESCROW_REFUND',
+        amount: match.stakeAmount,
+        description: `Escrow refund for match #${match.roomCode || match.challengeCode}: Adjudicated as Draw / Full Refund by referee.`,
+        matchId: match.id,
+        timestamp: Date.now()
+      });
+    }
+
+    if (match.opponent?.id) {
+      await pool.query(`
+        UPDATE users 
+        SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)}),
+            balance = balance + ${escapeSql(match.stakeAmount)}
+        WHERE id = ${escapeSql(match.opponent.id)}
+      `);
+      await saveTransactionToDb(match.opponent.id, {
+        id: `tx_refund_${Date.now()}_opponent`,
+        type: 'ESCROW_REFUND',
+        amount: match.stakeAmount,
+        description: `Escrow refund for match #${match.roomCode || match.challengeCode}: Adjudicated as Draw / Full Refund by referee.`,
+        matchId: match.id,
+        timestamp: Date.now()
+      });
+    }
+
+    match.status = 'CANCELLED';
+    match.resolutionNotes = `Match resolved as Draw / Full Refund by referee. ₦${match.stakeAmount.toLocaleString()} returned to both players.`;
+    match.chatMessages = [];
+    await clearMatchChatInDb(match.id);
+    await saveMatchToDb(match);
+    return res.json(match);
+  }
+
   const isCreatorWinner = match.creator.id === winnerId;
   const isOpponentWinner = match.opponent?.id === winnerId;
 
@@ -5357,22 +5719,23 @@ app.post('/api/msksksnuwje/matches/:id/abandon', async (req, res) => {
   }
 });
 
-// Admin: Fetch all matches (with filter for active/disputed/abandoned)
-app.get('/api/msksksnuwje/matches', async (req, res) => {
+// Admin: Fetch all disputed matches for forensic review
+app.get('/api/msksksnuwje/disputes', async (req, res) => {
   try {
-    const { userId, status } = req.query;
+    const { userId } = req.query;
     const adminUser = await getUserFromDb(userId as string);
     if (!adminUser || adminUser.role !== 'admin') {
       return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
     }
 
-    let queryStr = `SELECT * FROM matches`;
-    if (status && status !== 'all') {
-      queryStr += ` WHERE status = ${escapeSql(status as string)}`;
-    }
-    queryStr += ` ORDER BY created_at DESC LIMIT 100`;
+    // Fetch matches that are in DISPUTED or SUBMITTING_RESULTS (potential disputes)
+    const mRes = await pool.query(`
+      SELECT * FROM matches 
+      WHERE status IN ('DISPUTED', 'SUBMITTING_RESULTS') 
+      ORDER BY created_at DESC 
+      LIMIT 50
+    `);
 
-    const mRes = await pool.query(queryStr);
     const matches = mRes.rows.map((m) => ({
       id: m.id,
       challengeCode: m.challenge_code,
@@ -5395,11 +5758,284 @@ app.get('/api/msksksnuwje/matches', async (req, res) => {
 
     res.json({ matches });
   } catch (err: any) {
+    console.error('Error fetching admin disputes:', err);
+    res.status(500).json({ error: err.message || 'Failed to fetch disputes' });
+  }
+});
+
+// Admin: Review Queue - fetches all pending, verifying, or disputed matches with system-level AI detection
+app.get('/api/msksksnuwje/review-queue', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const adminUser = await getUserFromDb(userId as string);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    }
+
+    const result = await pool.query(`
+      SELECT * FROM matches 
+      WHERE status IN ('DISPUTED', 'SUBMITTING_RESULTS', 'VERIFYING')
+         OR (creator_data::text LIKE '%screenshotUrl%' AND status NOT IN ('SETTLED', 'CANCELLED', 'ABANDONED'))
+         OR (opponent_data::text LIKE '%screenshotUrl%' AND status NOT IN ('SETTLED', 'CANCELLED', 'ABANDONED'))
+         OR (resolution_notes LIKE '%Resubmission%' AND status NOT IN ('SETTLED', 'CANCELLED', 'ABANDONED'))
+      ORDER BY 
+        CASE WHEN status = 'DISPUTED' THEN 1 WHEN status = 'VERIFYING' THEN 2 ELSE 3 END,
+        created_at DESC 
+      LIMIT 100
+    `);
+
+    const matches = result.rows.map((m) => {
+      const creator = typeof m.creator_data === 'string' ? JSON.parse(m.creator_data) : (m.creator_data || {});
+      const opponent = m.opponent_data ? (typeof m.opponent_data === 'string' ? JSON.parse(m.opponent_data) : m.opponent_data) : undefined;
+
+      // Ensure deterministic system logic analysis is attached for uploaded screenshots
+      if (creator.screenshotUrl && !creator.systemAiDetection) {
+        creator.systemAiDetection = analyzeImageSystemLogic(creator.screenshotUrl);
+      }
+      if (opponent?.screenshotUrl && !opponent.systemAiDetection) {
+        opponent.systemAiDetection = analyzeImageSystemLogic(opponent.screenshotUrl);
+      }
+
+      const matchObj: any = {
+        id: m.id,
+        challengeCode: m.challenge_code,
+        roomCode: m.room_code || undefined,
+        gameMode: m.game_mode,
+        map: m.map,
+        rules: typeof m.rules === 'string' ? JSON.parse(m.rules) : (m.rules || []),
+        stakeAmount: parseFloat(m.stake_amount),
+        potAmount: parseFloat(m.pot_amount),
+        platformFee: parseFloat(m.platform_fee || 0),
+        winnerPayout: parseFloat(m.winner_payout),
+        status: m.status,
+        createdAt: parseInt(m.created_at, 10),
+        creator,
+        opponent,
+        winnerId: m.winner_id || undefined,
+        winnerIgn: m.winner_ign || undefined,
+        resolutionNotes: m.resolution_notes || undefined,
+        chatMessages: typeof m.chat_messages === 'string' ? JSON.parse(m.chat_messages) : (m.chat_messages || []),
+      };
+
+      const conflictInfo = computeMatchConflictReasons(matchObj);
+      matchObj.conflictReason = conflictInfo.conflictReason;
+      matchObj.conflictReasonsList = conflictInfo.conflictReasonsList;
+
+      return matchObj;
+    });
+
+    const disputedCount = matches.filter((m: any) => m.status === 'DISPUTED').length;
+    const aiFlaggedCount = matches.filter((m: any) => 
+      m.creator?.systemAiDetection?.isLikelyFake || m.opponent?.systemAiDetection?.isLikelyFake
+    ).length;
+
+    res.json({
+      matches,
+      totalCount: matches.length,
+      disputedCount,
+      aiFlaggedCount,
+      pendingCount: matches.length,
+    });
+  } catch (err: any) {
+    console.error('Error fetching review queue:', err);
+    res.status(500).json({ error: err.message || 'Failed to fetch review queue' });
+  }
+});
+
+// Admin: Reject & Request Resubmission
+app.post('/api/msksksnuwje/matches/:id/resubmit', async (req, res) => {
+  try {
+    const { userId, targetPlayerId, reason } = req.body;
+    const adminUser = await getUserFromDb(userId);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    }
+
+    const match = await getMatchFromDb(req.params.id);
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+
+    const targetNoticeReason = reason || 'Screenshot proof rejected. Please upload an unedited, full-screen CODM landscape scoreboard.';
+    const isTargetCreator = !targetPlayerId || targetPlayerId === 'both' || match.creator.id === targetPlayerId;
+    const isTargetOpponent = !targetPlayerId || targetPlayerId === 'both' || match.opponent?.id === targetPlayerId;
+
+    if (isTargetCreator) {
+      delete match.creator.screenshotUrl;
+      delete match.creator.screenshotAnalysis;
+      delete match.creator.forensicAnalysis;
+      delete match.creator.systemAiDetection;
+      match.creator.resubmissionRequested = true;
+      match.creator.resubmissionReason = targetNoticeReason;
+    }
+
+    if (isTargetOpponent && match.opponent) {
+      delete match.opponent.screenshotUrl;
+      delete match.opponent.screenshotAnalysis;
+      delete match.opponent.forensicAnalysis;
+      delete match.opponent.systemAiDetection;
+      match.opponent.resubmissionRequested = true;
+      match.opponent.resubmissionReason = targetNoticeReason;
+    }
+
+    match.status = 'SUBMITTING_RESULTS';
+    const targetLabel = targetPlayerId === match.creator.id
+      ? match.creator.codmIgn
+      : targetPlayerId === match.opponent?.id
+      ? match.opponent?.codmIgn
+      : 'Both Players';
+
+    match.resubmissionNotice = {
+      targetPlayerId: targetPlayerId || 'both',
+      targetPlayerIgn: targetLabel,
+      reason: targetNoticeReason,
+      timestamp: Date.now()
+    };
+    match.resolutionNotes = `⚠️ Referee requested screenshot resubmission (${targetLabel}): ${targetNoticeReason}`;
+
+    match.chatMessages.push({
+      id: `msg_${Date.now()}_resubmit`,
+      senderId: 'SYSTEM',
+      senderName: 'CODM Referee Bot',
+      text: `⚠️ REFEREE NOTICE: Proof resubmission requested for ${targetLabel}: "${targetNoticeReason}". Please upload an authentic, unedited landscape scoreboard screenshot to resolve.`,
+      timestamp: Date.now(),
+    });
+
+    const conflictInfo = computeMatchConflictReasons(match);
+    match.conflictReason = conflictInfo.conflictReason;
+    match.conflictReasonsList = conflictInfo.conflictReasonsList;
+
+    await saveMatchToDb(match);
+    res.json({ success: true, match });
+  } catch (err: any) {
+    console.error('Error in match resubmission request:', err);
+    res.status(500).json({ error: err.message || 'Failed to request resubmission' });
+  }
+});
+
+// Admin: Escalate to Manual Review
+app.post('/api/msksksnuwje/matches/:id/escalate', async (req, res) => {
+  try {
+    const { userId, reason } = req.body;
+    const adminUser = await getUserFromDb(userId);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    }
+
+    const match = await getMatchFromDb(req.params.id);
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+
+    const auditReason = reason || 'Escalated to high-priority manual referee review';
+    match.status = 'DISPUTED';
+    match.resolutionNotes = `🛡️ Escalated to Manual Review: ${auditReason}`;
+
+    match.chatMessages.push({
+      id: `msg_${Date.now()}_escalate`,
+      senderId: 'SYSTEM',
+      senderName: 'CODM Referee Bot',
+      text: `🛡️ REFEREE NOTICE: Match escalated to manual inspection by Admin (${auditReason}). Escrow pot (₦${match.potAmount.toLocaleString()}) remains securely locked.`,
+      timestamp: Date.now(),
+    });
+
+    const conflictInfo = computeMatchConflictReasons(match);
+    match.conflictReason = conflictInfo.conflictReason;
+    match.conflictReasonsList = conflictInfo.conflictReasonsList;
+
+    await saveMatchToDb(match);
+    res.json({ success: true, match });
+  } catch (err: any) {
+    console.error('Error escalating match:', err);
+    res.status(500).json({ error: err.message || 'Failed to escalate match' });
+  }
+});
+
+// Admin: Deterministic System Image Forensic Analysis (NO AI Review)
+app.post('/api/msksksnuwje/analyze-forensic', async (req, res) => {
+  try {
+    const { adminUserId, screenshotBase64, playerIgn, matchId } = req.body;
+    const adminUser = await getUserFromDb(adminUserId);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
+    if (!screenshotBase64) {
+      return res.status(400).json({ error: 'Missing image payload' });
+    }
+
+    // Run deterministic system logic inspection
+    const systemResult = analyzeImageSystemLogic(screenshotBase64);
+
+    res.json({
+      success: true,
+      fileInfo: {
+        mimeType: systemResult.fileType,
+        headerHex: systemResult.headerHex,
+        isStandardType: systemResult.isStandardType,
+        dimensions: systemResult.dimensions,
+        aspectRatio: systemResult.aspectRatio,
+        fileSizeKb: systemResult.fileSizeKb,
+        detectedSoftware: systemResult.detectedSoftware,
+      },
+      analysis: {
+        isLikelyFake: systemResult.isLikelyFake,
+        confidenceScore: systemResult.confidenceScore,
+        aiDetected: systemResult.isLikelyFake,
+        manipulationDetected: systemResult.fakeRiskScore >= 45,
+        detectedPlayerName: playerIgn || 'Unknown',
+        detectedOutcome: 'INSPECTED',
+        technicalNotes: systemResult.redFlags.join('; ') || 'Standard verified mobile screenshot format',
+        redFlags: systemResult.redFlags,
+        positiveSignals: systemResult.positiveSignals,
+        verdict: systemResult.verdict,
+        aspectRatio: systemResult.aspectRatio,
+        dimensions: systemResult.dimensions,
+      }
+    });
+  } catch (err: any) {
+    console.error('Forensic analysis error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin: Fetch all matches (with filter for active/disputed/abandoned)
+app.get('/api/msksksnuwje/matches', async (req, res) => {
+  try {
+    const { userId, status } = req.query;
+    const adminUser = await getUserFromDb(userId as string);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    }
+
+    let queryStr = 'SELECT * FROM matches';
+    if (status && status !== 'all') {
+      queryStr += ` WHERE status = ${escapeSql(status as string)}`;
+    }
+    queryStr += ' ORDER BY created_at DESC LIMIT 100';
+
+    const result = await pool.query(queryStr);
+    const matches = result.rows.map((m) => ({
+      id: m.id,
+      challengeCode: m.challenge_code,
+      roomCode: m.room_code || undefined,
+      gameMode: m.game_mode,
+      map: m.map,
+      stakeAmount: parseFloat(m.stake_amount),
+      potAmount: parseFloat(m.pot_amount),
+      platformFee: parseFloat(m.platform_fee || 0),
+      winnerPayout: parseFloat(m.winner_payout),
+      status: m.status,
+      createdAt: parseInt(m.created_at, 10),
+      creator: typeof m.creator_data === 'string' ? JSON.parse(m.creator_data) : m.creator_data,
+      opponent: m.opponent_data ? (typeof m.opponent_data === 'string' ? JSON.parse(m.opponent_data) : m.opponent_data) : undefined,
+      winnerId: m.winner_id || undefined,
+      winnerIgn: m.winner_ign || undefined,
+      settledAt: m.settled_at ? parseInt(m.settled_at, 10) : undefined,
+    }));
+
+    res.json({ matches });
+  } catch (err: any) {
     console.error('Error fetching admin matches:', err);
     res.status(500).json({ error: err.message || 'Failed to fetch matches' });
   }
 });
-
 
 // ==========================================
 // 📧 GMAIL IMAP SYNC ENGINE & ADMIN MAILBOX

@@ -438,6 +438,93 @@ export async function assignSmsAlertToUser(adminUserId: string, alertId: string,
   return await res.json();
 }
 
+export async function fetchAdminDisputes(adminUserId: string): Promise<Match[]> {
+  const res = await fetch(`/api/msksksnuwje/disputes?userId=${encodeURIComponent(adminUserId)}`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to fetch disputes');
+  }
+  const data = await res.json();
+  return data.matches || [];
+}
+
+export interface ReviewQueueResponse {
+  matches: Match[];
+  totalCount: number;
+  disputedCount: number;
+  aiFlaggedCount: number;
+  pendingCount: number;
+}
+
+export async function fetchReviewQueue(adminUserId: string): Promise<ReviewQueueResponse> {
+  const res = await fetch(`/api/msksksnuwje/review-queue?userId=${encodeURIComponent(adminUserId)}`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to fetch review queue');
+  }
+  return await res.json();
+}
+
+export async function adminResubmitMatch(params: {
+  matchId: string;
+  adminUserId: string;
+  targetPlayerId?: string;
+  reason?: string;
+}): Promise<{ success: boolean; match: Match }> {
+  const res = await fetch(`/api/msksksnuwje/matches/${params.matchId}/resubmit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId: params.adminUserId,
+      targetPlayerId: params.targetPlayerId,
+      reason: params.reason,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to request screenshot resubmission');
+  }
+  return await res.json();
+}
+
+export async function adminEscalateMatch(params: {
+  matchId: string;
+  adminUserId: string;
+  reason?: string;
+}): Promise<{ success: boolean; match: Match }> {
+  const res = await fetch(`/api/msksksnuwje/matches/${params.matchId}/escalate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId: params.adminUserId,
+      reason: params.reason,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to escalate match');
+  }
+  return await res.json();
+}
+
+export async function analyzeScreenshotForensic(params: {
+  adminUserId: string;
+  screenshotBase64: string;
+  playerIgn: string;
+  matchId: string;
+}) {
+  const res = await fetch('/api/msksksnuwje/analyze-forensic', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Forensic analysis failed');
+  }
+  return await res.json();
+}
+
 export async function createDepositRequest(userId: string, amount: number): Promise<{
   deposit: DepositRequest;
   accountDetails: {
