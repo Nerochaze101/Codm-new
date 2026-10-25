@@ -4377,8 +4377,8 @@ export async function fetchTelegramBotInfo() {
 }
 
 async function checkChannelMembership(userId: number | string): Promise<boolean> {
-  const channelName = process.env.TELEGRAM_CHANNEL_USERNAME;
-  if (!channelName || !TELEGRAM_BOT_TOKEN) return true;
+  const channelName = process.env.TELEGRAM_CHANNEL_USERNAME || '@OpsSTAKE';
+  if (!TELEGRAM_BOT_TOKEN) return true;
   try {
     const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${encodeURIComponent(channelName)}&user_id=${userId}`);
     const data: any = await res.json();

@@ -304,6 +304,65 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
 
   return (
     <div className="max-w-6xl mx-auto space-y-10 pb-20 animate-in fade-in slide-in-from-bottom-6 duration-700">
+      {/* 0. MANDATORY LIVE RIVAL GAMES & TELEGRAM BOT CONNECTION BANNER AT VERY TOP */}
+      <div className={`relative overflow-hidden rounded-[2.5rem] border-2 ${currentUser.telegramChatId ? 'border-emerald-500/40 bg-gradient-to-r from-emerald-950/80 via-neutral-900 to-black' : 'border-amber-500/60 bg-gradient-to-r from-amber-950/90 via-neutral-900 to-black'} p-6 sm:p-8 shadow-[0_0_40px_rgba(0,0,0,0.6)]`}>
+        <div className="absolute top-0 right-0 w-80 h-80 bg-cyan-500/10 rounded-full blur-[80px] pointer-events-none" />
+        <div className="relative z-10 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
+          <div className="space-y-2 max-w-2xl">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className={`px-3 py-1 rounded-full text-[10px] font-black tracking-widest uppercase font-mono flex items-center gap-1.5 ${currentUser.telegramChatId ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/40 animate-pulse'}`}>
+                <span className={`w-2 h-2 rounded-full ${currentUser.telegramChatId ? 'bg-emerald-400' : 'bg-amber-400 animate-ping'}`} />
+                {currentUser.telegramChatId ? 'TELEGRAM BOT LINKED' : 'ACTION REQUIRED · TELEGRAM DISCONNECTED'}
+              </span>
+              <span className="px-3 py-1 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 text-[10px] font-black uppercase tracking-widest font-mono flex items-center gap-1">
+                <Send size={12} />
+                LIVE RIVAL GAMES CHANNEL
+              </span>
+            </div>
+
+            <h2 className="text-xl sm:text-2xl font-heading font-black text-white tracking-tight uppercase flex items-center gap-2">
+              <span>📢 Official Channel:</span>
+              <a href="https://t.me/OpsSTAKE" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline flex items-center gap-1">
+                https://t.me/OpsSTAKE <ExternalLink size={18} />
+              </a>
+            </h2>
+
+            <p className="text-xs sm:text-sm text-neutral-300 font-medium leading-relaxed">
+              To participate in real-time live rival games, receive match room codes, and get instant payout alerts, all players must join <strong className="text-amber-400">https://t.me/OpsSTAKE</strong> and connect their account to the bot!
+            </p>
+
+            {currentUser.telegramChatId && (
+              <div className="pt-1 flex flex-wrap items-center gap-3 text-xs font-mono text-emerald-300">
+                <span>Chat ID: <code className="bg-black/60 px-2 py-1 rounded border border-emerald-500/30 text-white">{currentUser.telegramChatId}</code></span>
+                {currentUser.telegramUsername && <span>Username: <strong className="text-emerald-400">@{currentUser.telegramUsername}</strong></span>}
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto shrink-0">
+            <a
+              href="https://t.me/OpsSTAKE"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-6 py-3.5 rounded-2xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all active:scale-95"
+            >
+              <Send size={16} />
+              <span>1. Join Channel</span>
+            </a>
+
+            <a
+              href={telegramDeepLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-6 py-3.5 rounded-2xl bg-amber-400 hover:bg-amber-300 text-black text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all active:scale-95 shadow-lg shadow-amber-500/20"
+            >
+              <Zap size={16} className="fill-black" />
+              <span>{currentUser.telegramChatId ? 'Re-Connect Bot' : '2. Connect Bot (1-Tap)'}</span>
+            </a>
+          </div>
+        </div>
+      </div>
+
       {/* 1. TACTICAL CALLING CARD IDENTITY */}
       <div className="relative overflow-hidden rounded-[3rem] bg-neutral-900 border-2 border-amber-500/40 p-8 sm:p-12 shadow-[0_0_50px_rgba(0,0,0,0.5)] group">
         {/* Ambient tactical backgrounds */}
