@@ -16,8 +16,8 @@ import walletFinanceLocal from './images/wallet_finance_bg_1792421500912.jpg';
 
 export const CODM_IMAGES = {
   // App Official Professional Logo Icon Emblem
-  appLogo: appLogoLocal,
-  appLogoFallback: 'https://api.dicebear.com/7.x/identicon/svg?seed=opsstake',
+  appLogo: '/assets/aistudio/IMG_2853_9c73529e.jpeg',
+  appLogoFallback: '/assets/aistudio/IMG_2853_9c73529e.jpeg',
 
   // Subtle Card Background
   cardBgSubtle: cardBgSubtleLocal || '/src/assets/images/card_bg_subtle_1791810583071.jpg',

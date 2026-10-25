@@ -80,6 +80,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
 
   const [showTelegramConnectPopup, setShowTelegramConnectPopup] = useState<boolean>(false);
   const [botUsername, setBotUsername] = useState<string>('OpsSTAKEBOT');
+  const [isVerifyingChannel, setIsVerifyingChannel] = useState<boolean>(false);
 
   useEffect(() => {
     if (currentUser && currentUser.id !== 'guest' && !currentUser.telegramChatId) {
@@ -396,17 +397,6 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                              </div>
                            </div>
                          </div>
-
-                         <div className="pt-2 border-t border-neutral-800/80 flex items-center justify-between text-[10px] text-neutral-500">
-                           <span>Testing on single device?</span>
-                           <button
-                             type="button"
-                             onClick={() => handleResultSubmit(myActiveMatch.id, (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) === 'VICTORY' ? 'DEFEAT' : 'VICTORY')}
-                             className="text-amber-400 hover:text-amber-300 font-bold underline cursor-pointer"
-                           >
-                             Simulate Rival Confirmation
-                           </button>
-                         </div>
                        </div>
                      ) : (
                        <div className="p-5 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-4">
@@ -515,78 +505,95 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
       <StakePaymentModal isOpen={isStakeModalOpen} match={stakeTargetMatch} currentUser={currentUser} role={stakeRole} onClose={() => { setIsStakeModalOpen(false); setStakeTargetMatch(null); }} onConfirmStake={handleConfirmStake} />
       <IOSNotificationGuideModal isOpen={showIOSGuideModal} onClose={() => setShowIOSGuideModal(false)} />
 
-      {/* Telegram Bot Connect Popup Modal */}
-      {showTelegramConnectPopup && !currentUser.telegramChatId && currentUser.id !== 'guest' && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="relative w-full max-w-md bg-neutral-900 border-2 border-amber-400/60 rounded-3xl p-6 shadow-2xl space-y-5 overflow-hidden">
-            {/* Background ambient glow */}
-            <div className="absolute -right-16 -top-16 w-48 h-48 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
-            <div className="absolute -left-16 -bottom-16 w-48 h-48 bg-sky-500/10 rounded-full blur-3xl pointer-events-none" />
+      {/* MANDATORY 'JOIN OFFICIAL CHANNEL' BLOCKING OVERLAY FOR ARENA ACCESS */}
+      {!currentUser.telegramChatId && currentUser.id !== 'guest' && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-xl animate-in fade-in duration-300">
+          <div className="relative w-full max-w-lg bg-neutral-900 border-2 border-amber-500/80 rounded-[2.5rem] p-6 sm:p-8 shadow-[0_0_80px_rgba(245,158,11,0.25)] space-y-6 overflow-hidden">
+            {/* Ambient Background Accents */}
+            <div className="absolute -right-20 -top-20 w-60 h-60 bg-amber-500/15 rounded-full blur-3xl pointer-events-none animate-pulse" />
+            <div className="absolute -left-20 -bottom-20 w-60 h-60 bg-cyan-500/15 rounded-full blur-3xl pointer-events-none animate-pulse" />
 
-            {/* Cancel / Close button */}
-            <button
-              onClick={() => setShowTelegramConnectPopup(false)}
-              className="absolute top-4 right-4 p-2 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded-xl transition-colors cursor-pointer"
-              title="Close / Cancel"
-            >
-              <X size={20} />
-            </button>
-
-            {/* Header */}
-            <div className="flex items-center gap-3.5 pr-8">
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-sky-400 to-blue-600 text-white flex items-center justify-center font-bold shadow-lg shadow-sky-500/20 shrink-0">
-                <MessageCircle className="w-7 h-7" />
+            {/* Header Badge */}
+            <div className="flex flex-col items-center text-center space-y-3">
+              <div className="w-16 h-16 rounded-3xl bg-gradient-to-br from-amber-400 to-amber-600 text-neutral-950 flex items-center justify-center shadow-xl shadow-amber-500/20 shrink-0">
+                <ShieldCheck className="w-9 h-9 stroke-[2.5]" />
               </div>
-              <div>
-                <div className="text-[11px] font-black text-amber-400 uppercase tracking-widest flex items-center gap-1.5">
-                  <Sparkles size={12} /> Tactical Live Alerts
-                </div>
-                <h3 className="text-lg font-black text-white uppercase tracking-tight font-heading">Connect Telegram Bot</h3>
+              <div className="space-y-1">
+                <span className="px-3 py-1 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/40 text-[10px] font-black uppercase tracking-[0.2em] font-mono inline-flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                  MANDATORY ACCESS VERIFICATION
+                </span>
+                <h2 className="text-2xl sm:text-3xl font-black text-white uppercase tracking-tight font-heading">
+                  Join Official Channel
+                </h2>
+                <p className="text-xs text-neutral-300 leading-relaxed max-w-md pt-1">
+                  To view live wagers, create duels, and receive instant in-game CODM room codes, you must join <strong className="text-amber-400">https://t.me/OpsSTAKE</strong> and link your Telegram account.
+                </p>
               </div>
             </div>
 
-            {/* Description */}
-            <p className="text-xs text-neutral-300 leading-relaxed bg-neutral-950/60 p-3.5 rounded-2xl border border-neutral-800">
-              Connect your account to the official Telegram Bot to receive real-time notifications for <b>wager accepts</b>, <b>in-game room codes</b>, and <b>instant cashout alerts</b>.
-            </p>
-
-            {/* Official Channel Banner */}
-            <div className="p-3.5 rounded-2xl bg-neutral-950/80 border border-sky-500/30 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
-                <div className="text-xs">
-                  <div className="text-neutral-400 font-medium">Official Channel</div>
-                  <div className="font-bold text-sky-400">@OpsSTAKE</div>
+            {/* Verification Steps Box */}
+            <div className="space-y-3 bg-neutral-950/80 p-4 sm:p-5 rounded-3xl border border-neutral-800/80">
+              {/* Step 1: Join Channel */}
+              <div className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-neutral-900 border border-cyan-500/30">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center font-mono font-black text-xs">
+                    1
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-white">Join Live Updates Channel</div>
+                    <div className="text-[11px] font-mono text-cyan-400">t.me/OpsSTAKE</div>
+                  </div>
                 </div>
+                <a
+                  href="https://t.me/OpsSTAKE"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-4 py-2 bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/50 text-cyan-300 text-xs font-black rounded-xl uppercase tracking-wider transition-all flex items-center gap-1.5 shrink-0"
+                >
+                  Join <ExternalLink size={14} />
+                </a>
               </div>
-              <a
-                href="https://t.me/OpsSTAKE"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-3 py-1.5 bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/40 text-sky-300 text-xs font-bold rounded-xl transition-all flex items-center gap-1 shrink-0"
-              >
-                Join <ExternalLink size={12} />
-              </a>
+
+              {/* Step 2: Connect Bot */}
+              <div className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-neutral-900 border border-amber-500/30">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center font-mono font-black text-xs">
+                    2
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-white">1-Tap Connect Telegram Bot</div>
+                    <div className="text-[11px] font-mono text-amber-400">@{botUsername}</div>
+                  </div>
+                </div>
+                <a
+                  href={`https://t.me/${botUsername}?start=link_${currentUser.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-4 py-2 bg-amber-400 hover:bg-amber-300 text-neutral-950 text-xs font-black rounded-xl uppercase tracking-wider transition-all flex items-center gap-1.5 shrink-0 shadow-md"
+                >
+                  Connect <Zap size={14} fill="black" />
+                </a>
+              </div>
             </div>
 
-            {/* Action Buttons */}
-            <div className="space-y-2.5 pt-1">
-              <a
-                href={`https://t.me/${botUsername}?start=link_${currentUser.id}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={() => setShowTelegramConnectPopup(false)}
-                className="w-full py-3.5 px-4 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-neutral-950 font-black text-xs uppercase tracking-wider rounded-2xl shadow-xl flex items-center justify-center gap-2 transition-all cursor-pointer"
-              >
-                <Zap size={16} fill="black" /> 1-Tap Connect Bot Now
-              </a>
-
+            {/* Check Verification Action */}
+            <div className="space-y-2 pt-1">
               <button
-                onClick={() => setShowTelegramConnectPopup(false)}
-                className="w-full py-3 px-4 bg-neutral-800/80 hover:bg-neutral-800 text-neutral-400 hover:text-white font-bold text-xs uppercase rounded-2xl transition-colors cursor-pointer border border-neutral-700/50"
+                onClick={async () => {
+                  setIsVerifyingChannel(true);
+                  await onRefresh();
+                  setTimeout(() => setIsVerifyingChannel(false), 1200);
+                }}
+                disabled={isVerifyingChannel}
+                className="w-full py-4 px-5 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-neutral-950 font-black text-xs uppercase tracking-widest rounded-2xl shadow-xl shadow-amber-500/20 flex items-center justify-center gap-2 transition-all cursor-pointer active:scale-95 disabled:opacity-60"
               >
-                Skip / Cancel
+                <RefreshCw size={18} className={isVerifyingChannel ? 'animate-spin' : ''} />
+                <span>{isVerifyingChannel ? 'Checking Verification...' : 'I Have Joined — Unlock Arena'}</span>
               </button>
+              <p className="text-[11px] text-center text-neutral-400 font-mono">
+                Verification status syncs automatically via WebSockets
+              </p>
             </div>
           </div>
         </div>

@@ -81,6 +81,8 @@ interface FeeFundingMatch {
   stakeAmount: number;
   potAmount: number;
   platformFee: number;
+  grossPlatformFee?: number;
+  referralDeducted?: number;
   winnerIgn: string;
   settledAt: number;
 }
@@ -1349,7 +1351,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                         </td>
                         <td className="px-10 py-7 text-right">
                           <div className="text-[18px] font-black text-emerald-400 font-mono tracking-tighter group-hover:scale-105 transition-transform origin-right">+₦{match.platformFee.toLocaleString()}</div>
-                          <div className="text-[9px] text-neutral-600 font-black uppercase tracking-[0.2em] mt-0.5">Credited</div>
+                          <div className="text-[9px] font-mono font-bold uppercase tracking-wider mt-0.5">
+                            {match.referralDeducted && match.referralDeducted > 0 ? (
+                              <span className="text-amber-400">Net Rake (-₦{match.referralDeducted.toLocaleString()} Referral Reward)</span>
+                            ) : (
+                              <span className="text-neutral-500">Net Admin Rake</span>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}

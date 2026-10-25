@@ -987,19 +987,6 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                     </div>
                   </div>
                 </div>
-
-                {onSimulateOpponentResult && (
-                  <div className="pt-2 border-t border-neutral-800/80 flex items-center justify-between text-[10px] text-neutral-500">
-                    <span>Testing on single device?</span>
-                    <button
-                      type="button"
-                      onClick={() => onSimulateOpponentResult(myClaim === 'VICTORY' ? 'DEFEAT' : 'VICTORY')}
-                      className="text-amber-400 hover:text-amber-300 font-bold underline cursor-pointer"
-                    >
-                      Simulate Rival Response ({myClaim === 'VICTORY' ? 'Opponent Concedes' : 'Opponent Claims Win'})
-                    </button>
-                  </div>
-                )}
               </div>
             ) : (
               /* 3-BUTTON SUBMISSION FORM (NO SCREENSHOT REQUIRED) */
@@ -1096,34 +1083,6 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
               </div>
             )}
           </div>
-
-
-          {/* Test Action Bar for 1-device demonstration */}
-          {onSimulateOpponentResult && match.status !== 'SETTLED' && (
-            <div className="p-4 rounded-xl bg-neutral-950/80 border border-neutral-800 space-y-2">
-              <div className="text-xs font-bold text-neutral-400 uppercase tracking-wider flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                <span>Simulate Opponent Proof (For Fast Testing)</span>
-              </div>
-              <p className="text-[11px] text-neutral-400">
-                Trigger opponent submission without opening a second tab:
-              </p>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => onSimulateOpponentResult('DEFEAT')}
-                  className="py-1.5 px-3 bg-neutral-800 hover:bg-neutral-700 text-emerald-400 rounded-lg text-xs font-bold transition-colors cursor-pointer"
-                >
-                  Opponent Submits Defeat (You Win ₦{match.winnerPayout.toLocaleString()})
-                </button>
-                <button
-                  onClick={() => onSimulateOpponentResult('VICTORY')}
-                  className="py-1.5 px-3 bg-neutral-800 hover:bg-neutral-700 text-rose-400 rounded-lg text-xs font-bold transition-colors cursor-pointer"
-                >
-                  Opponent Claims Victory (Trigger Dispute)
-                </button>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Right Column: Live Match Chat & Referee Feed */}

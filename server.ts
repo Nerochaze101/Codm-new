@@ -861,14 +861,21 @@ app.get('/api/msksksnuwje/finance', async (req, res) => {
     let finRow = resFin.rows[0] || { total_fees_collected: 0, total_fees_withdrawn: 0 };
     let totalCollected = parseFloat(finRow.total_fees_collected || 0);
 
+    // Query total referral earnings paid out
+    let totalReferralPayouts = 0;
+    try {
+      const refRes = await pool.query(`SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type = 'REFERRAL_EARNING'`);
+      totalReferralPayouts = parseFloat(refRes.rows[0]?.total || 0);
+    } catch (_) {}
+
     // Auto-sync from settled matches if platform_finance was empty
     if (totalCollected === 0) {
       try {
         const sumRes = await pool.query(`SELECT COALESCE(SUM(platform_fee), 0) as total FROM matches WHERE status = 'SETTLED'`);
         const sumVal = parseFloat(sumRes.rows[0]?.total || 0);
         if (sumVal > 0) {
-          await pool.query(`UPDATE platform_finance SET total_fees_collected = ${escapeSql(sumVal)} WHERE id = 'main'`);
-          totalCollected = sumVal;
+          totalCollected = Math.max(0, sumVal - totalReferralPayouts);
+          await pool.query(`UPDATE platform_finance SET total_fees_collected = ${escapeSql(totalCollected)} WHERE id = 'main'`);
         }
       } catch (_) {}
     }
@@ -876,27 +883,37 @@ app.get('/api/msksksnuwje/finance', async (req, res) => {
     const totalWithdrawn = parseFloat(finRow.total_fees_withdrawn || 0);
     const available = Math.max(0, totalCollected - totalWithdrawn);
 
-    // Recent matches that funded the platform fee
+    // Recent matches that funded the platform fee with net admin fee calculation
     let recentMatches: any[] = [];
     try {
       const matchRes = await pool.query(`
-        SELECT id, challenge_code, game_mode, map, stake_amount, pot_amount, platform_fee, winner_ign, settled_at 
-        FROM matches 
-        WHERE platform_fee > 0 
-        ORDER BY COALESCE(settled_at, created_at) DESC 
+        SELECT m.id, m.challenge_code, m.game_mode, m.map, m.stake_amount, m.pot_amount, m.platform_fee, m.winner_ign, m.settled_at,
+               COALESCE(SUM(t.amount), 0) as referral_deducted
+        FROM matches m
+        LEFT JOIN transactions t ON t.match_id = m.id AND t.type = 'REFERRAL_EARNING'
+        WHERE m.platform_fee > 0 
+        GROUP BY m.id, m.challenge_code, m.game_mode, m.map, m.stake_amount, m.pot_amount, m.platform_fee, m.winner_ign, m.settled_at, m.created_at
+        ORDER BY COALESCE(m.settled_at, m.created_at) DESC 
         LIMIT 15
       `);
-      recentMatches = matchRes.rows.map(m => ({
-        id: m.id,
-        challengeCode: m.challenge_code,
-        gameMode: m.game_mode,
-        map: m.map,
-        stakeAmount: parseFloat(m.stake_amount || 0),
-        potAmount: parseFloat(m.pot_amount || 0),
-        platformFee: parseFloat(m.platform_fee || 0),
-        winnerIgn: m.winner_ign || 'Winner',
-        settledAt: parseInt(m.settled_at || '0', 10),
-      }));
+      recentMatches = matchRes.rows.map(m => {
+        const grossFee = parseFloat(m.platform_fee || 0);
+        const refDeducted = parseFloat(m.referral_deducted || 0);
+        const netAdminFee = Math.max(0, grossFee - refDeducted);
+        return {
+          id: m.id,
+          challengeCode: m.challenge_code,
+          gameMode: m.game_mode,
+          map: m.map,
+          stakeAmount: parseFloat(m.stake_amount || 0),
+          potAmount: parseFloat(m.pot_amount || 0),
+          platformFee: netAdminFee, // Net platform fee after referral reward deduction!
+          grossPlatformFee: grossFee,
+          referralDeducted: refDeducted,
+          winnerIgn: m.winner_ign || 'Winner',
+          settledAt: parseInt(m.settled_at || '0', 10),
+        };
+      });
     } catch (_) {}
 
     // Recent platform fee withdrawals
@@ -6057,13 +6074,17 @@ app.post('/api/matches/:id/admin-resolve', async (req, res) => {
   
   for (const referrerId of [...new Set(referrers)]) { // Unique referrers
     await pool.query(`
-      UPDATE users SET balance = balance + ${escapeSql(bonusPerReferrer)} WHERE id = ${escapeSql(referrerId)}
+      UPDATE users 
+      SET balance = balance + ${escapeSql(bonusPerReferrer)},
+          total_referral_earnings = COALESCE(total_referral_earnings, 0) + ${escapeSql(bonusPerReferrer)}
+      WHERE id = ${escapeSql(referrerId)}
     `);
     await saveTransactionToDb(referrerId, {
       id: `tx_ref_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
       type: 'REFERRAL_EARNING',
       amount: bonusPerReferrer,
-      description: '10% Referral bonus from match platform fee',
+      description: `10% Referral bonus from match #${match.roomCode || match.challengeCode} platform fee`,
+      matchId: match.id,
       timestamp: Date.now()
     });
   }
