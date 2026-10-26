@@ -3,12 +3,13 @@ import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-ro
 import { io } from 'socket.io-client';
 import { UserProfile, Match } from './types';
 import {
-  fetchUser, fetchMatches, fetchMatch, createMatch, joinMatch,
+  fetchUser, fetchMatches, fetchMatch, createMatch, joinMatch, squadJoinMatch, squadLeaveMatch,
   opponentStakeMatch, creatorStakeMatch,
   cancelMatch, abandonMatch, submitMatchResult,
   createUser, signUpUser, signInUser, updateUser, withdrawWallet,
   cleanUserHistory
 } from './services/api';
+
 import {
   initNotificationService,
   showBrowserNotification,
@@ -403,6 +404,7 @@ function MainApp() {
     rules: string[];
     matchDurationMinutes?: number;
     isPublic?: boolean;
+    matchType?: 'solo' | 'squad';
   }) => {
     const newMatch = await createMatch({
       creatorId: currentUser.id,
@@ -412,6 +414,7 @@ function MainApp() {
       rules: data.rules,
       matchDurationMinutes: data.matchDurationMinutes,
       isPublic: data.isPublic,
+      matchType: data.matchType || 'solo',
     });
 
     if (newMatch && newMatch.id) {
@@ -425,13 +428,27 @@ function MainApp() {
         escrowBalance: prev.escrowBalance + data.stakeAmount,
       }));
 
-      // 3. Immediately close modal and navigate to Arena view
+      // 3. Real-time alert notification showing exact payout amount
+      const isSquad = (data.matchType === 'squad') || (newMatch.matchType === 'squad');
+      const payoutText = isSquad
+        ? `5v5 Squad Created! Exact Payout: ₦${newMatch.winnerPayout.toLocaleString()} per winning player (₦${((newMatch.winnerPayout || 0) * 5).toLocaleString()} Team Prize Pool)`
+        : `1v1 Match Created! Winner Payout: ₦${newMatch.winnerPayout.toLocaleString()}`;
+
+      triggerNotificationAlert({
+        id: `match_created_${newMatch.id}`,
+        title: isSquad ? `🛡️ 5v5 Squad Wager Created!` : `⚔️ 1v1 Challenge Created!`,
+        body: payoutText,
+        soundType: 'default',
+        data: { matchId: newMatch.id, url: '/arena' },
+      });
+
+      // 4. Immediately close modal and navigate to Arena view
       setIsCreateBetOpen(false);
       setCreateBetInitialMode(undefined);
       setCreateBetInitialStake(undefined);
       navigate('/arena');
 
-      // 4. Parallel background sync without blocking UI or showing full page loading spinners
+      // 5. Parallel background sync without blocking UI or showing full page loading spinners
       fetchUser(currentUser.id).then((u) => u && u.id && setCurrentUser(u)).catch(() => {});
       fetchMatches().then((mList) => mList && setMatches(mList)).catch(() => {});
     }
@@ -450,6 +467,38 @@ function MainApp() {
       alert(err.message || 'Failed to join match');
     }
   };
+
+  const handleSquadJoin = async (matchId: string, slotIndex?: number, team?: 'ALPHA' | 'BRAVO') => {
+
+    try {
+      const updatedMatch = await squadJoinMatch(matchId, {
+        userId: currentUser.id,
+        slotIndex,
+        team,
+      });
+      if (updatedMatch && updatedMatch.id) {
+        setMatches((prev) => prev.map((m) => m.id === updatedMatch.id ? updatedMatch : m));
+      }
+      fetchUser(currentUser.id).then((u) => u && u.id && setCurrentUser(u)).catch(() => {});
+      fetchMatches().then((mList) => mList && setMatches(mList)).catch(() => {});
+    } catch (err: any) {
+      alert(err.message || 'Failed to join squad slot');
+    }
+  };
+
+  const handleSquadLeave = async (matchId: string) => {
+    try {
+      const updatedMatch = await squadLeaveMatch(matchId, currentUser.id);
+      if (updatedMatch && updatedMatch.id) {
+        setMatches((prev) => prev.map((m) => m.id === updatedMatch.id ? updatedMatch : m));
+      }
+      fetchUser(currentUser.id).then((u) => u && u.id && setCurrentUser(u)).catch(() => {});
+      fetchMatches().then((mList) => mList && setMatches(mList)).catch(() => {});
+    } catch (err: any) {
+      alert(err.message || 'Failed to leave squad slot');
+    }
+  };
+
 
   const handleOpponentStake = async (
     matchId: string,
@@ -829,7 +878,10 @@ function MainApp() {
                 matches={matches}
                 onCreateBet={handleCreateBet}
                 onJoinMatch={handleJoinMatch}
+                onSquadJoin={handleSquadJoin}
+                onSquadLeave={handleSquadLeave}
                 onOpponentStake={handleOpponentStake}
+
                 onCreatorStake={handleCreatorStake}
                 onSimulateOpponentStake={handleSimulateOpponentStake}
                 onSubmitResult={handleSubmitResult}

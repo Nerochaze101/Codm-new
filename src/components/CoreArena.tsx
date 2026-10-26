@@ -26,9 +26,11 @@ interface CoreArenaProps {
   currentUser: UserProfile;
   matches: Match[];
   isMatchesLoading?: boolean;
-  onCreateBet: (data: { stakeAmount: number; gameMode: string; map: string; rules: string[]; matchDurationMinutes?: number; isPublic?: boolean }) => Promise<void>;
+  onCreateBet: (data: { stakeAmount: number; gameMode: string; map: string; rules: string[]; matchDurationMinutes?: number; isPublic?: boolean; matchType?: 'solo' | 'squad' }) => Promise<void>;
   onOpenCreateBet?: (mode?: string, stake?: number) => void;
   onJoinMatch: (matchId: string, opponentId: string) => Promise<void>;
+  onSquadJoin?: (matchId: string, slotIndex?: number, team?: 'ALPHA' | 'BRAVO') => Promise<void>;
+  onSquadLeave?: (matchId: string) => Promise<void>;
   onOpponentStake?: (matchId: string, paymentMethod: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance' | 'flutterwave') => Promise<void>;
   onCreatorStake?: (matchId: string, paymentMethod: 'bank_transfer' | 'opay_palmpay' | 'card' | 'wallet_balance' | 'flutterwave') => Promise<void>;
   onSimulateOpponentStake?: (matchId: string) => Promise<void>;
@@ -43,9 +45,10 @@ interface CoreArenaProps {
 }
 
 export const CoreArena: React.FC<CoreArenaProps> = ({
-  currentUser, matches, isMatchesLoading, onCreateBet, onJoinMatch, onOpponentStake, onCreatorStake,
+  currentUser, matches, isMatchesLoading, onCreateBet, onJoinMatch, onSquadJoin, onSquadLeave, onOpponentStake, onCreatorStake,
   onSubmitResult, onCancelMatch, onAbandonMatch, onDismissMatch, onRefresh, onOpenNewUserOnboarding, onOpenCreateBet, onCashOut
 }) => {
+
   const [selectedClaim, setSelectedClaim] = useState<'VICTORY' | 'DEFEAT' | 'DRAW'>('VICTORY');
   const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -75,8 +78,14 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   });
 
   const activeStatuses = ['PENDING_OPPONENT_STAKE', 'READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'];
-  const myActiveMatch = matches.find(m => (m.creator.id === currentUser.id || m.opponent?.id === currentUser.id) && activeStatuses.includes(m.status));
+  const myActiveMatch = matches.find(m => {
+    const isCreator = m.creator.id === currentUser.id;
+    const isOpponent = m.opponent?.id === currentUser.id;
+    const isInSquad = m.squadData?.slots?.some(s => s.userId === currentUser.id && s.staked);
+    return (isCreator || isOpponent || isInSquad) && activeStatuses.includes(m.status);
+  });
   const [arenaTab, setArenaTab] = useState<'live' | 'active' | 'hosted'>(() => myActiveMatch ? 'active' : 'live');
+
 
   const [showTelegramConnectPopup, setShowTelegramConnectPopup] = useState<boolean>(false);
   const [botUsername, setBotUsername] = useState<string>('OpsSTAKEBOT');
@@ -195,13 +204,25 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
           {myActiveMatch && (
             <div className="p-4 rounded-2xl bg-neutral-900 border-2 border-amber-400 flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-amber-400 text-neutral-950 flex items-center justify-center font-black"><Zap size={20} /></div>
-                <div>
-                  <div className="text-xs font-black text-amber-400 uppercase tracking-widest">Active Battle In Progress</div>
-                  <p className="text-sm font-bold text-white">Vs {isCreatorOfActive ? (myActiveMatch.opponent?.codmIgn || 'Opponent') : myActiveMatch.creator.codmIgn}</p>
+                <div className="w-10 h-10 rounded-xl bg-amber-400 text-neutral-950 flex items-center justify-center font-black shrink-0"><Zap size={20} /></div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-black text-amber-400 uppercase tracking-widest">
+                      {myActiveMatch.matchType === 'squad' ? 'Active 5v5 Squad Battle' : 'Active Battle In Progress'}
+                    </span>
+                    {myActiveMatch.matchType === 'squad' && (
+                      <span className="text-[10px] font-bold bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/30">
+                        {(myActiveMatch.squadData?.slots?.filter(s => s.staked).length || 1)}/10 Slots
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-neutral-300 font-mono mt-0.5">
+                    Pot: <strong className="text-amber-400">₦{myActiveMatch.potAmount.toLocaleString()}</strong> · Winner Payout: <strong className="text-emerald-400">₦{myActiveMatch.winnerPayout.toLocaleString()}{myActiveMatch.matchType === 'squad' ? ' / player' : ''}</strong>
+                    {myActiveMatch.matchType === 'squad' && <span className="text-neutral-400 font-sans ml-1 text-[11px]">(₦{(myActiveMatch.winnerPayout * 5).toLocaleString()} Team Pool)</span>}
+                  </p>
                 </div>
               </div>
-              <button onClick={() => setArenaTab('active')} className="w-full sm:w-auto px-6 py-2.5 bg-amber-400 text-neutral-950 font-black rounded-xl text-xs uppercase flex items-center justify-center gap-2">Open Match Room <ArrowRight size={16} /></button>
+              <button onClick={() => setArenaTab('active')} className="w-full sm:w-auto px-6 py-2.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs uppercase flex items-center justify-center gap-2 cursor-pointer transition-all shrink-0">Open Match Room <ArrowRight size={16} /></button>
             </div>
           )}
 
@@ -231,13 +252,97 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
               <div className="flex items-center justify-between"><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-neutral-400"><Flame size={16} className="text-amber-400" /><span>Lobby Challenges</span></div><input type="text" placeholder="Search #Code" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="bg-neutral-950 border border-neutral-800 rounded-lg py-1.5 px-3 text-xs text-white" /></div>
               {filteredChallenges.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {filteredChallenges.map(m => (
-                    <div key={m.id} className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 hover:border-amber-400/40 transition-all flex flex-col justify-between shadow-lg">
-                      <div className="flex items-center justify-between mb-3"><span className="text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded border border-amber-500/20">#{m.challengeCode}</span><span className="text-xs font-black text-emerald-400">₦{m.stakeAmount.toLocaleString()}</span></div>
-                      <div className="flex items-center gap-2.5"><img src={m.creator.avatar} alt="" className="w-8 h-8 rounded-lg bg-neutral-800" /><div className="min-w-0 flex-1"><div className="text-xs font-bold text-white truncate">{m.creator.codmIgn}</div><div className="text-[10px] text-neutral-400 truncate">{m.gameMode} · {m.map}</div></div></div>
-                      <button onClick={() => { setStakeTargetMatch(m); setStakeRole('opponent'); setIsStakeModalOpen(true); }} className="w-full mt-3 py-2 bg-neutral-800 hover:bg-neutral-700 text-amber-400 font-black rounded-lg text-[10px] uppercase cursor-pointer">Accept Duel</button>
-                    </div>
-                  ))}
+                  {filteredChallenges.map(m => {
+                    const isSquad = m.matchType === 'squad' || Boolean(m.squadData);
+                    const filledSlots = m.squadData?.slots?.filter(s => s.staked).length || 1;
+                    const userInSlot = m.squadData?.slots?.find(s => s.userId === currentUser.id && s.staked);
+
+                    return (
+                      <div key={m.id} className={`p-4 rounded-2xl bg-neutral-950 border transition-all flex flex-col justify-between shadow-lg ${
+                        isSquad ? 'border-emerald-500/30 hover:border-emerald-400' : 'border-neutral-800 hover:border-amber-400/40'
+                      }`}>
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded border border-amber-500/20">
+                            #{m.challengeCode}
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            {isSquad && (
+                              <span className="text-[10px] font-bold bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/30">
+                                5v5 Squad ({filledSlots}/10)
+                              </span>
+                            )}
+                            <span className="text-xs font-black text-emerald-400">
+                              ₦{m.stakeAmount.toLocaleString()} {isSquad ? '/ player' : ''}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2.5 mb-3">
+                          <img src={m.creator.avatar} alt="" className="w-8 h-8 rounded-lg bg-neutral-800 object-cover" />
+                          <div className="min-w-0 flex-1">
+                            <div className="text-xs font-bold text-white truncate">{m.creator.codmIgn}</div>
+                            <div className="text-[10px] text-neutral-400 truncate">{m.gameMode} · {m.map}</div>
+                          </div>
+                        </div>
+
+                        {/* Exact Payout & Pot Preview Box */}
+                        <div className="p-2.5 rounded-xl bg-neutral-900/90 border border-neutral-800 text-[10px] space-y-1 mb-3 font-mono">
+                          <div className="flex justify-between items-center">
+                            <span className="text-neutral-400">Total Pot:</span>
+                            <span className="text-amber-400 font-bold">₦{m.potAmount.toLocaleString()}</span>
+                          </div>
+                          <div className="flex justify-between items-center border-t border-neutral-800/80 pt-1">
+                            <span className="text-neutral-300 font-bold">{isSquad ? 'Exact Win Payout:' : 'Winner Payout:'}</span>
+                            <span className="text-emerald-400 font-black">
+                              ₦{m.winnerPayout.toLocaleString()} {isSquad ? '/ player' : ''}
+                            </span>
+                          </div>
+                          {isSquad && (
+                            <div className="flex justify-between items-center text-[9px] text-neutral-500">
+                              <span>Winning Squad Net Pool:</span>
+                              <span className="text-emerald-300 font-bold">₦{(m.winnerPayout * 5).toLocaleString()}</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {isSquad ? (
+                          <div className="space-y-2 pt-2 border-t border-neutral-900">
+                            {userInSlot ? (
+                              <button
+                                onClick={() => onSquadLeave?.(m.id)}
+                                className="w-full py-2 bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 font-bold rounded-lg text-[10px] uppercase border border-rose-500/30 cursor-pointer"
+                              >
+                                Leave Squad (Refund ₦{m.stakeAmount.toLocaleString()})
+                              </button>
+                            ) : (
+                              <div className="grid grid-cols-2 gap-2">
+                                <button
+                                  onClick={() => onSquadJoin?.(m.id, undefined, 'ALPHA')}
+                                  className="py-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 font-black rounded-lg text-[10px] uppercase border border-blue-500/40 cursor-pointer"
+                                >
+                                  Join Team Alpha
+                                </button>
+                                <button
+                                  onClick={() => onSquadJoin?.(m.id, undefined, 'BRAVO')}
+                                  className="py-2 bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 font-black rounded-lg text-[10px] uppercase border border-rose-500/40 cursor-pointer"
+                                >
+                                  Join Team Bravo
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => { setStakeTargetMatch(m); setStakeRole('opponent'); setIsStakeModalOpen(true); }}
+                            className="w-full mt-3 py-2 bg-neutral-800 hover:bg-neutral-700 text-amber-400 font-black rounded-lg text-[10px] uppercase cursor-pointer"
+                          >
+                            Accept Duel
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+
                 </div>
               ) : <div className="p-10 rounded-2xl bg-neutral-950 border border-dashed border-neutral-800 text-center text-neutral-500 text-xs italic">No open challenges.</div>}
             </div>
@@ -252,8 +357,29 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
             <div className="absolute inset-0 z-0 opacity-20"><img src={CODM_IMAGES.matchRoomBg} className="w-full h-full object-cover" alt="" /><div className="absolute inset-0 bg-neutral-950/80" /></div>
             
             <div className="relative z-10 flex flex-wrap items-center justify-between gap-3 pb-3.5 border-b border-neutral-800/80">
-              <div className="flex items-center gap-3"><div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-bold uppercase"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /><span>{myActiveMatch.status.replace(/_/g, ' ')}</span></div><span className="text-xs font-bold text-white">{myActiveMatch.gameMode}</span></div>
-              <div className="flex items-center gap-2"><div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-black border border-neutral-800"><span className="text-[10px] text-neutral-400 font-mono">CODE:</span><span className="text-xs font-black text-amber-400">{myActiveMatch.roomCode || myActiveMatch.challengeCode}</span><button onClick={() => copyCode(myActiveMatch.roomCode || myActiveMatch.challengeCode)} className="text-neutral-500 ml-1 hover:text-white"><Copy size={12} /></button></div><div className="px-3 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 text-xs font-bold">Pot: ₦{myActiveMatch.potAmount.toLocaleString()}</div></div>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-bold uppercase">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span>{myActiveMatch.status.replace(/_/g, ' ')}</span>
+                </div>
+                <span className="text-xs font-bold text-white">{myActiveMatch.gameMode}</span>
+                {myActiveMatch.matchType === 'squad' && (
+                  <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-400 text-[10px] font-black uppercase border border-emerald-500/30 flex items-center gap-1">
+                    <Users size={12} />
+                    <span>5v5 Squad ({myActiveMatch.squadData?.slots?.filter(s => s.staked).length || 1}/10 Slots)</span>
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-black border border-neutral-800">
+                  <span className="text-[10px] text-neutral-400 font-mono">CODE:</span>
+                  <span className="text-xs font-black text-amber-400">{myActiveMatch.roomCode || myActiveMatch.challengeCode}</span>
+                  <button onClick={() => copyCode(myActiveMatch.roomCode || myActiveMatch.challengeCode)} className="text-neutral-500 ml-1 hover:text-white"><Copy size={12} /></button>
+                </div>
+                <div className="px-3 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 text-xs font-bold font-mono">
+                  {myActiveMatch.matchType === 'squad' ? `Gross Pot: ₦${myActiveMatch.potAmount.toLocaleString()}` : `Pot: ₦${myActiveMatch.potAmount.toLocaleString()}`}
+                </div>
+              </div>
             </div>
 
             <div className="relative z-10 flex lg:hidden rounded-xl bg-neutral-950 p-1 border border-neutral-800">
@@ -263,67 +389,275 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 relative z-10">
               <div className={`lg:col-span-2 space-y-4 ${activeMatchSubTab === 'chat' ? 'hidden lg:block' : 'block'}`}>
-                 <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-bold text-amber-400 flex justify-between items-center">
-                    <div className="flex items-center gap-2"><Clock size={16} className="animate-pulse" /><span>{myActiveMatch.roomCode ? `Battle Room Ready (#${myActiveMatch.roomCode})` : 'Awaiting Opponent to Accept'}</span></div>
-                    <span className="text-emerald-400">Winner Payout: ₦{myActiveMatch.winnerPayout.toLocaleString()}</span>
-                 </div>
+                {/* Exact Payout & Economics Box */}
+                {myActiveMatch.matchType === 'squad' ? (
+                  <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-emerald-950/40 via-neutral-950 to-neutral-900 border-2 border-emerald-500/40 space-y-3.5 shadow-xl animate-in fade-in">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-500/20 pb-2.5">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
+                          <Users size={18} />
+                        </div>
+                        <div>
+                          <div className="font-heading font-black text-xs sm:text-sm text-white uppercase tracking-wider">
+                            5v5 Squad Escrow Pool & Exact Payout
+                          </div>
+                          <div className="text-[10px] text-neutral-400">
+                            {myActiveMatch.roomCode ? `Private Battle Room Active (#${myActiveMatch.roomCode})` : 'Awaiting 10 Squad Slots to Fill'}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[10px] text-neutral-400 block uppercase font-mono">Per-Winner Payout</span>
+                        <span className="text-base sm:text-lg font-black text-emerald-400 font-mono">
+                          ₦{myActiveMatch.winnerPayout.toLocaleString()} <span className="text-[10px] font-sans text-neutral-400 font-normal">/ player</span>
+                        </span>
+                      </div>
+                    </div>
 
-                 {/* Rival Player Details & One-Tap Copy Card */}
-                 {myActiveMatch && (
-                   <div className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-3">
-                     <div className="flex items-center justify-between">
-                       <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest flex items-center gap-1.5">
-                         <UserCheck size={14} className="text-amber-400" />
-                         <span>Rival In-Game Search Info ({isCreatorOfActive ? 'Opponent' : 'Host'})</span>
-                       </span>
-                       <span className="text-[10px] text-emerald-400 font-mono font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">ONE-TAP COPY</span>
-                     </div>
-                     
-                     {(() => {
-                       const rival = isCreatorOfActive ? myActiveMatch.opponent : myActiveMatch.creator;
-                       return (
-                         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 rounded-xl bg-neutral-900 border border-neutral-800/80">
-                           <div className="flex items-center gap-3 min-w-0 w-full sm:w-auto">
-                             <img src={rival?.avatar || 'https://api.dicebear.com/7.x/bottts/svg?seed=rival'} alt="" className="w-10 h-10 rounded-xl bg-neutral-800 shrink-0 object-cover" />
-                             <div className="min-w-0 flex-1">
-                               <div className="text-xs font-bold text-white truncate flex items-center gap-1">
-                                 <span>{rival?.codmIgn || 'Awaiting Opponent...'}</span>
-                               </div>
-                               <div className="text-[10px] font-mono text-neutral-400 truncate">
-                                 UID: {rival?.codmUid || 'N/A'}
-                               </div>
-                             </div>
-                           </div>
+                    {/* 4-Box Squad Economics Grid */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
+                      <div className="p-2.5 rounded-xl bg-neutral-900/90 border border-neutral-800">
+                        <span className="text-[10px] text-neutral-400 block uppercase font-sans">Stake / Player</span>
+                        <span className="font-bold text-white text-sm">₦{myActiveMatch.stakeAmount.toLocaleString()}</span>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-neutral-900/90 border border-neutral-800">
+                        <span className="text-[10px] text-neutral-400 block uppercase font-sans">Gross Pot (10x)</span>
+                        <span className="font-bold text-amber-400 text-sm">₦{myActiveMatch.potAmount.toLocaleString()}</span>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-neutral-900/90 border border-neutral-800">
+                        <span className="text-[10px] text-neutral-400 block uppercase font-sans">OpsSTAKE Rake ({myActiveMatch.platformFeePercentage}%)</span>
+                        <span className="font-bold text-rose-400 text-sm">-₦{myActiveMatch.platformFee.toLocaleString()}</span>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-emerald-500/15 border-2 border-emerald-400/50 shadow">
+                        <span className="text-[10px] text-emerald-300 block uppercase font-sans font-bold">Winning Squad Pool</span>
+                        <span className="font-black text-emerald-400 text-sm">₦{(myActiveMatch.potAmount - myActiveMatch.platformFee).toLocaleString()}</span>
+                      </div>
+                    </div>
 
-                           {rival && (
-                             <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
-                               <button
-                                 type="button"
-                                 onClick={() => copyRivalIgn(rival.codmIgn)}
-                                 className="flex-1 sm:flex-none px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase cursor-pointer flex items-center justify-center gap-1.5 shadow-md transition-all active:scale-95"
-                                 title="Copy opponent CODM in-game username"
-                               >
-                                 {copiedRivalIgn ? <Check size={14} className="stroke-[3]" /> : <Copy size={14} />}
-                                 <span>{copiedRivalIgn ? 'IGN Copied!' : 'Copy IGN'}</span>
-                               </button>
-                               {rival.codmUid && (
-                                 <button
-                                   type="button"
-                                   onClick={() => copyRivalUid(rival.codmUid)}
-                                   className="flex-1 sm:flex-none px-3.5 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-xs uppercase cursor-pointer flex items-center justify-center gap-1.5 border border-neutral-700 transition-all active:scale-95"
-                                   title="Copy opponent CODM UID"
-                                 >
-                                   {copiedRivalUid ? <Check size={14} className="stroke-[3] text-emerald-400" /> : <Copy size={14} />}
-                                   <span>{copiedRivalUid ? 'UID Copied!' : 'Copy UID'}</span>
-                                 </button>
-                               )}
-                             </div>
-                           )}
-                         </div>
-                       );
-                     })()}
-                   </div>
-                 )}
+                    <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/30 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs">
+                      <span className="text-emerald-300 font-bold flex items-center gap-1.5">
+                        <Trophy size={15} className="text-amber-400 shrink-0" />
+                        <span>Exact Payout per Winning Player:</span>
+                        <span className="text-emerald-400 font-black text-sm bg-black/60 px-2 py-0.5 rounded border border-emerald-500/40 font-mono">
+                          ₦{myActiveMatch.winnerPayout.toLocaleString()}
+                        </span>
+                      </span>
+                      <span className="text-[11px] text-neutral-400">
+                        All 5 players on winning squad credited ₦{myActiveMatch.winnerPayout.toLocaleString()} each (₦{(myActiveMatch.winnerPayout * 5).toLocaleString()} total)
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-bold text-amber-400 flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <Clock size={16} className="animate-pulse" />
+                      <span>{myActiveMatch.roomCode ? `Battle Room Ready (#${myActiveMatch.roomCode})` : 'Awaiting Opponent to Accept'}</span>
+                    </div>
+                    <span className="text-emerald-400 font-mono">Winner Payout: ₦{myActiveMatch.winnerPayout.toLocaleString()}</span>
+                  </div>
+                )}
+
+                {/* 5v5 Squad Tactical Roster OR 1v1 Rival Details */}
+                {myActiveMatch && myActiveMatch.matchType === 'squad' && myActiveMatch.squadData ? (
+                  <div className="p-4 sm:p-5 rounded-2xl bg-neutral-950 border border-emerald-500/30 space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-800 pb-3">
+                      <div className="flex items-center gap-2">
+                        <Shield className="w-4 h-4 text-emerald-400" />
+                        <span className="text-xs font-black text-white uppercase tracking-wider font-heading">
+                          5v5 Tactical Squad Roster ({myActiveMatch.squadData.slots.filter(s => s.staked).length}/10 Staked)
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-emerald-400 font-mono font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                        ₦{myActiveMatch.stakeAmount.toLocaleString()} / SLOT
+                      </span>
+                    </div>
+
+                    {/* Team Alpha (Blue) vs Team Bravo (Red) Columns */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Team Alpha */}
+                      <div className="space-y-2 p-3 rounded-xl bg-blue-950/20 border border-blue-500/30">
+                        <div className="flex justify-between items-center pb-2 border-b border-blue-500/20">
+                          <span className="text-xs font-black text-blue-400 uppercase tracking-wider flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-blue-400" />
+                            <span>Team Alpha</span>
+                          </span>
+                          <span className="text-[10px] font-mono font-bold text-blue-300">
+                            {myActiveMatch.squadData.slots.slice(0, 5).filter(s => s.staked).length}/5 Staked
+                          </span>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          {myActiveMatch.squadData.slots.slice(0, 5).map((slot, idx) => {
+                            const isMe = slot.userId === currentUser.id;
+                            return (
+                              <div key={slot.slotIndex} className={`p-2 rounded-lg border flex items-center justify-between gap-2 text-xs transition-all ${
+                                slot.staked ? 'bg-neutral-900 border-blue-500/30' : 'bg-neutral-950/60 border-dashed border-neutral-800'
+                              }`}>
+                                <div className="flex items-center gap-2 min-w-0 flex-1">
+                                  <span className="text-[10px] font-mono text-neutral-500 w-4 shrink-0">#{idx + 1}</span>
+                                  {slot.staked ? (
+                                    <>
+                                      <img src={slot.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${slot.codmIgn || 'player'}`} alt="" className="w-6 h-6 rounded-md bg-neutral-800 shrink-0 object-cover" />
+                                      <div className="min-w-0 flex-1">
+                                        <div className="font-bold text-white text-[11px] truncate flex items-center gap-1">
+                                          <span>{slot.codmIgn}</span>
+                                          {slot.slotIndex === 0 && <span className="text-[9px] bg-amber-400/20 text-amber-300 px-1 rounded font-normal">Host</span>}
+                                          {isMe && <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1 rounded font-normal">You</span>}
+                                        </div>
+                                        <div className="text-[9px] font-mono text-neutral-400 truncate">UID: {slot.codmUid || 'N/A'}</div>
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <span className="text-neutral-500 text-[11px] italic">Empty Slot · Open</span>
+                                  )}
+                                </div>
+
+                                <div className="shrink-0 flex items-center gap-1">
+                                  {slot.staked ? (
+                                    <>
+                                      <button onClick={() => copyRivalIgn(slot.codmIgn || '')} className="p-1 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white" title="Copy IGN">
+                                        <Copy size={11} />
+                                      </button>
+                                      {isMe && myActiveMatch.status === 'PENDING_OPPONENT_STAKE' && (
+                                        <button onClick={() => onSquadLeave?.(myActiveMatch.id)} className="px-2 py-0.5 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 font-bold text-[9px] border border-rose-500/30 cursor-pointer">
+                                          Leave
+                                        </button>
+                                      )}
+                                    </>
+                                  ) : (
+                                    !myActiveMatch.squadData?.slots?.some(s => s.userId === currentUser.id && s.staked) && (
+                                      <button onClick={() => onSquadJoin?.(myActiveMatch.id, slot.slotIndex, 'ALPHA')} className="px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-black text-[9px] uppercase cursor-pointer transition-all">
+                                        Join
+                                      </button>
+                                    )
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Team Bravo */}
+                      <div className="space-y-2 p-3 rounded-xl bg-rose-950/20 border border-rose-500/30">
+                        <div className="flex justify-between items-center pb-2 border-b border-rose-500/20">
+                          <span className="text-xs font-black text-rose-400 uppercase tracking-wider flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-rose-400" />
+                            <span>Team Bravo</span>
+                          </span>
+                          <span className="text-[10px] font-mono font-bold text-rose-300">
+                            {myActiveMatch.squadData.slots.slice(5, 10).filter(s => s.staked).length}/5 Staked
+                          </span>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          {myActiveMatch.squadData.slots.slice(5, 10).map((slot, idx) => {
+                            const isMe = slot.userId === currentUser.id;
+                            return (
+                              <div key={slot.slotIndex} className={`p-2 rounded-lg border flex items-center justify-between gap-2 text-xs transition-all ${
+                                slot.staked ? 'bg-neutral-900 border-rose-500/30' : 'bg-neutral-950/60 border-dashed border-neutral-800'
+                              }`}>
+                                <div className="flex items-center gap-2 min-w-0 flex-1">
+                                  <span className="text-[10px] font-mono text-neutral-500 w-4 shrink-0">#{idx + 6}</span>
+                                  {slot.staked ? (
+                                    <>
+                                      <img src={slot.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${slot.codmIgn || 'player'}`} alt="" className="w-6 h-6 rounded-md bg-neutral-800 shrink-0 object-cover" />
+                                      <div className="min-w-0 flex-1">
+                                        <div className="font-bold text-white text-[11px] truncate flex items-center gap-1">
+                                          <span>{slot.codmIgn}</span>
+                                          {isMe && <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1 rounded font-normal">You</span>}
+                                        </div>
+                                        <div className="text-[9px] font-mono text-neutral-400 truncate">UID: {slot.codmUid || 'N/A'}</div>
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <span className="text-neutral-500 text-[11px] italic">Empty Slot · Open</span>
+                                  )}
+                                </div>
+
+                                <div className="shrink-0 flex items-center gap-1">
+                                  {slot.staked ? (
+                                    <>
+                                      <button onClick={() => copyRivalIgn(slot.codmIgn || '')} className="p-1 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white" title="Copy IGN">
+                                        <Copy size={11} />
+                                      </button>
+                                      {isMe && myActiveMatch.status === 'PENDING_OPPONENT_STAKE' && (
+                                        <button onClick={() => onSquadLeave?.(myActiveMatch.id)} className="px-2 py-0.5 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 font-bold text-[9px] border border-rose-500/30 cursor-pointer">
+                                          Leave
+                                        </button>
+                                      )}
+                                    </>
+                                  ) : (
+                                    !myActiveMatch.squadData?.slots?.some(s => s.userId === currentUser.id && s.staked) && (
+                                      <button onClick={() => onSquadJoin?.(myActiveMatch.id, slot.slotIndex, 'BRAVO')} className="px-2 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white font-black text-[9px] uppercase cursor-pointer transition-all">
+                                        Join
+                                      </button>
+                                    )
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : myActiveMatch ? (
+                  /* Rival Player Details & One-Tap Copy Card for Solo 1v1 */
+                  <div className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest flex items-center gap-1.5">
+                        <UserCheck size={14} className="text-amber-400" />
+                        <span>Rival In-Game Search Info ({isCreatorOfActive ? 'Opponent' : 'Host'})</span>
+                      </span>
+                      <span className="text-[10px] text-emerald-400 font-mono font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">ONE-TAP COPY</span>
+                    </div>
+                    
+                    {(() => {
+                      const rival = isCreatorOfActive ? myActiveMatch.opponent : myActiveMatch.creator;
+                      return (
+                        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 rounded-xl bg-neutral-900 border border-neutral-800/80">
+                          <div className="flex items-center gap-3 min-w-0 w-full sm:w-auto">
+                            <img src={rival?.avatar || 'https://api.dicebear.com/7.x/bottts/svg?seed=rival'} alt="" className="w-10 h-10 rounded-xl bg-neutral-800 shrink-0 object-cover" />
+                            <div className="min-w-0 flex-1">
+                              <div className="text-xs font-bold text-white truncate flex items-center gap-1">
+                                <span>{rival?.codmIgn || 'Awaiting Opponent...'}</span>
+                              </div>
+                              <div className="text-[10px] font-mono text-neutral-400 truncate">
+                                UID: {rival?.codmUid || 'N/A'}
+                              </div>
+                            </div>
+                          </div>
+
+                          {rival && (
+                            <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => copyRivalIgn(rival.codmIgn)}
+                                className="flex-1 sm:flex-none px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase cursor-pointer flex items-center justify-center gap-1.5 shadow-md transition-all active:scale-95"
+                                title="Copy opponent CODM in-game username"
+                              >
+                                {copiedRivalIgn ? <Check size={14} className="stroke-[3]" /> : <Copy size={14} />}
+                                <span>{copiedRivalIgn ? 'IGN Copied!' : 'Copy IGN'}</span>
+                              </button>
+                              {rival.codmUid && (
+                                <button
+                                  type="button"
+                                  onClick={() => copyRivalUid(rival.codmUid)}
+                                  className="flex-1 sm:flex-none px-3.5 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-xs uppercase cursor-pointer flex items-center justify-center gap-1.5 border border-neutral-700 transition-all active:scale-95"
+                                  title="Copy opponent CODM UID"
+                                >
+                                  {copiedRivalUid ? <Check size={14} className="stroke-[3] text-emerald-400" /> : <Copy size={14} />}
+                                  <span>{copiedRivalUid ? 'UID Copied!' : 'Copy UID'}</span>
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                ) : null}
 
                  {myActiveMatch.status === 'PENDING_OPPONENT_STAKE' && (
                    <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 space-y-3">
@@ -477,13 +811,56 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
           <h2 className="text-2xl font-black text-white uppercase tracking-widest">My Hosted Bets</h2>
           {myHostedBets.length === 0 ? <div className="p-16 rounded-3xl bg-neutral-900 border border-neutral-800 text-center text-neutral-500 uppercase font-bold tracking-tighter">No Hosted Bets.</div> : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {myHostedBets.map(m => (
-                <div key={m.id} className="p-5 rounded-2xl bg-neutral-900 border border-amber-500/30 space-y-4">
-                  <div className="flex justify-between items-center"><span className="text-xs font-mono font-bold text-amber-400">#CHALLENGE_{m.challengeCode}</span><span className="text-sm font-black text-emerald-400">₦{m.stakeAmount.toLocaleString()}</span></div>
-                  <div className="text-sm font-bold text-white uppercase">{m.gameMode} · {m.map}</div>
-                  <div className="flex gap-2 pt-2"><button onClick={() => copyInviteLink(m.id)} className="flex-1 py-2 bg-neutral-800 text-white font-bold rounded-xl text-[10px] uppercase">Copy Link</button><button onClick={() => onCancelMatch(m.id)} className="px-4 py-2 bg-rose-500/20 text-rose-400 font-bold rounded-xl text-[10px] uppercase border border-rose-500/40">Cancel</button></div>
-                </div>
-              ))}
+              {myHostedBets.map(m => {
+                const isSquad = m.matchType === 'squad' || Boolean(m.squadData);
+                const filledSlots = m.squadData?.slots?.filter(s => s.staked).length || 1;
+                return (
+                  <div key={m.id} className={`p-5 rounded-2xl bg-neutral-900 border space-y-4 ${isSquad ? 'border-emerald-500/40' : 'border-amber-500/30'}`}>
+                    <div className="flex justify-between items-center">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-mono font-bold text-amber-400">#CHALLENGE_{m.challengeCode}</span>
+                        {isSquad && (
+                          <span className="text-[10px] font-bold bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/30">
+                            5v5 Squad ({filledSlots}/10)
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-sm font-black text-emerald-400">₦{m.stakeAmount.toLocaleString()} {isSquad ? '/ player' : ''}</span>
+                    </div>
+                    <div className="text-sm font-bold text-white uppercase">{m.gameMode} · {m.map}</div>
+
+                    {/* Exact Payout & Pot Preview Box */}
+                    <div className="p-3 rounded-xl bg-black/60 border border-neutral-800 space-y-1.5 text-xs font-mono">
+                      <div className="flex justify-between items-center">
+                        <span className="text-neutral-400">{isSquad ? 'Total Gross Pot (10 Players):' : 'Total Pot (2x Stake):'}</span>
+                        <span className="text-amber-400 font-bold">₦{m.potAmount.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-emerald-400 font-bold border-t border-neutral-800/80 pt-1">
+                        <span>{isSquad ? 'Exact Payout / Winning Player:' : 'Exact Winner Payout:'}</span>
+                        <span className="text-sm text-emerald-400 font-black">₦{m.winnerPayout.toLocaleString()}</span>
+                      </div>
+                      {isSquad && (
+                        <div className="flex justify-between items-center text-[10px] text-neutral-400">
+                          <span>Winning Squad Net Pool:</span>
+                          <span className="text-emerald-300">₦{(m.winnerPayout * 5).toLocaleString()}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex gap-2 pt-2">
+                      <button onClick={() => setArenaTab('active')} className="px-4 py-2 bg-amber-400 text-neutral-950 font-black rounded-xl text-[10px] uppercase cursor-pointer hover:bg-amber-300 transition-all">
+                        Open Room
+                      </button>
+                      <button onClick={() => copyInviteLink(m.id)} className="flex-1 py-2 bg-neutral-800 text-white font-bold rounded-xl text-[10px] uppercase cursor-pointer hover:bg-neutral-700 transition-all">
+                        {copiedLink ? 'Link Copied!' : 'Copy Link'}
+                      </button>
+                      <button onClick={() => onCancelMatch(m.id)} className="px-4 py-2 bg-rose-500/20 text-rose-400 font-bold rounded-xl text-[10px] uppercase border border-rose-500/40 cursor-pointer hover:bg-rose-500/30 transition-all">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

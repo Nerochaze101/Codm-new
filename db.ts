@@ -286,6 +286,9 @@ export async function initDatabase() {
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS result_submitted_at BIGINT;
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS result_submitted_by VARCHAR(255);
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT true;
+      ALTER TABLE matches ADD COLUMN IF NOT EXISTS match_type VARCHAR(50) DEFAULT 'solo';
+      ALTER TABLE matches ADD COLUMN IF NOT EXISTS squad_data JSONB;
+
 
       CREATE TABLE IF NOT EXISTS transactions (
         id VARCHAR(255) PRIMARY KEY,

@@ -168,6 +168,7 @@ export async function createMatch(data: {
   rules?: string[];
   matchDurationMinutes?: number;
   isPublic?: boolean;
+  matchType?: 'solo' | 'squad';
 }): Promise<Match> {
   const res = await fetch('/api/matches', {
     method: 'POST',
@@ -185,6 +186,31 @@ export async function joinMatch(matchId: string, opponentId: string): Promise<Ma
   });
   return await parseResponse<Match>(res);
 }
+
+export async function squadJoinMatch(
+  matchId: string,
+  payload: { userId: string; slotIndex?: number; team?: 'ALPHA' | 'BRAVO' }
+): Promise<Match> {
+  const res = await fetch(`/api/matches/${matchId}/squad-join`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return await parseResponse<Match>(res);
+}
+
+export async function squadLeaveMatch(
+  matchId: string,
+  userId: string
+): Promise<Match> {
+  const res = await fetch(`/api/matches/${matchId}/squad-leave`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId }),
+  });
+  return await parseResponse<Match>(res);
+}
+
 
 export async function opponentStakeMatch(
   matchId: string,

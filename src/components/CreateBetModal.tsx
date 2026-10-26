@@ -20,9 +20,11 @@ interface CreateBetModalProps {
     rules: string[];
     matchDurationMinutes?: number;
     isPublic?: boolean;
+    matchType?: 'solo' | 'squad';
   }) => Promise<void>;
   onOpenWallet?: () => void;
 }
+
 
 export const CreateBetModal: React.FC<CreateBetModalProps> = ({
   currentUser,
@@ -97,7 +99,9 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
         ],
         matchDurationMinutes: durationInput,
         isPublic,
+        matchType: betType,
       });
+
       onClose();
     } catch (err: any) {
       setError(err.message || 'Failed to create wager');

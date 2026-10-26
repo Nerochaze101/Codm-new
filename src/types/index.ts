@@ -94,10 +94,32 @@ export interface ChatMessage {
   timestamp: number;
 }
 
+export interface SquadSlot {
+  slotIndex: number; // 0..9 (0..4 Team Alpha, 5..9 Team Bravo)
+  team: 'ALPHA' | 'BRAVO';
+  userId?: string;
+  username?: string;
+  codmIgn?: string;
+  codmUid?: string;
+  avatar?: string;
+  staked: boolean;
+  stakedAt?: number;
+}
+
+export interface SquadData {
+  playersPerTeam: number; // 5
+  totalSlots: number; // 10
+  stakePerPlayer: number;
+  slots: SquadSlot[];
+  winningTeam?: 'ALPHA' | 'BRAVO';
+  submissionTeamAlpha?: { claim: 'VICTORY' | 'DEFEAT' | 'DRAW'; screenshotUrl?: string; submittedBy?: string };
+  submissionTeamBravo?: { claim: 'VICTORY' | 'DEFEAT' | 'DRAW'; screenshotUrl?: string; submittedBy?: string };
+}
+
 export interface Match {
   id: string;
   challengeCode: string;
-  roomCode?: string; // Generated ONLY when both players have confirmed their stake payments
+  roomCode?: string; // Generated ONLY when both players / all squad slots have confirmed stake payments
   gameMode: string;
   map: string;
   rules: string[];
@@ -107,6 +129,8 @@ export interface Match {
   platformFee: number;
   winnerPayout: number;
   matchDurationMinutes?: number;
+  matchType?: 'solo' | 'squad';
+  squadData?: SquadData;
   status:
     | 'PENDING_OPPONENT_STAKE'
     | 'OPPONENT_STAKED_AWAITING_CREATOR'
@@ -138,6 +162,7 @@ export interface Match {
   };
   isPublic?: boolean;
 }
+
 
 export interface WithdrawalRequest {
   id: string;

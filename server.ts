@@ -156,7 +156,10 @@ export interface Match {
   platformFee: number;
   winnerPayout: number;
   matchDurationMinutes?: number;
+  matchType?: 'solo' | 'squad';
+  squadData?: any;
   status:
+
     | 'PENDING_OPPONENT_STAKE'
     | 'OPPONENT_STAKED_AWAITING_CREATOR'
     | 'READY_TO_PLAY'
@@ -508,6 +511,8 @@ async function getMatchFromDb(id: string): Promise<Match | null> {
       platformFee: parseFloat(m.platform_fee || 0),
       winnerPayout: parseFloat(m.winner_payout),
       matchDurationMinutes: parseInt(m.match_duration_minutes, 10) || 15,
+      matchType: m.match_type || 'solo',
+      squadData: m.squad_data ? (typeof m.squad_data === 'string' ? JSON.parse(m.squad_data) : m.squad_data) : undefined,
       status: m.status,
       createdAt: parseInt(m.created_at, 10),
       creator: typeof m.creator_data === 'string' ? JSON.parse(m.creator_data) : m.creator_data,
@@ -541,6 +546,8 @@ async function getAllMatchesFromDb(): Promise<Match[]> {
       platformFee: parseFloat(m.platform_fee || 0),
       winnerPayout: parseFloat(m.winner_payout),
       matchDurationMinutes: parseInt(m.match_duration_minutes, 10) || 15,
+      matchType: m.match_type || 'solo',
+      squadData: m.squad_data ? (typeof m.squad_data === 'string' ? JSON.parse(m.squad_data) : m.squad_data) : undefined,
       status: m.status,
       createdAt: parseInt(m.created_at, 10),
       creator: typeof m.creator_data === 'string' ? JSON.parse(m.creator_data) : m.creator_data,
@@ -564,7 +571,7 @@ async function saveMatchToDb(match: any) {
       INSERT INTO matches (
         id, challenge_code, room_code, game_mode, map, rules,
         stake_amount, pot_amount, platform_fee_percentage, platform_fee, winner_payout,
-        match_duration_minutes, status, creator_id, creator_data, opponent_id, opponent_data,
+        match_duration_minutes, match_type, squad_data, status, creator_id, creator_data, opponent_id, opponent_data,
         winner_id, winner_ign, resolution_notes, chat_messages, created_at, room_generated_at, settled_at, is_public
       )
       VALUES (
@@ -580,6 +587,8 @@ async function saveMatchToDb(match: any) {
         ${escapeSql(match.platformFee || 0)},
         ${escapeSql(match.winnerPayout)},
         ${escapeSql(match.matchDurationMinutes || 15)},
+        ${escapeSql(match.matchType || 'solo')},
+        ${match.squadData ? escapeSql(match.squadData) : 'NULL'},
         ${escapeSql(match.status)},
         ${escapeSql(match.creator.id)},
         ${escapeSql(match.creator)},
@@ -598,6 +607,8 @@ async function saveMatchToDb(match: any) {
         room_code = EXCLUDED.room_code,
         status = EXCLUDED.status,
         match_duration_minutes = EXCLUDED.match_duration_minutes,
+        match_type = EXCLUDED.match_type,
+        squad_data = EXCLUDED.squad_data,
         creator_data = EXCLUDED.creator_data,
         opponent_id = EXCLUDED.opponent_id,
         opponent_data = EXCLUDED.opponent_data,
@@ -609,6 +620,7 @@ async function saveMatchToDb(match: any) {
         settled_at = EXCLUDED.settled_at,
         is_public = EXCLUDED.is_public;
     `);
+
     try {
       broadcastMatchStateChange(match);
     } catch (bcErr) {
@@ -4851,7 +4863,30 @@ app.get('/api/matches/:id', async (req, res) => {
   res.json(sanitizeMatchForPublic(match));
 });
 
-// Create new 1v1 match challenge directly in database
+// Helper to calculate squad economics for 5v5 matches
+function calculateSquadEconomics(stakePerPlayer: number, playersPerTeam: number = 5) {
+  const totalPlayers = playersPerTeam * 2;
+  const totalPot = Math.max(0, stakePerPlayer) * totalPlayers;
+  const rakeRate = getRakePercentage(totalPot);
+  const platformFee = Math.round(totalPot * rakeRate);
+  const netWinningPool = totalPot - platformFee;
+  const payoutPerPlayer = Math.floor(netWinningPool / playersPerTeam);
+  const rakePercentFormatted = `${(rakeRate * 100).toFixed(rakeRate < 0.05 ? 1 : 0)}%`;
+
+  return {
+    stakePerPlayer,
+    playersPerTeam,
+    totalPlayers,
+    totalPot,
+    rakeRate,
+    rakePercentFormatted,
+    platformFee,
+    netWinningPool,
+    payoutPerPlayer,
+  };
+}
+
+// Create new 1v1 or 5v5 squad match challenge directly in database
 app.post('/api/matches', async (req, res) => {
   const {
     creatorId,
@@ -4866,6 +4901,7 @@ app.post('/api/matches', async (req, res) => {
     stakeAmount = 100,
     matchDurationMinutes = 15,
     isPublic = true,
+    matchType = 'solo',
   } = req.body;
 
   const client = await pool.connect();
@@ -4900,16 +4936,57 @@ app.post('/api/matches', async (req, res) => {
     const numDuration = Math.max(15, parseInt(matchDurationMinutes, 10) || 15);
     const matchId = `match_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
     const challengeCode = `CHALLENGE-${Math.floor(1000 + Math.random() * 9000)}`;
-    const potAmount = numStake * 2;
-    const rakeRate = getRakePercentage(numStake);
-    const platformFee = Math.round(potAmount * rakeRate);
-    const winnerPayout = potAmount - platformFee;
-    const platformFeePercentage = Math.round(rakeRate * 100);
+    
+    const isSquad = matchType === 'squad';
+    let potAmount = numStake * 2;
+    let rakeRate = getRakePercentage(potAmount);
+    let platformFee = Math.round(potAmount * rakeRate);
+    let winnerPayout = potAmount - platformFee;
+    let platformFeePercentage = Math.round(rakeRate * 100);
+    let squadData: any = undefined;
+
+    if (isSquad) {
+      const squadEcon = calculateSquadEconomics(numStake, 5);
+      potAmount = squadEcon.totalPot;
+      platformFee = squadEcon.platformFee;
+      winnerPayout = squadEcon.payoutPerPlayer; // payout per winning player
+      rakeRate = squadEcon.rakeRate;
+      platformFeePercentage = Math.round(squadEcon.rakeRate * 100);
+
+      const slots: any[] = [];
+      // Slot 0: Host / Creator (Team Alpha)
+      slots.push({
+        slotIndex: 0,
+        team: 'ALPHA',
+        userId: creator.id,
+        username: creator.username,
+        codmIgn: creator.codm_ign,
+        codmUid: creator.codm_uid,
+        avatar: creator.avatar,
+        staked: true,
+        stakedAt: Date.now(),
+      });
+      // Slots 1..4: Team Alpha
+      for (let i = 1; i < 5; i++) {
+        slots.push({ slotIndex: i, team: 'ALPHA', staked: false });
+      }
+      // Slots 5..9: Team Bravo
+      for (let i = 5; i < 10; i++) {
+        slots.push({ slotIndex: i, team: 'BRAVO', staked: false });
+      }
+
+      squadData = {
+        playersPerTeam: 5,
+        totalSlots: 10,
+        stakePerPlayer: numStake,
+        slots,
+      };
+    }
 
     const txId = `tx_${Date.now()}_host`;
     await client.query(`
       INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
-      VALUES (${escapeSql(txId)}, ${escapeSql(creatorId)}, 'ESCROW_LOCK', ${escapeSql(numStake)}, ${escapeSql(`₦${numStake.toLocaleString()} escrow locked for hosting challenge #${challengeCode}`)}, ${escapeSql(matchId)}, ${Date.now()})
+      VALUES (${escapeSql(txId)}, ${escapeSql(creatorId)}, 'ESCROW_LOCK', ${escapeSql(numStake)}, ${escapeSql(`₦${numStake.toLocaleString()} escrow locked for hosting ${isSquad ? '5v5 Squad' : '1v1'} challenge #${challengeCode}`)}, ${escapeSql(matchId)}, ${Date.now()})
       ON CONFLICT (id) DO NOTHING
     `);
 
@@ -4926,6 +5003,8 @@ app.post('/api/matches', async (req, res) => {
       platformFee,
       winnerPayout,
       matchDurationMinutes: numDuration,
+      matchType: isSquad ? 'squad' : 'solo',
+      squadData,
       status: 'PENDING_OPPONENT_STAKE',
       createdAt: Date.now(),
       isPublic: Boolean(isPublic),
@@ -4942,7 +5021,9 @@ app.post('/api/matches', async (req, res) => {
           id: `msg_sys_1`,
           senderId: 'SYSTEM',
           senderName: 'CODM Referee Bot',
-          text: `Match challenge #${challengeCode} created with ₦${numStake.toLocaleString()} stake deducted from host wallet (Pot: ₦${potAmount.toLocaleString()}). Share the invite link with your opponent. You can cancel anytime before opponent accepts to get a 100% full refund.`,
+          text: isSquad 
+            ? `🔥 5v5 Squad Wager Lobby #${challengeCode} created! Host ${creator.codm_ign} locked Slot #1 (Team Alpha). Waiting for 9 players to join slots (10 x ₦${numStake.toLocaleString()} = ₦${potAmount.toLocaleString()} Pot). Winning squad members will automatically receive ₦${winnerPayout.toLocaleString()} each upon victory!`
+            : `Match challenge #${challengeCode} created with ₦${numStake.toLocaleString()} stake deducted from host wallet (Pot: ₦${potAmount.toLocaleString()}). Share the invite link with your opponent. You can cancel anytime before opponent accepts to get a 100% full refund.`,
           timestamp: Date.now(),
         },
       ],
@@ -4982,6 +5063,7 @@ app.post('/api/matches', async (req, res) => {
     client.release();
   }
 });
+
 
 // Opponent accepts challenge and sends stake into escrow directly in database with strict race-condition locking
 app.post('/api/matches/:id/opponent-stake', async (req, res) => {
@@ -5243,6 +5325,295 @@ app.post('/api/matches/:id/join', async (req, res) => {
     client.release();
   }
 });
+
+// Join 5v5 Squad slot directly in database with atomic locking
+app.post('/api/matches/:id/squad-join', async (req, res) => {
+  const matchId = req.params.id;
+  const { userId, slotIndex, team } = req.body;
+
+  if (!userId) return res.status(400).json({ error: 'User ID is required' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const matchRes = await client.query(`SELECT * FROM matches WHERE id = ${escapeSql(matchId)} FOR UPDATE`);
+    if (matchRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Match not found' });
+    }
+
+    const matchRow = matchRes.rows[0];
+    if (matchRow.status !== 'PENDING_OPPONENT_STAKE') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'This squad lobby is no longer open for joining.' });
+    }
+
+    let squadData = matchRow.squad_data ? (typeof matchRow.squad_data === 'string' ? JSON.parse(matchRow.squad_data) : matchRow.squad_data) : null;
+    if (!squadData || !Array.isArray(squadData.slots)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'This match is not configured as a 5v5 squad lobby.' });
+    }
+
+    // Check if user is already in any slot
+    const existingSlot = squadData.slots.find((s: any) => s.userId === userId && s.staked);
+    if (existingSlot) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: `You are already staked in ${existingSlot.team === 'ALPHA' ? 'Team Alpha (Blue)' : 'Team Bravo (Red)'} Slot #${existingSlot.slotIndex + 1}` });
+    }
+
+    // Determine target slot
+    let targetSlotIndex = typeof slotIndex === 'number' && slotIndex >= 0 && slotIndex < 10 ? slotIndex : -1;
+    if (targetSlotIndex !== -1) {
+      if (squadData.slots[targetSlotIndex]?.staked) {
+        targetSlotIndex = -1; // Slot taken, fallback to auto
+      }
+    }
+
+    if (targetSlotIndex === -1) {
+      // Auto assign based on preferred team or first open slot
+      if (team === 'BRAVO') {
+        targetSlotIndex = squadData.slots.findIndex((s: any) => s.team === 'BRAVO' && !s.staked);
+      } else if (team === 'ALPHA') {
+        targetSlotIndex = squadData.slots.findIndex((s: any) => s.team === 'ALPHA' && !s.staked);
+      }
+      if (targetSlotIndex === -1) {
+        targetSlotIndex = squadData.slots.findIndex((s: any) => !s.staked);
+      }
+    }
+
+    if (targetSlotIndex === -1 || targetSlotIndex >= 10) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'All 10 squad slots are already filled!' });
+    }
+
+    const stakeAmount = parseFloat(matchRow.stake_amount);
+
+    // Lock user row
+    const userRes = await client.query(`SELECT * FROM users WHERE id = ${escapeSql(userId)} FOR UPDATE`);
+    if (userRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const user = userRes.rows[0];
+
+    const currentBal = parseFloat(user.balance || 0);
+    if (currentBal < stakeAmount) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: `Insufficient wallet balance (₦${currentBal.toLocaleString()}) to join this 5v5 squad slot. Please fund your wallet first.` });
+    }
+
+    // Deduct stake from player balance into escrow
+    await client.query(`
+      UPDATE users 
+      SET balance = balance - ${escapeSql(stakeAmount)},
+          escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
+      WHERE id = ${escapeSql(userId)}
+    `);
+
+    // Fill target slot
+    const assignedTeam = squadData.slots[targetSlotIndex].team || (targetSlotIndex < 5 ? 'ALPHA' : 'BRAVO');
+    squadData.slots[targetSlotIndex] = {
+      slotIndex: targetSlotIndex,
+      team: assignedTeam,
+      userId: user.id,
+      username: user.username,
+      codmIgn: user.codm_ign,
+      codmUid: user.codm_uid,
+      avatar: user.avatar,
+      staked: true,
+      stakedAt: Date.now(),
+    };
+
+    const filledCount = squadData.slots.filter((s: any) => s.staked).length;
+    const now = Date.now();
+    let newStatus = matchRow.status;
+    let generatedRoomCode = matchRow.room_code;
+
+    const chatMessages = Array.isArray(matchRow.chat_messages) ? matchRow.chat_messages : [];
+
+    if (filledCount === 10) {
+      // 10/10 Players Staked! Lock match & generate CODM Custom Room Code
+      newStatus = 'READY_TO_PLAY';
+      generatedRoomCode = generateRoomCode(matchRow.map);
+
+      chatMessages.push({
+        id: `msg_${now}_squad_start`,
+        senderId: 'SYSTEM',
+        senderName: 'CODM Referee Bot',
+        text: `🎉 ALL 10 SQUAD SLOTS FILLED! 5v5 Squad match is LOCKED into escrow (Total Pot: ₦${parseFloat(matchRow.pot_amount).toLocaleString()}). Room Code: #${generatedRoomCode}. Join CODM Custom Room now!`,
+        timestamp: now,
+      });
+    } else {
+      chatMessages.push({
+        id: `msg_${now}_squad_join`,
+        senderId: 'SYSTEM',
+        senderName: 'CODM Referee Bot',
+        text: `⚔️ ${user.codm_ign} staked ₦${stakeAmount.toLocaleString()} and joined ${assignedTeam === 'ALPHA' ? 'Team Alpha (Blue)' : 'Team Bravo (Red)'} Slot #${targetSlotIndex + 1}! (${filledCount}/10 slots filled)`,
+        timestamp: now,
+      });
+    }
+
+    await client.query(`
+      UPDATE matches 
+      SET status = ${escapeSql(newStatus)},
+          squad_data = ${escapeSql(squadData)},
+          room_code = ${escapeSql(generatedRoomCode || null)},
+          room_generated_at = ${filledCount === 10 ? now : 'room_generated_at'},
+          chat_messages = ${escapeSql(chatMessages)}
+      WHERE id = ${escapeSql(matchId)}
+    `);
+
+    const tx = {
+      id: `tx_${now}_squad_${targetSlotIndex}`,
+      type: 'ESCROW_LOCK',
+      amount: stakeAmount,
+      description: `₦${stakeAmount.toLocaleString()} stake locked in escrow for 5v5 Squad challenge #${matchRow.challenge_code} (${assignedTeam} Slot #${targetSlotIndex + 1})`,
+      timestamp: now,
+      matchId: matchRow.id,
+    };
+
+    await client.query(`
+      INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+      VALUES (${escapeSql(tx.id)}, ${escapeSql(userId)}, ${escapeSql(tx.type)}, ${escapeSql(tx.amount)}, ${escapeSql(tx.description)}, ${escapeSql(tx.matchId)}, ${escapeSql(tx.timestamp)})
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    await client.query('COMMIT');
+    const updatedMatch = await getMatchFromDb(matchId);
+    
+    res.json(updatedMatch);
+
+    if (updatedMatch) {
+      setImmediate(() => {
+        try {
+          broadcastMatchStateChange(updatedMatch, filledCount === 10 ? 'MATCH_STARTED' : 'RIVAL_JOINED');
+        } catch (bgErr: any) {
+          console.warn('Squad join background task error:', bgErr.message);
+        }
+      });
+    }
+  } catch (err: any) {
+    await client.query('ROLLBACK');
+    console.error('Squad join error:', err);
+    res.status(500).json({ error: err.message || 'Failed to join squad slot' });
+  } finally {
+    client.release();
+  }
+});
+
+// Leave 5v5 Squad slot directly in database
+app.post('/api/matches/:id/squad-leave', async (req, res) => {
+  const matchId = req.params.id;
+  const { userId } = req.body;
+
+  if (!userId) return res.status(400).json({ error: 'User ID is required' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const matchRes = await client.query(`SELECT * FROM matches WHERE id = ${escapeSql(matchId)} FOR UPDATE`);
+    if (matchRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Match not found' });
+    }
+
+    const matchRow = matchRes.rows[0];
+    if (matchRow.status !== 'PENDING_OPPONENT_STAKE') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Cannot leave slot once match is locked or started.' });
+    }
+
+    if (matchRow.creator_id === userId) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Host cannot leave slot. Cancel the wager to refund all players instead.' });
+    }
+
+    let squadData = matchRow.squad_data ? (typeof matchRow.squad_data === 'string' ? JSON.parse(matchRow.squad_data) : matchRow.squad_data) : null;
+    if (!squadData || !Array.isArray(squadData.slots)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'This match is not a squad wager.' });
+    }
+
+    const slotIdx = squadData.slots.findIndex((s: any) => s.userId === userId && s.staked);
+    if (slotIdx === -1) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'You are not currently in a staked slot in this lobby.' });
+    }
+
+    const stakeAmount = parseFloat(matchRow.stake_amount);
+
+    // Refund player
+    await client.query(`
+      UPDATE users 
+      SET balance = balance + ${escapeSql(stakeAmount)},
+          escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(stakeAmount)})
+      WHERE id = ${escapeSql(userId)}
+    `);
+
+    const userRes = await client.query(`SELECT codm_ign FROM users WHERE id = ${escapeSql(userId)}`);
+    const playerIgn = userRes.rows[0]?.codm_ign || 'Player';
+
+    // Reset slot
+    const resetTeam = squadData.slots[slotIdx].team;
+    squadData.slots[slotIdx] = { slotIndex: slotIdx, team: resetTeam, staked: false };
+
+    const filledCount = squadData.slots.filter((s: any) => s.staked).length;
+    const now = Date.now();
+
+    const chatMessages = Array.isArray(matchRow.chat_messages) ? matchRow.chat_messages : [];
+    chatMessages.push({
+      id: `msg_${now}_squad_leave`,
+      senderId: 'SYSTEM',
+      senderName: 'CODM Referee Bot',
+      text: `🛡️ ${playerIgn} left Slot #${slotIdx + 1} and ₦${stakeAmount.toLocaleString()} escrow was refunded to their wallet. (${filledCount}/10 slots filled)`,
+      timestamp: now,
+    });
+
+    await client.query(`
+      UPDATE matches 
+      SET squad_data = ${escapeSql(squadData)},
+          chat_messages = ${escapeSql(chatMessages)}
+      WHERE id = ${escapeSql(matchId)}
+    `);
+
+    const tx = {
+      id: `tx_${now}_squad_refund_${slotIdx}`,
+      type: 'ESCROW_REFUND',
+      amount: stakeAmount,
+      description: `₦${stakeAmount.toLocaleString()} escrow refunded after leaving 5v5 Squad challenge #${matchRow.challenge_code}`,
+      timestamp: now,
+      matchId: matchRow.id,
+    };
+
+    await client.query(`
+      INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+      VALUES (${escapeSql(tx.id)}, ${escapeSql(userId)}, ${escapeSql(tx.type)}, ${escapeSql(tx.amount)}, ${escapeSql(tx.description)}, ${escapeSql(tx.matchId)}, ${escapeSql(tx.timestamp)})
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    await client.query('COMMIT');
+    const updatedMatch = await getMatchFromDb(matchId);
+
+    res.json(updatedMatch);
+
+    if (updatedMatch) {
+      setImmediate(() => {
+        try {
+          broadcastMatchStateChange(updatedMatch);
+        } catch (_) {}
+      });
+    }
+  } catch (err: any) {
+    await client.query('ROLLBACK');
+    console.error('Squad leave error:', err);
+    res.status(500).json({ error: err.message || 'Failed to leave squad slot' });
+  } finally {
+    client.release();
+  }
+});
+
 
 // Send in-match chat message directly to database
 app.post('/api/matches/:id/chat', async (req, res) => {
