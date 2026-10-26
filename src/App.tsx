@@ -404,7 +404,7 @@ function MainApp() {
     matchDurationMinutes?: number;
     isPublic?: boolean;
   }) => {
-    await createMatch({
+    const newMatch = await createMatch({
       creatorId: currentUser.id,
       stakeAmount: data.stakeAmount,
       gameMode: data.gameMode,
@@ -414,22 +414,38 @@ function MainApp() {
       isPublic: data.isPublic,
     });
 
-    const updatedUser = await fetchUser(currentUser.id);
-    setCurrentUser(updatedUser);
-    await loadData();
-    setIsCreateBetOpen(false);
-    setCreateBetInitialMode(undefined);
-    setCreateBetInitialStake(undefined);
-    navigate('/arena'); // Navigate immediately into active room view
+    if (newMatch && newMatch.id) {
+      // 1. Immediately update matches list in UI (0ms delay!)
+      setMatches((prev) => [newMatch, ...prev.filter((m) => m.id !== newMatch.id)]);
+
+      // 2. Immediately deduct user wallet balance and credit escrow locally
+      setCurrentUser((prev) => ({
+        ...prev,
+        balance: Math.max(0, prev.balance - data.stakeAmount),
+        escrowBalance: prev.escrowBalance + data.stakeAmount,
+      }));
+
+      // 3. Immediately close modal and navigate to Arena view
+      setIsCreateBetOpen(false);
+      setCreateBetInitialMode(undefined);
+      setCreateBetInitialStake(undefined);
+      navigate('/arena');
+
+      // 4. Parallel background sync without blocking UI or showing full page loading spinners
+      fetchUser(currentUser.id).then((u) => u && u.id && setCurrentUser(u)).catch(() => {});
+      fetchMatches().then((mList) => mList && setMatches(mList)).catch(() => {});
+    }
   };
 
   const handleJoinMatch = async (matchId: string, opponentId: string) => {
     try {
       await joinMatch(matchId, opponentId);
-      const updatedUser = await fetchUser(currentUser.id);
-      setCurrentUser(updatedUser);
-      await loadData();
+      setIsCreateBetOpen(false);
       navigate('/arena');
+
+      // Parallel background sync
+      fetchUser(currentUser.id).then((u) => u && u.id && setCurrentUser(u)).catch(() => {});
+      fetchMatches().then((mList) => mList && setMatches(mList)).catch(() => {});
     } catch (err: any) {
       alert(err.message || 'Failed to join match');
     }

@@ -4218,6 +4218,7 @@ export async function postMatchToPublicChannel(match: Match, origin?: string) {
     const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(4000),
       body: JSON.stringify({
         chat_id: TELEGRAM_PUBLIC_CHANNEL_ID,
         text: messageText,
