@@ -4195,6 +4195,7 @@ const TELEGRAM_PUBLIC_CHANNEL_ID = (process.env.TELEGRAM_PUBLIC_CHANNEL_ID || ''
 
 /**
  * Dispatches a real-time wager alert to the configured public Telegram channel.
+ * Accurately formats 1v1 duels and 5v5 Squad wagers with exact per-player payouts and pot breakdown.
  */
 export async function postMatchToPublicChannel(match: Match, origin?: string) {
   console.log(`[Telegram Bot] Attempting public post for Match #${match.challengeCode} to Channel ${TELEGRAM_PUBLIC_CHANNEL_ID}`);
@@ -4211,14 +4212,53 @@ export async function postMatchToPublicChannel(match: Match, origin?: string) {
     // Using deep link format expected by App.tsx (?join=MATCH_ID)
     const matchUrl = `${baseOrigin || 'https://ops-stake.app'}/?join=${match.id}`;
     
-    const messageText = 
-      `🔥 <b>NEW LIVE WAGER ALERT - OPS STAKE</b> 🔥\n\n` +
-      `👤 <b>Host:</b> ${match.creator.codmIgn}\n` +
-      `💵 <b>Stake Amount:</b> ₦${match.stakeAmount.toLocaleString()}\n` +
-      `🏆 <b>Total Pot:</b> ₦${match.potAmount.toLocaleString()}\n` +
-      `🎯 <b>Game Mode:</b> ${match.gameMode}\n` +
-      `🗺️ <b>Map:</b> ${match.map}\n\n` +
-      `⚔️ <i>A gladiator is waiting for a rival! Think you have what it takes to win? Tap the button below to join the match and claim the pot!</i>`;
+    const isSquad = match.matchType === 'squad' || Boolean(match.squadData);
+    let messageText = '';
+    let buttonLabel = '🎮 ACCEPT WAGER NOW';
+
+    if (isSquad) {
+      const squad = match.squadData;
+      const filledSlots = squad?.slots ? squad.slots.filter((s: any) => s.staked).length : 1;
+      const openSlots = Math.max(0, 10 - filledSlots);
+      const grossPot = match.potAmount;
+      const feeAmount = match.platformFee || Math.round(grossPot * 0.10);
+      const feePercent = match.platformFeePercentage || 10;
+      const netSquadPool = grossPot - feeAmount;
+      const perPlayerPayout = match.winnerPayout;
+
+      messageText = 
+        `🛡️ <b>NEW 5v5 SQUAD WAGER - OPS STAKE</b> 🛡️\n\n` +
+        `⚔️ <b>Format:</b> 5v5 Tactical Squad Battle (10 Players · Team Alpha vs Bravo)\n` +
+        `👤 <b>Host (Alpha #1):</b> ${match.creator.codmIgn}\n` +
+        `💵 <b>Entry Stake:</b> ₦${match.stakeAmount.toLocaleString()} / player\n` +
+        `🏆 <b>Total Gross Pot:</b> ₦${grossPot.toLocaleString()} (10 Players Pool)\n` +
+        `⚙️ <b>Platform Rake:</b> ₦${feeAmount.toLocaleString()} (${feePercent}% Fee)\n` +
+        `💰 <b>Winning Squad Pool:</b> ₦${netSquadPool.toLocaleString()}\n` +
+        `🎯 <b>Exact Payout:</b> <b>₦${perPlayerPayout.toLocaleString()}</b> per winning player\n` +
+        `👥 <b>Open Slots:</b> <b>${openSlots}/10 Slots Remaining</b>\n` +
+        `🎯 <b>Game Mode:</b> ${match.gameMode}\n` +
+        `🗺️ <b>Map:</b> ${match.map}\n` +
+        `🏷️ <b>Lobby Code:</b> #${match.challengeCode}\n\n` +
+        `🛡️ <i>Lock in your slot! Join Team Alpha or Team Bravo. All 5 members of the winning squad receive ₦${perPlayerPayout.toLocaleString()} each! Tap below to join!</i>`;
+      buttonLabel = `🛡️ JOIN SQUAD (₦${match.stakeAmount.toLocaleString()})`;
+    } else {
+      const netPot = match.potAmount - (match.platformFee || 0);
+      const feePercent = match.platformFeePercentage || 10;
+      const winnerPayout = match.winnerPayout || netPot;
+
+      messageText = 
+        `🔥 <b>NEW 1v1 WAGER ALERT - OPS STAKE</b> 🔥\n\n` +
+        `👤 <b>Host:</b> ${match.creator.codmIgn}\n` +
+        `💵 <b>Stake Amount:</b> ₦${match.stakeAmount.toLocaleString()}\n` +
+        `🏆 <b>Total Pot:</b> ₦${match.potAmount.toLocaleString()}\n` +
+        `⚙️ <b>Platform Fee:</b> ₦${(match.platformFee || 0).toLocaleString()} (${feePercent}% Rake)\n` +
+        `🎯 <b>Exact Winner Payout:</b> <b>₦${winnerPayout.toLocaleString()}</b>\n` +
+        `🎯 <b>Game Mode:</b> ${match.gameMode}\n` +
+        `🗺️ <b>Map:</b> ${match.map}\n` +
+        `🏷️ <b>Challenge Code:</b> #${match.challengeCode}\n\n` +
+        `⚔️ <i>A gladiator is waiting for a rival! Think you have what it takes to win? Tap the button below to join the match and claim ₦${winnerPayout.toLocaleString()}!</i>`;
+      buttonLabel = `🎮 ACCEPT WAGER (₦${match.stakeAmount.toLocaleString()})`;
+    }
 
     console.log(`[Telegram Bot] Dispatching sendMessage request to Telegram API...`);
 
@@ -4232,7 +4272,7 @@ export async function postMatchToPublicChannel(match: Match, origin?: string) {
         parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [[
-            { text: '🎮 ACCEPT WAGER NOW', url: matchUrl }
+            { text: buttonLabel, url: matchUrl }
           ]]
         }
       }),
@@ -4257,10 +4297,22 @@ export async function postMatchToPublicChannel(match: Match, origin?: string) {
   }
 }
 
+/**
+ * Direct Telegram alert when a rival accepts a 1v1 challenge.
+ */
 export async function sendTelegramMatchAcceptedAlert(match: Match, opponentIgn: string) {
   try {
+    const isSquad = match.matchType === 'squad' || Boolean(match.squadData);
+    if (isSquad) {
+      await sendTelegramSquadSlotJoinedAlert(match, opponentIgn, 'BRAVO', 6, 10);
+      return;
+    }
+
     const creatorUser = await getUserFromDb(match.creator.id);
     const hostChatId = creatorUser?.telegramChatId || process.env.TELEGRAM_HOST_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
+
+    const netPot = match.potAmount - (match.platformFee || 0);
+    const winnerPayout = match.winnerPayout || netPot;
 
     const messageText = 
       `⚔️ <b>MATCH ACCEPTED - OPS STAKE</b> ⚔️\n\n` +
@@ -4269,11 +4321,12 @@ export async function sendTelegramMatchAcceptedAlert(match: Match, opponentIgn: 
       `⚔️ <b>Opponent:</b> ${opponentIgn}\n` +
       `💵 <b>Stake Amount:</b> ₦${match.stakeAmount.toLocaleString()}\n` +
       `🏆 <b>Total Pot:</b> ₦${match.potAmount.toLocaleString()}\n` +
+      `🎯 <b>Winner Payout:</b> <b>₦${winnerPayout.toLocaleString()}</b>\n` +
       `🎯 <b>Game Mode:</b> ${match.gameMode}\n` +
       `🗺️ <b>Map:</b> ${match.map}\n` +
       `🔑 <b>In-Game Room Code:</b> <code>#${match.roomCode || 'Ready'}</code>\n` +
       `🏷️ <b>Challenge Code:</b> #${match.challengeCode}\n\n` +
-      `🚀 <i>Open CODM, enter room code #${match.roomCode || 'Ready'}, and claim victory!</i>`;
+      `🚀 <i>Open CODM, enter room code #${match.roomCode || 'Ready'}, and claim your ₦${winnerPayout.toLocaleString()} victory!</i>`;
 
     const chatIdsToSend = new Set<string>();
     if (hostChatId && hostChatId.trim()) chatIdsToSend.add(hostChatId.trim());
@@ -4296,15 +4349,166 @@ export async function sendTelegramMatchAcceptedAlert(match: Match, opponentIgn: 
       const data = await res.json();
       if (!data.ok) {
         console.warn(`[Telegram Bot] Direct alert failed for chat ID ${chatId}: ${data.description}`);
-        if (data.description === 'chat not found') {
-          console.warn(`[Telegram Bot] Hint: User must start a conversation with the bot first for direct alerts.`);
-        }
       } else {
         console.log(`✅ [Telegram Bot] Acceptance alert sent to host chat ${chatId}`);
       }
     }
   } catch (err: any) {
     console.error('[Telegram Bot] Exception sending match alert:', err.message);
+  }
+}
+
+/**
+ * Direct Telegram alert when a player joins or all 10 slots fill in a 5v5 squad lobby.
+ * Dispatches to all players in the squad who have linked Telegram accounts.
+ */
+export async function sendTelegramSquadSlotJoinedAlert(
+  match: Match,
+  playerIgn: string,
+  team: string,
+  slotNumber: number,
+  filledCount: number
+) {
+  try {
+    const squad = match.squadData;
+    const grossPot = match.potAmount;
+    const feeAmount = match.platformFee || Math.round(grossPot * 0.10);
+    const feePercent = match.platformFeePercentage || 10;
+    const netSquadPool = grossPot - feeAmount;
+    const perPlayerPayout = match.winnerPayout;
+    const teamLabel = team === 'ALPHA' ? 'Team Alpha (Blue)' : 'Team Bravo (Red)';
+
+    let messageText = '';
+    if (filledCount === 10) {
+      messageText = 
+        `⚔️ <b>5v5 SQUAD LOBBY FULL - MATCH COMMENCING!</b> ⚔️\n\n` +
+        `🎯 <b>All 10 slots are filled and locked into escrow!</b>\n\n` +
+        `💵 <b>Stake / Player:</b> ₦${match.stakeAmount.toLocaleString()}\n` +
+        `🏆 <b>Total Gross Pot:</b> ₦${grossPot.toLocaleString()} (10 Players)\n` +
+        `⚙️ <b>Platform Fee:</b> ₦${feeAmount.toLocaleString()} (${feePercent}% Rake)\n` +
+        `💰 <b>Winning Squad Pool:</b> ₦${netSquadPool.toLocaleString()}\n` +
+        `🎯 <b>Exact Payout:</b> <b>₦${perPlayerPayout.toLocaleString()}</b> per winning squad member\n\n` +
+        `🔑 <b>In-Game CODM Room Code:</b> <code>#${match.roomCode || 'Ready'}</code>\n` +
+        `🏷️ <b>Lobby Code:</b> #${match.challengeCode}\n` +
+        `🎯 <b>Mode:</b> ${match.gameMode} · <b>Map:</b> ${match.map}\n\n` +
+        `🚀 <i>Open CODM now, enter custom room #${match.roomCode || 'Ready'}, and lead your squad to victory!</i>`;
+    } else {
+      messageText = 
+        `🛡️ <b>5v5 SQUAD SLOT FILLED - OPS STAKE</b> 🛡️\n\n` +
+        `⚔️ <b>${playerIgn}</b> staked ₦${match.stakeAmount.toLocaleString()} and joined <b>${teamLabel} Slot #${slotNumber}</b>!\n\n` +
+        `📊 <b>Lobby Progress:</b> <b>${filledCount}/10 Slots Staked</b> (${10 - filledCount} slots open)\n` +
+        `💵 <b>Entry Stake:</b> ₦${match.stakeAmount.toLocaleString()} / player\n` +
+        `🏆 <b>Total Gross Pot:</b> ₦${grossPot.toLocaleString()} (10 Players)\n` +
+        `🎯 <b>Exact Payout:</b> <b>₦${perPlayerPayout.toLocaleString()}</b> per winning squad player\n` +
+        `🏷️ <b>Lobby Code:</b> #${match.challengeCode}\n\n` +
+        `⏳ <i>Waiting for ${10 - filledCount} more player(s) to stake and lock in...</i>`;
+    }
+
+    // Collect all staked players with telegramChatId
+    const stakedUserIds: string[] = [];
+    if (squad?.slots && Array.isArray(squad.slots)) {
+      for (const slot of squad.slots) {
+        if (slot.staked && slot.userId) {
+          stakedUserIds.push(slot.userId);
+        }
+      }
+    }
+    if (match.creator?.id && !stakedUserIds.includes(match.creator.id)) {
+      stakedUserIds.push(match.creator.id);
+    }
+
+    const chatIdsToSend = new Set<string>();
+    for (const uid of stakedUserIds) {
+      const u = await getUserFromDb(uid);
+      if (u?.telegramChatId && u.telegramChatId.trim()) {
+        chatIdsToSend.add(u.telegramChatId.trim());
+      }
+    }
+
+    if (process.env.TELEGRAM_HOST_CHAT_ID) chatIdsToSend.add(process.env.TELEGRAM_HOST_CHAT_ID.trim());
+
+    for (const chatId of chatIdsToSend) {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: messageText,
+          parse_mode: 'HTML',
+        }),
+      }).catch(err => console.warn(`[Telegram Bot] Error sending squad alert to ${chatId}:`, err.message));
+    }
+  } catch (err: any) {
+    console.error('[Telegram Bot] Exception sending squad slot alert:', err.message);
+  }
+}
+
+/**
+ * Direct Telegram alert when a match (1v1 or 5v5 Squad) is settled and payouts are distributed.
+ */
+export async function sendTelegramMatchSettledAlert(match: Match, winningSideOrWinnerIgn: string) {
+  try {
+    const isSquad = match.matchType === 'squad' || Boolean(match.squadData);
+    if (isSquad) {
+      const squad = match.squadData;
+      const grossPot = match.potAmount;
+      const feeAmount = match.platformFee || Math.round(grossPot * 0.10);
+      const netSquadPool = grossPot - feeAmount;
+      const perPlayerPayout = match.winnerPayout;
+      const winningTeam = (winningSideOrWinnerIgn === 'BRAVO' || winningSideOrWinnerIgn === 'opponent') ? 'BRAVO' : 'ALPHA';
+      const teamLabel = winningTeam === 'ALPHA' ? 'Team Alpha (Blue)' : 'Team Bravo (Red)';
+
+      const messageText = 
+        `🏆 <b>SQUAD VICTORY - ₦${perPlayerPayout.toLocaleString()} CREDITED!</b> 🏆\n\n` +
+        `🎖️ Congratulations soldier! <b>${teamLabel}</b> emerged victorious in 5v5 Match #${match.challengeCode}!\n\n` +
+        `💰 <b>Exact Winnings Credited:</b> <b>₦${perPlayerPayout.toLocaleString()}</b> has been deposited into your wallet balance!\n\n` +
+        `📊 <b>Squad Economics:</b>\n` +
+        `• 10 Players Gross Pot: ₦${grossPot.toLocaleString()}\n` +
+        `• Platform Rake (${match.platformFeePercentage || 10}%): ₦${feeAmount.toLocaleString()}\n` +
+        `• Net Winning Squad Pool: ₦${netSquadPool.toLocaleString()}\n` +
+        `• Exact Individual Payout: ₦${perPlayerPayout.toLocaleString()} each for 5 squad members\n\n` +
+        `⚡ <i>Your winnings are ready for instant bank cashout or your next wager in the Arena!</i>`;
+
+      if (squad?.slots && Array.isArray(squad.slots)) {
+        const winningSlots = squad.slots.filter((s: any) => s.team === winningTeam && s.staked && s.userId);
+        for (const slot of winningSlots) {
+          const u = await getUserFromDb(slot.userId);
+          if (u?.telegramChatId && u.telegramChatId.trim()) {
+            await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: u.telegramChatId.trim(),
+                text: messageText,
+                parse_mode: 'HTML',
+              }),
+            }).catch(e => console.warn(`[Telegram Bot] Error sending settlement alert to ${u.telegramChatId}:`, e.message));
+          }
+        }
+      }
+    } else {
+      const winnerUser = await getUserFromDb(match.winnerId || '');
+      if (winnerUser?.telegramChatId) {
+        const messageText = 
+          `🏆 <b>MATCH VICTORY - ₦${(match.winnerPayout || 0).toLocaleString()} CREDITED!</b> 🏆\n\n` +
+          `🎖️ Congratulations <b>${match.winnerIgn || winnerUser.codmIgn}</b>! You won 1v1 Challenge #${match.challengeCode}!\n\n` +
+          `💰 <b>Exact Payout:</b> <b>₦${(match.winnerPayout || 0).toLocaleString()}</b> has been credited directly to your wallet balance!\n` +
+          `📊 <b>Gross Pot:</b> ₦${match.potAmount.toLocaleString()} (Platform Fee: ₦${(match.platformFee || 0).toLocaleString()})\n\n` +
+          `⚡ <i>Your funds are ready for instant cashout or new challenges in the Arena!</i>`;
+
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: winnerUser.telegramChatId.trim(),
+            text: messageText,
+            parse_mode: 'HTML',
+          }),
+        }).catch(e => console.warn(`[Telegram Bot] Error sending settlement alert:`, e.message));
+      }
+    }
+  } catch (err: any) {
+    console.error('[Telegram Bot] Exception sending settlement alert:', err.message);
   }
 }
 
@@ -4663,16 +4867,65 @@ export async function handleTelegramMessage(message: any) {
     return;
   }
 
-  // Handle /unlink
-  if (text === '/unlink') {
-    await pool.query(`UPDATE users SET telegram_chat_id = NULL, telegram_username = NULL WHERE telegram_chat_id = ${escapeSql(chatId)}`);
+  // Handle /matches, /squads, or /wagers
+  if (text === '/matches' || text === '/wagers' || text === '/squads') {
+    const allMatches = await getAllMatchesFromDb();
+    const openMatches = allMatches.filter(m => m.status === 'PENDING_OPPONENT_STAKE');
+    const appUrl = (process.env.APP_URL || 'https://ops-stake.app').replace(/\/$/, '');
+
+    if (openMatches.length === 0) {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: `⚔️ <b>NO OPEN WAGERS RIGHT NOW</b>\n\nBe the first to host a 1v1 duel or 5v5 Squad battle in the Arena!`,
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [[
+              { text: '⚔️ CREATE WAGER IN ARENA', url: `${appUrl}/arena` }
+            ]]
+          }
+        }),
+      });
+      return;
+    }
+
+    let summaryText = `⚔️ <b>LIVE OPEN WAGERS (${openMatches.length})</b> ⚔️\n\n`;
+    for (const m of openMatches.slice(0, 5)) {
+      const isSq = m.matchType === 'squad' || Boolean(m.squadData);
+      if (isSq) {
+        const slotsFilled = m.squadData?.slots ? m.squadData.slots.filter((s: any) => s.staked).length : 1;
+        summaryText += 
+          `🛡️ <b>5v5 Squad #${m.challengeCode}</b>\n` +
+          `• Stake / Player: ₦${m.stakeAmount.toLocaleString()}\n` +
+          `• 10 Players Pot: ₦${m.potAmount.toLocaleString()}\n` +
+          `• Exact Payout: <b>₦${m.winnerPayout.toLocaleString()} / winner</b>\n` +
+          `• Open Slots: <b>${10 - slotsFilled}/10 open</b>\n` +
+          `• Host: ${m.creator.codmIgn}\n\n`;
+      } else {
+        summaryText += 
+          `🔥 <b>1v1 Duel #${m.challengeCode}</b>\n` +
+          `• Stake: ₦${m.stakeAmount.toLocaleString()}\n` +
+          `• Pot: ₦${m.potAmount.toLocaleString()}\n` +
+          `• Winner Payout: <b>₦${m.winnerPayout.toLocaleString()}</b>\n` +
+          `• Host: ${m.creator.codmIgn}\n\n`;
+      }
+    }
+    summaryText += `🚀 <i>Tap the button below to view all and join the battlefield!</i>`;
+
     await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: chatId,
-        text: `🔌 <b>Unlinked</b>: Your Telegram account has been disconnected from OPS STAKE. You can re-link anytime with 1-Tap Connect.`,
+        text: summaryText,
         parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '🎮 ENTER LIVE ARENA', url: `${appUrl}/arena` }
+          ]]
+        }
       }),
     });
     return;
@@ -5485,9 +5738,19 @@ app.post('/api/matches/:id/squad-join', async (req, res) => {
     res.json(updatedMatch);
 
     if (updatedMatch) {
+      const pIgn = user.codm_ign;
       setImmediate(() => {
         try {
           broadcastMatchStateChange(updatedMatch, filledCount === 10 ? 'MATCH_STARTED' : 'RIVAL_JOINED');
+          sendTelegramSquadSlotJoinedAlert(
+            updatedMatch,
+            pIgn,
+            assignedTeam,
+            targetSlotIndex + 1,
+            filledCount
+          ).catch((err) =>
+            console.warn('Telegram squad join alert background error:', err.message)
+          );
         } catch (bgErr: any) {
           console.warn('Squad join background task error:', bgErr.message);
         }
@@ -5675,40 +5938,62 @@ app.post('/api/matches/:id/cancel', async (req, res) => {
 
     await client.query(`UPDATE matches SET status = 'CANCELLED', chat_messages = '[]'::jsonb WHERE id = ${escapeSql(matchId)}`);
 
-    const creatorData = matchRow.creator_data || {};
-    const opponentData = matchRow.opponent_data || {};
+    const isSquad = matchRow.match_type === 'squad' || Boolean(matchRow.squad_data);
+    let squadData = matchRow.squad_data ? (typeof matchRow.squad_data === 'string' ? JSON.parse(matchRow.squad_data) : matchRow.squad_data) : null;
     const stakeAmount = parseFloat(matchRow.stake_amount);
 
-    // Refund creator if staked
-    if (creatorData.staked) {
-      await client.query(`
-        UPDATE users 
-        SET balance = balance + ${escapeSql(stakeAmount)},
-            escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(stakeAmount)})
-        WHERE id = ${escapeSql(matchRow.creator_id)}
-      `);
-      const txC = `tx_${Date.now()}_c`;
-      await client.query(`
-        INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
-        VALUES (${escapeSql(txC)}, ${escapeSql(matchRow.creator_id)}, 'ESCROW_REFUND', ${escapeSql(stakeAmount)}, ${escapeSql(`₦${stakeAmount.toLocaleString()} escrow refunded from cancelled challenge #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${Date.now()})
-        ON CONFLICT (id) DO NOTHING
-      `);
-    }
+    if (isSquad && squadData?.slots && Array.isArray(squadData.slots)) {
+      for (const slot of squadData.slots) {
+        if (slot.staked && slot.userId) {
+          await client.query(`
+            UPDATE users 
+            SET balance = balance + ${escapeSql(stakeAmount)},
+                escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(stakeAmount)})
+            WHERE id = ${escapeSql(slot.userId)}
+          `);
+          const txS = `tx_${Date.now()}_cancel_sq_${slot.slotIndex}`;
+          await client.query(`
+            INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+            VALUES (${escapeSql(txS)}, ${escapeSql(slot.userId)}, 'ESCROW_REFUND', ${escapeSql(stakeAmount)}, ${escapeSql(`₦${stakeAmount.toLocaleString()} escrow refunded from cancelled 5v5 Squad challenge #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${Date.now()})
+            ON CONFLICT (id) DO NOTHING
+          `);
+        }
+      }
+    } else {
+      const creatorData = matchRow.creator_data || {};
+      const opponentData = matchRow.opponent_data || {};
 
-    // Refund opponent if staked
-    if (opponentData.staked && matchRow.opponent_id) {
-      await client.query(`
-        UPDATE users 
-        SET balance = balance + ${escapeSql(stakeAmount)},
-            escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(stakeAmount)})
-        WHERE id = ${escapeSql(matchRow.opponent_id)}
-      `);
-      const txO = `tx_${Date.now()}_o`;
-      await client.query(`
-        INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
-        VALUES (${escapeSql(txO)}, ${escapeSql(matchRow.opponent_id)}, 'ESCROW_REFUND', ${escapeSql(stakeAmount)}, ${escapeSql(`₦${stakeAmount.toLocaleString()} escrow refunded from cancelled challenge #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${Date.now()})
-        ON CONFLICT (id) DO NOTHING
-      `);
+      // Refund creator if staked
+      if (creatorData.staked) {
+        await client.query(`
+          UPDATE users 
+          SET balance = balance + ${escapeSql(stakeAmount)},
+              escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(stakeAmount)})
+          WHERE id = ${escapeSql(matchRow.creator_id)}
+        `);
+        const txC = `tx_${Date.now()}_c`;
+        await client.query(`
+          INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+          VALUES (${escapeSql(txC)}, ${escapeSql(matchRow.creator_id)}, 'ESCROW_REFUND', ${escapeSql(stakeAmount)}, ${escapeSql(`₦${stakeAmount.toLocaleString()} escrow refunded from cancelled challenge #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${Date.now()})
+          ON CONFLICT (id) DO NOTHING
+        `);
+      }
+
+      // Refund opponent if staked
+      if (opponentData.staked && matchRow.opponent_id) {
+        await client.query(`
+          UPDATE users 
+          SET balance = balance + ${escapeSql(stakeAmount)},
+              escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(stakeAmount)})
+          WHERE id = ${escapeSql(matchRow.opponent_id)}
+        `);
+        const txO = `tx_${Date.now()}_o`;
+        await client.query(`
+          INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+          VALUES (${escapeSql(txO)}, ${escapeSql(matchRow.opponent_id)}, 'ESCROW_REFUND', ${escapeSql(stakeAmount)}, ${escapeSql(`₦${stakeAmount.toLocaleString()} escrow refunded from cancelled challenge #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${Date.now()})
+          ON CONFLICT (id) DO NOTHING
+        `);
+      }
     }
 
     await client.query('COMMIT');
@@ -6193,89 +6478,163 @@ app.post('/api/matches/:id/submit-result', rateLimitMiddleware(15, 60000), secur
       timestamp: Date.now(),
     });
   } else if (resolveWinner === 'creator' || resolveWinner === 'opponent') {
-    const winnerObj = resolveWinner === 'creator' ? match.creator : match.opponent!;
-    const loserObj = resolveWinner === 'creator' ? match.opponent! : match.creator;
-    const winnerUser = await getUserFromDb(winnerObj.id);
-    const loserUser = await getUserFromDb(loserObj.id);
+    const isSquad = match.matchType === 'squad' || Boolean(match.squadData);
+    if (isSquad && match.squadData?.slots) {
+      const winningTeam = resolveWinner === 'creator' ? 'ALPHA' : 'BRAVO';
+      const losingTeam = winningTeam === 'ALPHA' ? 'BRAVO' : 'ALPHA';
+      const teamLabel = winningTeam === 'ALPHA' ? 'Team Alpha (Blue)' : 'Team Bravo (Red)';
 
-    match.status = 'SETTLED';
-    match.winnerId = winnerObj.id;
-    match.winnerIgn = winnerObj.codmIgn;
+      match.status = 'SETTLED';
+      match.winnerId = winningTeam;
+      match.winnerIgn = teamLabel;
 
-    // Process referral bonuses from platform fee (10% to each referrer)
-    const platformFee = match.platformFee || Math.round(match.potAmount * 0.10);
-    const bonusPerReferrer = Math.floor(platformFee * 0.10);
-    const referrers = [];
-    if (winnerUser?.referredBy) referrers.push(winnerUser.referredBy);
-    if (loserUser?.referredBy) referrers.push(loserUser.referredBy);
-    
-    for (const referrerId of [...new Set(referrers)]) { // Unique referrers
-      await pool.query(`
-        UPDATE users 
-        SET balance = balance + ${escapeSql(bonusPerReferrer)},
-            total_referral_earnings = COALESCE(total_referral_earnings, 0) + ${escapeSql(bonusPerReferrer)}
-        WHERE id = ${escapeSql(referrerId)}
-      `);
-      await saveTransactionToDb(referrerId, {
-        id: `tx_ref_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-        type: 'REFERRAL_EARNING',
-        amount: bonusPerReferrer,
-        description: `10% Referral bonus from match #${match.roomCode || match.challengeCode} platform fee`,
-        matchId: match.id,
-        timestamp: Date.now()
-      });
-    }
-    
-    await updatePlatformFinance(platformFee - (bonusPerReferrer * [...new Set(referrers)].length));
+      const platformFee = match.platformFee || Math.round(match.potAmount * 0.10);
+      await updatePlatformFinance(platformFee);
 
-    // Settle Escrow atomically
-    if (match.creator?.id) {
-      await pool.query(`
-        UPDATE users 
-        SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)})
-        WHERE id = ${escapeSql(match.creator.id)}
-      `);
-    }
+      // Settle Escrow for all 10 players
+      for (const slot of match.squadData.slots) {
+        if (slot.staked && slot.userId) {
+          await pool.query(`
+            UPDATE users 
+            SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)})
+            WHERE id = ${escapeSql(slot.userId)}
+          `);
+        }
+      }
 
-    if (match.opponent?.id) {
-      await pool.query(`
-        UPDATE users 
-        SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)})
-        WHERE id = ${escapeSql(match.opponent.id)}
-      `);
-    }
+      // Distribute winner payout to winning squad members (5 winners)
+      const winningSlots = match.squadData.slots.filter((s: any) => s.team === winningTeam && s.staked && s.userId);
+      for (const slot of winningSlots) {
+        const txWId = `tx_${Date.now()}_sq_win_${slot.slotIndex}`;
+        const descWin = `🏆 Won 5v5 Squad Match #${match.roomCode || match.challengeCode} (${teamLabel}): ₦${match.winnerPayout.toLocaleString()} credited to wallet balance.`;
 
-    // Winner gets the pot minus platform fee credited to wallet balance atomically
-    if (winnerObj?.id) {
-      const txWId = `tx_${Date.now()}_win`;
-      const descWin = `🏆 Won 1v1 Escrow Match #${match.roomCode} vs ${loserObj.codmIgn}: ₦${match.winnerPayout.toLocaleString()} credited to wallet balance. Ready for instant cashout.`;
-      
-      const insRes = await pool.query(`
-        INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
-        VALUES (${escapeSql(txWId)}, ${escapeSql(winnerObj.id)}, 'MATCH_WIN_PAYOUT', ${escapeSql(match.winnerPayout)}, ${escapeSql(descWin)}, ${escapeSql(match.id)}, ${Date.now()})
-        ON CONFLICT (id) DO NOTHING
-        RETURNING id;
-      `);
+        const insRes = await pool.query(`
+          INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+          VALUES (${escapeSql(txWId)}, ${escapeSql(slot.userId)}, 'MATCH_WIN_PAYOUT', ${escapeSql(match.winnerPayout)}, ${escapeSql(descWin)}, ${escapeSql(match.id)}, ${Date.now()})
+          ON CONFLICT (id) DO NOTHING
+          RETURNING id;
+        `);
 
-      if (insRes.rows.length > 0) {
+        if (insRes.rows.length > 0) {
+          await pool.query(`
+            UPDATE users 
+            SET balance = balance + ${escapeSql(match.winnerPayout)},
+                total_winnings = total_winnings + ${escapeSql(match.winnerPayout)},
+                wins = wins + 1
+            WHERE id = ${escapeSql(slot.userId)}
+          `);
+        }
+      }
+
+      // Increment losses for losing squad members
+      const losingSlots = match.squadData.slots.filter((s: any) => s.team === losingTeam && s.staked && s.userId);
+      for (const slot of losingSlots) {
         await pool.query(`
-          UPDATE users 
-          SET balance = balance + ${escapeSql(match.winnerPayout)},
-              total_winnings = total_winnings + ${escapeSql(match.winnerPayout)},
-              wins = wins + 1
-          WHERE id = ${escapeSql(winnerObj.id)}
+          UPDATE users SET losses = losses + 1 WHERE id = ${escapeSql(slot.userId)}
         `);
       }
 
-      if (loserObj?.id) {
-        await pool.query(`
-          UPDATE users SET losses = losses + 1 WHERE id = ${escapeSql(loserObj.id)}
-        `);
-      }
-
-      match.resolutionNotes = `Match resolved! Winner is ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} credited to winner's wallet. Ready for instant cashout!`;
+      match.resolutionNotes = `5v5 Squad Match resolved! Winning Team is ${teamLabel}. ₦${match.winnerPayout.toLocaleString()} credited to each of the 5 winning squad players!`;
       match.chatMessages = [];
       await clearMatchChatInDb(match.id);
+
+      // Trigger Telegram settlement alert in background
+      setImmediate(() => {
+        sendTelegramMatchSettledAlert(match, winningTeam).catch(e =>
+          console.warn('Telegram squad settlement alert error:', e.message)
+        );
+      });
+    } else {
+      const winnerObj = resolveWinner === 'creator' ? match.creator : match.opponent!;
+      const loserObj = resolveWinner === 'creator' ? match.opponent! : match.creator;
+      const winnerUser = await getUserFromDb(winnerObj.id);
+      const loserUser = await getUserFromDb(loserObj.id);
+
+      match.status = 'SETTLED';
+      match.winnerId = winnerObj.id;
+      match.winnerIgn = winnerObj.codmIgn;
+
+      // Process referral bonuses from platform fee (10% to each referrer)
+      const platformFee = match.platformFee || Math.round(match.potAmount * 0.10);
+      const bonusPerReferrer = Math.floor(platformFee * 0.10);
+      const referrers = [];
+      if (winnerUser?.referredBy) referrers.push(winnerUser.referredBy);
+      if (loserUser?.referredBy) referrers.push(loserUser.referredBy);
+      
+      for (const referrerId of [...new Set(referrers)]) { // Unique referrers
+        await pool.query(`
+          UPDATE users 
+          SET balance = balance + ${escapeSql(bonusPerReferrer)},
+              total_referral_earnings = COALESCE(total_referral_earnings, 0) + ${escapeSql(bonusPerReferrer)}
+          WHERE id = ${escapeSql(referrerId)}
+        `);
+        await saveTransactionToDb(referrerId, {
+          id: `tx_ref_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+          type: 'REFERRAL_EARNING',
+          amount: bonusPerReferrer,
+          description: `10% Referral bonus from match #${match.roomCode || match.challengeCode} platform fee`,
+          matchId: match.id,
+          timestamp: Date.now()
+        });
+      }
+      
+      await updatePlatformFinance(platformFee - (bonusPerReferrer * [...new Set(referrers)].length));
+
+      // Settle Escrow atomically
+      if (match.creator?.id) {
+        await pool.query(`
+          UPDATE users 
+          SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)})
+          WHERE id = ${escapeSql(match.creator.id)}
+        `);
+      }
+
+      if (match.opponent?.id) {
+        await pool.query(`
+          UPDATE users 
+          SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)})
+          WHERE id = ${escapeSql(match.opponent.id)}
+        `);
+      }
+
+      // Winner gets the pot minus platform fee credited to wallet balance atomically
+      if (winnerObj?.id) {
+        const txWId = `tx_${Date.now()}_win`;
+        const descWin = `🏆 Won 1v1 Escrow Match #${match.roomCode} vs ${loserObj.codmIgn}: ₦${match.winnerPayout.toLocaleString()} credited to wallet balance. Ready for instant cashout.`;
+        
+        const insRes = await pool.query(`
+          INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+          VALUES (${escapeSql(txWId)}, ${escapeSql(winnerObj.id)}, 'MATCH_WIN_PAYOUT', ${escapeSql(match.winnerPayout)}, ${escapeSql(descWin)}, ${escapeSql(match.id)}, ${Date.now()})
+          ON CONFLICT (id) DO NOTHING
+          RETURNING id;
+        `);
+
+        if (insRes.rows.length > 0) {
+          await pool.query(`
+            UPDATE users 
+            SET balance = balance + ${escapeSql(match.winnerPayout)},
+                total_winnings = total_winnings + ${escapeSql(match.winnerPayout)},
+                wins = wins + 1
+            WHERE id = ${escapeSql(winnerObj.id)}
+          `);
+        }
+
+        if (loserObj?.id) {
+          await pool.query(`
+            UPDATE users SET losses = losses + 1 WHERE id = ${escapeSql(loserObj.id)}
+          `);
+        }
+
+        match.resolutionNotes = `Match resolved! Winner is ${winnerObj.codmIgn}. ₦${match.winnerPayout.toLocaleString()} credited to winner's wallet. Ready for instant cashout!`;
+        match.chatMessages = [];
+        await clearMatchChatInDb(match.id);
+
+        setImmediate(() => {
+          sendTelegramMatchSettledAlert(match, winnerObj.codmIgn).catch(e =>
+            console.warn('Telegram match settlement alert error:', e.message)
+          );
+        });
+      }
     }
   } else if (resolveWinner === 'dispute') {
     match.status = 'DISPUTED';
@@ -6330,45 +6689,137 @@ app.post('/api/matches/:id/admin-resolve', async (req, res) => {
 
   // Handle Full Refund / Mutual Draw resolution
   if (winnerId === 'REFUND' || winnerId === 'DRAW') {
-    if (match.creator?.id) {
-      await pool.query(`
-        UPDATE users 
-        SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)}),
-            balance = balance + ${escapeSql(match.stakeAmount)}
-        WHERE id = ${escapeSql(match.creator.id)}
-      `);
-      await saveTransactionToDb(match.creator.id, {
-        id: `tx_refund_${Date.now()}_creator`,
-        type: 'ESCROW_REFUND',
-        amount: match.stakeAmount,
-        description: `Escrow refund for match #${match.roomCode || match.challengeCode}: Adjudicated as Draw / Full Refund by referee.`,
-        matchId: match.id,
-        timestamp: Date.now()
-      });
-    }
+    const isSquad = match.matchType === 'squad' || Boolean(match.squadData);
+    if (isSquad && match.squadData?.slots) {
+      for (const slot of match.squadData.slots) {
+        if (slot.staked && slot.userId) {
+          await pool.query(`
+            UPDATE users 
+            SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)}),
+                balance = balance + ${escapeSql(match.stakeAmount)}
+            WHERE id = ${escapeSql(slot.userId)}
+          `);
+          await saveTransactionToDb(slot.userId, {
+            id: `tx_refund_${Date.now()}_sq_${slot.slotIndex}`,
+            type: 'ESCROW_REFUND',
+            amount: match.stakeAmount,
+            description: `Escrow refund for 5v5 Squad match #${match.roomCode || match.challengeCode}: Full Refund by referee.`,
+            matchId: match.id,
+            timestamp: Date.now()
+          });
+        }
+      }
+    } else {
+      if (match.creator?.id) {
+        await pool.query(`
+          UPDATE users 
+          SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)}),
+              balance = balance + ${escapeSql(match.stakeAmount)}
+          WHERE id = ${escapeSql(match.creator.id)}
+        `);
+        await saveTransactionToDb(match.creator.id, {
+          id: `tx_refund_${Date.now()}_creator`,
+          type: 'ESCROW_REFUND',
+          amount: match.stakeAmount,
+          description: `Escrow refund for match #${match.roomCode || match.challengeCode}: Adjudicated as Draw / Full Refund by referee.`,
+          matchId: match.id,
+          timestamp: Date.now()
+        });
+      }
 
-    if (match.opponent?.id) {
-      await pool.query(`
-        UPDATE users 
-        SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)}),
-            balance = balance + ${escapeSql(match.stakeAmount)}
-        WHERE id = ${escapeSql(match.opponent.id)}
-      `);
-      await saveTransactionToDb(match.opponent.id, {
-        id: `tx_refund_${Date.now()}_opponent`,
-        type: 'ESCROW_REFUND',
-        amount: match.stakeAmount,
-        description: `Escrow refund for match #${match.roomCode || match.challengeCode}: Adjudicated as Draw / Full Refund by referee.`,
-        matchId: match.id,
-        timestamp: Date.now()
-      });
+      if (match.opponent?.id) {
+        await pool.query(`
+          UPDATE users 
+          SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)}),
+              balance = balance + ${escapeSql(match.stakeAmount)}
+          WHERE id = ${escapeSql(match.opponent.id)}
+        `);
+        await saveTransactionToDb(match.opponent.id, {
+          id: `tx_refund_${Date.now()}_opponent`,
+          type: 'ESCROW_REFUND',
+          amount: match.stakeAmount,
+          description: `Escrow refund for match #${match.roomCode || match.challengeCode}: Adjudicated as Draw / Full Refund by referee.`,
+          matchId: match.id,
+          timestamp: Date.now()
+        });
+      }
     }
 
     match.status = 'CANCELLED';
-    match.resolutionNotes = `Match resolved as Draw / Full Refund by referee. ₦${match.stakeAmount.toLocaleString()} returned to both players.`;
+    match.resolutionNotes = `Match resolved as Draw / Full Refund by referee. ₦${match.stakeAmount.toLocaleString()} refunded to players.`;
     match.chatMessages = [];
     await clearMatchChatInDb(match.id);
     await saveMatchToDb(match);
+    return res.json(match);
+  }
+
+  const isSquad = match.matchType === 'squad' || Boolean(match.squadData);
+  if (isSquad && match.squadData?.slots) {
+    const winningTeam = (winnerId === 'BRAVO' || (match.squadData?.slots?.find((s: any) => s.userId === winnerId)?.team === 'BRAVO')) ? 'BRAVO' : 'ALPHA';
+    const losingTeam = winningTeam === 'ALPHA' ? 'BRAVO' : 'ALPHA';
+    const teamLabel = winningTeam === 'ALPHA' ? 'Team Alpha (Blue)' : 'Team Bravo (Red)';
+
+    match.status = 'SETTLED';
+    match.winnerId = winningTeam;
+    match.winnerIgn = teamLabel;
+
+    const platformFee = match.platformFee || Math.round(match.potAmount * 0.10);
+    await updatePlatformFinance(platformFee);
+
+    // Settle Escrow for all 10 players
+    for (const slot of match.squadData.slots) {
+      if (slot.staked && slot.userId) {
+        await pool.query(`
+          UPDATE users 
+          SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)})
+          WHERE id = ${escapeSql(slot.userId)}
+        `);
+      }
+    }
+
+    // Distribute winner payout to winning squad members (5 winners)
+    const winningSlots = match.squadData.slots.filter((s: any) => s.team === winningTeam && s.staked && s.userId);
+    for (const slot of winningSlots) {
+      const txWId = `tx_${Date.now()}_admin_sq_win_${slot.slotIndex}`;
+      const descWin = `🏆 Referee resolved 5v5 Squad match in favor of ${teamLabel}: ₦${match.winnerPayout.toLocaleString()} credited to wallet balance.`;
+
+      const insRes = await pool.query(`
+        INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+        VALUES (${escapeSql(txWId)}, ${escapeSql(slot.userId)}, 'MATCH_WIN_PAYOUT', ${escapeSql(match.winnerPayout)}, ${escapeSql(descWin)}, ${escapeSql(match.id)}, ${Date.now()})
+        ON CONFLICT (id) DO NOTHING
+        RETURNING id;
+      `);
+
+      if (insRes.rows.length > 0) {
+        await pool.query(`
+          UPDATE users 
+          SET balance = balance + ${escapeSql(match.winnerPayout)},
+              total_winnings = total_winnings + ${escapeSql(match.winnerPayout)},
+              wins = wins + 1
+          WHERE id = ${escapeSql(slot.userId)}
+        `);
+      }
+    }
+
+    // Increment losses for losing squad members
+    const losingSlots = match.squadData.slots.filter((s: any) => s.team === losingTeam && s.staked && s.userId);
+    for (const slot of losingSlots) {
+      await pool.query(`
+        UPDATE users SET losses = losses + 1 WHERE id = ${escapeSql(slot.userId)}
+      `);
+    }
+
+    match.resolutionNotes = `Referee adjudicated in favor of ${teamLabel}. ₦${match.winnerPayout.toLocaleString()} paid out to each of the 5 winning squad players!`;
+    match.chatMessages = [];
+    await clearMatchChatInDb(match.id);
+    await saveMatchToDb(match);
+
+    setImmediate(() => {
+      sendTelegramMatchSettledAlert(match, winningTeam).catch(e =>
+        console.warn('Telegram squad settlement alert error:', e.message)
+      );
+    });
+
     return res.json(match);
   }
 
@@ -6463,6 +6914,13 @@ app.post('/api/matches/:id/admin-resolve', async (req, res) => {
   await clearMatchChatInDb(match.id);
 
   await saveMatchToDb(match);
+
+  setImmediate(() => {
+    sendTelegramMatchSettledAlert(match, winnerObj.codmIgn).catch(e =>
+      console.warn('Telegram match settlement alert error:', e.message)
+    );
+  });
+
   res.json(match);
 });
 
