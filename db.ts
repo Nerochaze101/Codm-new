@@ -25,9 +25,10 @@ export const pool = new Pool({
   ssl: {
     rejectUnauthorized: false, // Required for Supabase cloud PostgreSQL
   },
-  max: 10,
+  max: 30, // Expanded for 200+ concurrent deposit submissions
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
+  connectionTimeoutMillis: 15000,
+  statement_timeout: 10000,
 });
 
 export interface DatabaseDiagnosticResult {

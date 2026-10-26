@@ -1897,6 +1897,13 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
     // ignore if table check fails
   }
 
+  // Trigger real-time Gmail sync with non-blocking concurrency lock OUTSIDE of database transaction
+  try {
+    await syncGmailEmails();
+  } catch (syncErr: any) {
+    console.warn("Real-time Gmail sync warning:", syncErr.message);
+  }
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -1904,13 +1911,11 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
     const depRes = await client.query(`SELECT * FROM deposit_requests WHERE id = ${escapeSql(depositId)} FOR UPDATE`);
     if (depRes.rows.length === 0) {
       await client.query("ROLLBACK");
-      client.release();
       return res.status(404).json({ error: "Deposit request not found" });
     }
     const dep = depRes.rows[0];
     if (dep.status === "completed") {
       await client.query("ROLLBACK");
-      client.release();
       const user = await getUserFromDb(dep.user_id);
       return res.json({ success: true, message: "Deposit already credited!", credited: true, newBalance: user?.balance || 0 });
     }
@@ -1924,13 +1929,6 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
             account_name = COALESCE(${escapeSql(accountName || null)}, account_name)
         WHERE id = ${escapeSql(userId || dep.user_id)}
       `);
-    }
-
-    // Trigger real-time Gmail sync to check Flutterwave mail
-    try {
-      await syncGmailEmails();
-    } catch (syncErr: any) {
-      console.warn("Real-time Gmail sync warning:", syncErr.message);
     }
 
     // 2. Check admin_emails for matching session reference or payment reference (excluding already verified emails)
@@ -1948,7 +1946,6 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
 
     if (emailsRes.rows.length === 0) {
       await client.query("ROLLBACK");
-      client.release();
       return res.status(400).json({ 
         error: "We could not confirm a matching bank transfer for this reference yet. If you recently transferred the funds, please allow a moment and try again."
       });
@@ -1962,7 +1959,6 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
     // Strict validation: The transferred amount must match expectedTransfer (base deposit + 15.5 fee)
     if (parsedEmailAmt !== null && Math.abs(parsedEmailAmt - expectedTransfer) > 0.01) {
       await client.query("ROLLBACK");
-      client.release();
       return res.status(400).json({
         error: `The transferred amount (₦${parsedEmailAmt.toLocaleString()}) does not match the required total of ₦${expectedTransfer.toLocaleString()} (₦${baseDepositAmount.toLocaleString()} deposit + ₦15.50 processing fee). Please transfer the exact amount requested.`
       });
@@ -1975,7 +1971,6 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
 
     if (!containsExpected && parsedEmailAmt === null) {
       await client.query("ROLLBACK");
-      client.release();
       return res.status(400).json({
         error: `Could not verify a transfer of ₦${expectedTransfer.toLocaleString()} for this transaction. Please confirm the amount on your receipt.`
       });
@@ -2025,7 +2020,6 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
     cleanupVerifiedMails().catch(() => {});
 
     await client.query("COMMIT");
-    client.release();
 
     return res.json({
       success: true,
@@ -2033,11 +2027,12 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
       credited: true,
       newBalance,
     });
-  } catch (err) {
+  } catch (err: any) {
     try { await client.query("ROLLBACK"); } catch (_) {}
-    try { client.release(); } catch (_) {}
     console.error("Error verifying deposit session:", err);
-    res.status(500).json({ error: "An unexpected error occurred while verifying your transfer. Please try again." });
+    res.status(500).json({ error: err.message || "An unexpected error occurred while verifying your transfer. Please try again." });
+  } finally {
+    client.release();
   }
 });
 

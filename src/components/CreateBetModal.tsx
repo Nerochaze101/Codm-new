@@ -5,7 +5,7 @@ import {
   Flame, Users, Flag, MapPin, Gamepad2, Clock, Globe, Lock
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
-import { calculateMatchEconomics } from '../utils/pricing';
+import { calculateMatchEconomics, calculateSquadEconomics } from '../utils/pricing';
 
 interface CreateBetModalProps {
   currentUser: UserProfile;
@@ -356,20 +356,56 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
           </div>
 
           {/* Escrow Math Preview */}
-          <div className="p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 text-xs space-y-1.5 font-mono-nums">
-            <div className="flex items-center justify-between text-neutral-400">
-              <span>Total Escrow Pot (2x Stake):</span>
-              <span className="text-amber-400 font-bold text-sm">₦{potAmount.toLocaleString()}</span>
-            </div>
-            <div className="flex items-center justify-between text-neutral-400">
-              <span>Tiered Platform Rake ({rakePercentFormatted}):</span>
-              <span className="text-rose-400">-₦{platformFee.toLocaleString()}</span>
-            </div>
-            <div className="flex items-center justify-between text-emerald-400 font-bold pt-1 border-t border-neutral-800">
-              <span>Winner Payout:</span>
-              <span className="text-sm">₦{winnerPayout.toLocaleString()}</span>
-            </div>
-          </div>
+          {betType === 'squad' ? (() => {
+            const squadEcon = calculateSquadEconomics(Math.max(0, stakeAmount), 5);
+            return (
+              <div className="p-3.5 rounded-xl bg-neutral-950 border border-emerald-500/30 text-xs space-y-1.5 font-mono-nums">
+                <div className="flex items-center justify-between text-emerald-400 font-bold border-b border-neutral-800 pb-1.5 mb-1.5">
+                  <span className="flex items-center gap-1"><Users className="w-3.5 h-3.5" /> 5v5 Squad Wager (10 Players Total)</span>
+                  <span className="text-[10px] text-neutral-400 font-normal">Auto 5vs5 Split</span>
+                </div>
+                <div className="flex items-center justify-between text-neutral-400">
+                  <span>Individual Stake:</span>
+                  <span className="text-white font-bold">₦{squadEcon.stakePerPlayer.toLocaleString()} / player</span>
+                </div>
+                <div className="flex items-center justify-between text-neutral-400">
+                  <span>Total Gross Pot (10 x Stake):</span>
+                  <span className="text-amber-400 font-bold text-sm">₦{squadEcon.totalPot.toLocaleString()}</span>
+                </div>
+                <div className="flex items-center justify-between text-neutral-400">
+                  <span>OpsSTAKE Rake ({squadEcon.rakePercentFormatted}):</span>
+                  <span className="text-rose-400">-₦{squadEcon.platformFee.toLocaleString()}</span>
+                </div>
+                <div className="flex items-center justify-between text-emerald-400 font-bold pt-1.5 border-t border-neutral-800">
+                  <span>Net Squad Prize Pool:</span>
+                  <span className="text-sm">₦{squadEcon.netWinningPool.toLocaleString()}</span>
+                </div>
+                <div className="flex items-center justify-between text-emerald-300 font-bold bg-emerald-950/40 p-2 rounded-lg border border-emerald-500/20 mt-1">
+                  <span>Payout per Winning Player (5 Winners):</span>
+                  <span className="text-sm text-emerald-400">₦{squadEcon.payoutPerPlayer.toLocaleString()}</span>
+                </div>
+              </div>
+            );
+          })() : (() => {
+            const soloEcon = calculateMatchEconomics(Math.max(0, stakeAmount));
+            return (
+              <div className="p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 text-xs space-y-1.5 font-mono-nums">
+                <div className="flex items-center justify-between text-neutral-400">
+                  <span>Total Escrow Pot (2x Stake):</span>
+                  <span className="text-amber-400 font-bold text-sm">₦{soloEcon.potAmount.toLocaleString()}</span>
+                </div>
+                <div className="flex items-center justify-between text-neutral-400">
+                  <span>Tiered Platform Rake ({soloEcon.rakePercentFormatted}):</span>
+                  <span className="text-rose-400">-₦{soloEcon.platformFee.toLocaleString()}</span>
+                </div>
+                <div className="flex items-center justify-between text-emerald-400 font-bold pt-1 border-t border-neutral-800">
+                  <span>Winner Payout:</span>
+                  <span className="text-sm">₦{soloEcon.winnerPayout.toLocaleString()}</span>
+                </div>
+              </div>
+            );
+          })()}
+
 
           {/* Hosting & Refund Policy Note */}
           <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-neutral-300 flex items-start gap-2.5 leading-relaxed">

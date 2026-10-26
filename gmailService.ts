@@ -504,8 +504,49 @@ export async function testGmailConnection(
   return { success: false, message: 'Could not connect to Gmail IMAP server' };
 }
 
-// Fetch & Sync recent emails from Gmail INBOX
+let activeGmailSyncPromise: Promise<{
+  success: boolean;
+  newEmailsCount: number;
+  totalInboxCount: number;
+  message: string;
+}> | null = null;
+
+let lastGmailSyncTimestamp = 0;
+
+// Fetch & Sync recent emails from Gmail INBOX with concurrency lock
 export async function syncGmailEmails(): Promise<{
+  success: boolean;
+  newEmailsCount: number;
+  totalInboxCount: number;
+  message: string;
+}> {
+  if (activeGmailSyncPromise) {
+    return activeGmailSyncPromise;
+  }
+
+  if (Date.now() - lastGmailSyncTimestamp < 3000) {
+    return {
+      success: true,
+      newEmailsCount: 0,
+      totalInboxCount: 0,
+      message: 'Sync recently completed',
+    };
+  }
+
+  activeGmailSyncPromise = (async () => {
+    try {
+      const result = await doSyncGmailEmailsInternal();
+      lastGmailSyncTimestamp = Date.now();
+      return result;
+    } finally {
+      activeGmailSyncPromise = null;
+    }
+  })();
+
+  return activeGmailSyncPromise;
+}
+
+async function doSyncGmailEmailsInternal(): Promise<{
   success: boolean;
   newEmailsCount: number;
   totalInboxCount: number;
