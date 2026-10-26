@@ -6287,46 +6287,6 @@ app.post('/api/matches/:id/cancel', async (req, res) => {
 // Analyzes magic bytes, dimension ratios, entropy & embedded metadata without relying on AI LLMs
 // ==========================================
 
-async function analyzeScreenshotWithGemini(base64Data: string, playerIgn: string, claim: string): Promise<any> {
-  if (!ai || !base64Data) return null;
-  try {
-    const cleanBase64 = base64Data.replace(/^data:image\/[a-z0-9.+-]+;base64,/, '');
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: [
-        {
-          inlineData: {
-            mimeType: 'image/jpeg',
-            data: cleanBase64,
-          },
-        },
-        {
-          text: `You are an expert game referee and forensic AI analyst for Call of Duty: Mobile (CODM). Analyze this post-match scoreboard screenshot submitted by gladiator "${playerIgn}" who claimed "${claim}".
-          Evaluate:
-          1. Is this an authentic original game capture or a synthetic, AI-generated fake, or edited image?
-          2. Does the scoreboard result support the claim (${claim})?
-          Return strict JSON with fields:
-          - isLikelyFake (boolean)
-          - confidenceScore (number between 0 and 1)
-          - verdict (string summary)
-          - detectedPlayerName (string)
-          - detectedOutcome (string: VICTORY, DEFEAT, or DRAW)
-          - redFlags (array of strings explaining any manipulations or AI artifacts)
-          - reasoning (string)`
-        }
-      ]
-    });
-    const text = response.text || '';
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    }
-  } catch (err: any) {
-    console.warn('Gemini AI screenshot forensics error:', err.message);
-  }
-  return null;
-}
-
 export function analyzeImageSystemLogic(base64Data: string, filename?: string) {
   if (!base64Data || typeof base64Data !== 'string') {
     return {
@@ -6496,6 +6456,12 @@ export function analyzeImageSystemLogic(base64Data: string, filename?: string) {
     { pattern: /adobe firefly|firefly/i, name: 'Adobe Firefly' },
     { pattern: /synthid/i, name: 'Google SynthID Synthetic Watermark' },
     { pattern: /c2pa|urn:c2pa/i, name: 'C2PA Provenance Manifest' },
+    { pattern: /source: generative ai|source: ai|generative: ai/i, name: 'Generative AI Metadata Tag' },
+    { pattern: /sd-metadata/i, name: 'Stable Diffusion Metadata' },
+    { pattern: /dreamstudio/i, name: 'DreamStudio (Stability AI)' },
+    { pattern: /leonardo\.ai/i, name: 'Leonardo AI' },
+    { pattern: /playground ai/i, name: 'Playground AI' },
+    { pattern: /bing image creator/i, name: 'Bing Image Creator' },
     { pattern: /steps:\s*\d+/i, name: 'AI Diffusion Steps Parameter' },
     { pattern: /sampler:\s*[a-z0-9_]+/i, name: 'AI Diffusion Sampler Parameter' },
     { pattern: /cfg scale:\s*[0-9.]+/i, name: 'AI Diffusion CFG Scale' },
@@ -6630,17 +6596,6 @@ app.post('/api/matches/:id/submit-result', rateLimitMiddleware(15, 60000), secur
 
   if (screenshotBase64) {
     systemAnalysis = analyzeImageSystemLogic(screenshotBase64);
-    const geminiAiResult = await analyzeScreenshotWithGemini(screenshotBase64, playerIgn, claim);
-    if (geminiAiResult) {
-      systemAnalysis = {
-        ...systemAnalysis,
-        isLikelyFake: systemAnalysis.isLikelyFake || geminiAiResult.isLikelyFake,
-        confidenceScore: Math.max(systemAnalysis.confidenceScore, geminiAiResult.confidenceScore || 0),
-        verdict: geminiAiResult.isLikelyFake ? `GEMINI AI DETECTED FAKE: ${geminiAiResult.verdict}` : systemAnalysis.verdict,
-        redFlags: [...(systemAnalysis.redFlags || []), ...(geminiAiResult.redFlags || [])],
-        aiAnalysis: geminiAiResult,
-      };
-    }
   }
 
   // Record submission
