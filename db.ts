@@ -251,6 +251,10 @@ export async function initDatabase() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user';
       ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id VARCHAR(255);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_username VARCHAR(255);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS is_flagged BOOLEAN DEFAULT false;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS flag_reason TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS flagged_with_user_id VARCHAR(255);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS flag_matches JSONB;
 
       CREATE TABLE IF NOT EXISTS matches (
         id VARCHAR(255) PRIMARY KEY,
@@ -288,6 +292,7 @@ export async function initDatabase() {
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT true;
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS match_type VARCHAR(50) DEFAULT 'solo';
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS squad_data JSONB;
+      ALTER TABLE matches ADD COLUMN IF NOT EXISTS conflict_retries INT DEFAULT 0;
 
 
       CREATE TABLE IF NOT EXISTS transactions (

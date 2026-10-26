@@ -38,7 +38,8 @@ import {
   Filter,
   ZoomIn,
   Camera,
-  Maximize2
+  Maximize2,
+  ShieldAlert
 } from 'lucide-react';
 import {
   fetchAdminUsers,
@@ -63,8 +64,12 @@ import {
   adminAbandonMatch,
   analyzeScreenshotForensic,
   adminResolveMatch,
+  fetchFlaggedAccounts,
+  dismissAccountFlag,
+  banDuplicateAccount,
   GmailIntegrationStatus,
   AdminEmailItem,
+  FlaggedAccountItem,
 } from '../services/api';
 import { Match } from '../types';
 
@@ -103,7 +108,10 @@ interface AdminFinanceData {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onRefreshUser }) => {
-  const [activeTab, setActiveTab] = useState<'review_queue' | 'finance' | 'users' | 'gmail' | 'disputes'>('review_queue');
+  const [activeTab, setActiveTab] = useState<'review_queue' | 'finance' | 'users' | 'gmail' | 'disputes' | 'multi_accounts'>('review_queue');
+  const [flaggedAccounts, setFlaggedAccounts] = useState<FlaggedAccountItem[]>([]);
+  const [multiAccountClusters, setMultiAccountClusters] = useState<any[]>([]);
+  const [flaggedLoading, setFlaggedLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -358,9 +366,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     }
   };
 
+  const loadFlaggedAccounts = async () => {
+    try {
+      setFlaggedLoading(true);
+      const res = await fetchFlaggedAccounts(currentUser.id);
+      setFlaggedAccounts(res.flaggedUsers || []);
+      setMultiAccountClusters(res.clusters || []);
+    } catch (e) {
+      console.error('Error loading flagged accounts:', e);
+    } finally {
+      setFlaggedLoading(false);
+    }
+  };
+
   const reloadAll = async () => {
     setRefreshing(true);
-    await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings()]);
+    await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings(), loadFlaggedAccounts()]);
     if (onRefreshUser) onRefreshUser();
     setRefreshing(false);
   };
@@ -369,7 +390,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     const init = async () => {
       setLoading(true);
       if (currentUser.role === 'admin') {
-        await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings()]);
+        await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings(), loadFlaggedAccounts()]);
       }
       setLoading(false);
     };
@@ -689,7 +710,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
               { id: 'finance', icon: Wallet, label: 'Treasury', badge: `₦${availableFees.toLocaleString()}` },
               { id: 'users', icon: Users, label: 'Gladiators', badge: usersList.length },
               { id: 'disputes', icon: ShieldCheck, label: 'Disputes', badge: disputesList.length },
-              { id: 'gmail', icon: Mail, label: 'Sync Engine', badge: emailsList.length }
+              { id: 'gmail', icon: Mail, label: 'Sync Engine', badge: emailsList.length },
+              { id: 'multi_accounts', icon: ShieldAlert, label: 'Multi-Accounts', badge: flaggedAccounts.length }
             ].map(tab => (
               <button
                 key={tab.id}
@@ -769,6 +791,120 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
             </div>
           </div>
         </header>
+
+        {/* TAB CONTENT: MULTI-ACCOUNT DETECTION */}
+        {activeTab === 'multi_accounts' && (
+          <div className="space-y-6 animate-in fade-in duration-500">
+            <div className="bg-neutral-900 border border-neutral-800 p-8 rounded-[2.5rem] shadow-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+              <div>
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-500">
+                    <ShieldAlert size={24} />
+                  </div>
+                  <div>
+                    <h2 className="text-2xl font-black text-white uppercase tracking-tighter">Multi-Account Detection Hub</h2>
+                    <p className="text-xs text-neutral-400 font-medium">Scanning users sharing duplicate Email, Phone Number, CODM IGN, or Bank Account numbers.</p>
+                  </div>
+                </div>
+              </div>
+              <button 
+                onClick={loadFlaggedAccounts}
+                disabled={flaggedLoading}
+                className="px-6 py-4 bg-neutral-800 hover:bg-neutral-700 text-white font-black text-xs uppercase tracking-widest rounded-2xl border border-neutral-700 flex items-center gap-2 transition-all active:scale-95"
+              >
+                <RefreshCw size={14} className={flaggedLoading ? 'animate-spin' : ''} />
+                Refresh Scan
+              </button>
+            </div>
+
+            {/* Clusters / Flagged Accounts List */}
+            {flaggedAccounts.length === 0 ? (
+              <div className="bg-neutral-900 border border-neutral-800 p-16 rounded-[2.5rem] text-center space-y-4 shadow-2xl">
+                <div className="w-20 h-20 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 mx-auto">
+                  <ShieldCheck size={40} />
+                </div>
+                <h3 className="text-xl font-black text-white uppercase tracking-tight">Zero Multi-Accounting Violations</h3>
+                <p className="text-xs text-neutral-500 max-w-md mx-auto">All registered users have unique emails, phone numbers, CODM usernames, and bank account numbers.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-6">
+                {flaggedAccounts.map(account => (
+                  <div key={account.id} className="bg-neutral-900 border border-rose-500/30 p-8 rounded-[2.5rem] shadow-2xl relative overflow-hidden group hover:border-rose-500/60 transition-all space-y-6">
+                    <div className="absolute top-0 right-0 bg-rose-500/10 text-rose-400 text-[10px] font-black uppercase tracking-widest px-6 py-2 rounded-bl-2xl border-l border-b border-rose-500/20">
+                      ⚠️ Flagged Duplicate
+                    </div>
+
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                      <div className="flex items-center gap-4">
+                        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-rose-500/20 to-purple-500/20 border border-rose-500/30 flex items-center justify-center text-white font-black text-xl">
+                          {account.codmIgn?.slice(0, 2).toUpperCase() || 'MA'}
+                        </div>
+                        <div>
+                          <h3 className="text-xl font-black text-white">{account.codmIgn}</h3>
+                          <p className="text-xs text-neutral-400 font-mono">ID: {account.id} • Registered: {new Date(account.createdAt).toLocaleDateString()}</p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[10px] font-black text-neutral-500 uppercase tracking-widest block">Wallet Balance</span>
+                        <span className="text-xl font-mono font-black text-amber-400">₦{account.balance.toLocaleString()}</span>
+                      </div>
+                    </div>
+
+                    <div className="p-5 bg-black/50 rounded-2xl border border-neutral-800 grid grid-cols-1 md:grid-cols-4 gap-4 text-xs font-mono">
+                      <div>
+                        <span className="text-[10px] text-neutral-500 font-sans uppercase block">Email Address</span>
+                        <span className="text-white font-bold">{account.email || 'N/A'}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-neutral-500 font-sans uppercase block">Phone Number</span>
+                        <span className="text-white font-bold">{account.phone || 'N/A'}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-neutral-500 font-sans uppercase block">Bank & Account</span>
+                        <span className="text-white font-bold">{account.bankName || 'Bank'} : {account.accountNumber || 'N/A'}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-rose-400 font-sans uppercase block font-black">Flag Reason</span>
+                        <span className="text-rose-300 font-bold">{account.flagReason || 'Shared attribute match'}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-4 pt-2 border-t border-neutral-800/50">
+                      <button
+                        onClick={async () => {
+                          try {
+                            await dismissAccountFlag(currentUser.id, account.id);
+                            loadFlaggedAccounts();
+                          } catch (e: any) {
+                            alert(e.message || 'Failed to dismiss flag');
+                          }
+                        }}
+                        className="px-5 py-3 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-black text-xs uppercase tracking-widest transition-all"
+                      >
+                        Dismiss Flag
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (confirm(`Are you sure you want to ban duplicate account ${account.codmIgn}?`)) {
+                            try {
+                              await banDuplicateAccount(currentUser.id, account.id);
+                              loadFlaggedAccounts();
+                            } catch (e: any) {
+                              alert(e.message || 'Failed to ban account');
+                            }
+                          }
+                        }}
+                        className="px-5 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-rose-600/30 transition-all"
+                      >
+                        Ban Account
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* TAB CONTENT: REVIEW QUEUE */}
         {activeTab === 'review_queue' && (

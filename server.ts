@@ -133,6 +133,10 @@ export interface UserProfile {
   role?: string;
   telegramChatId?: string;
   telegramUsername?: string;
+  isFlagged?: boolean;
+  flagReason?: string;
+  flaggedWithUserId?: string;
+  flagMatches?: any;
   transactions: Array<{
     id: string;
     type: 'DEPOSIT' | 'ESCROW_LOCK' | 'ESCROW_REFUND' | 'MATCH_WIN_PAYOUT' | 'WITHDRAWAL' | 'REFERRAL_EARNING';
@@ -225,6 +229,7 @@ export interface Match {
     reason: string;
     timestamp: number;
   };
+  conflictRetries?: number;
 }
 
 // SQL escape helper to maintain compatibility with Supabase transaction pooler (PgBouncer)
@@ -367,6 +372,10 @@ async function getUserFromDb(idOrEmail: string): Promise<UserProfile | null> {
       role: r.role || 'user',
       telegramChatId: r.telegram_chat_id || undefined,
       telegramUsername: r.telegram_username || undefined,
+      isFlagged: r.is_flagged === true,
+      flagReason: r.flag_reason || undefined,
+      flaggedWithUserId: r.flagged_with_user_id || undefined,
+      flagMatches: r.flag_matches ? (typeof r.flag_matches === 'string' ? JSON.parse(r.flag_matches) : r.flag_matches) : undefined,
       transactions,
     };
   } catch (err) {
@@ -419,6 +428,10 @@ async function getUserByEmailOrIgn(identifier: string): Promise<{ user: UserProf
       role: r.role || 'user',
       telegramChatId: r.telegram_chat_id || undefined,
       telegramUsername: r.telegram_username || undefined,
+      isFlagged: r.is_flagged === true,
+      flagReason: r.flag_reason || undefined,
+      flaggedWithUserId: r.flagged_with_user_id || undefined,
+      flagMatches: r.flag_matches ? (typeof r.flag_matches === 'string' ? JSON.parse(r.flag_matches) : r.flag_matches) : undefined,
       transactions,
     };
 
@@ -556,6 +569,7 @@ async function getMatchFromDb(id: string): Promise<Match | null> {
       chatMessages: typeof m.chat_messages === 'string' ? JSON.parse(m.chat_messages) : m.chat_messages || [],
       roomGeneratedAt: m.room_generated_at ? parseInt(m.room_generated_at, 10) : undefined,
       isPublic: m.is_public ?? true,
+      conflictRetries: parseInt(m.conflict_retries || '0', 10),
     };
   } catch (err) {
     console.error(`Error getting match ${id} from DB:`, err);
@@ -591,6 +605,7 @@ async function getAllMatchesFromDb(): Promise<Match[]> {
       chatMessages: typeof m.chat_messages === 'string' ? JSON.parse(m.chat_messages) : m.chat_messages || [],
       roomGeneratedAt: m.room_generated_at ? parseInt(m.room_generated_at, 10) : undefined,
       isPublic: m.is_public ?? true,
+      conflictRetries: parseInt(m.conflict_retries || '0', 10),
     }));
   } catch (err) {
     console.error('Error getting matches from DB:', err);
@@ -605,7 +620,7 @@ async function saveMatchToDb(match: any) {
         id, challenge_code, room_code, game_mode, map, rules,
         stake_amount, pot_amount, platform_fee_percentage, platform_fee, winner_payout,
         match_duration_minutes, match_type, squad_data, status, creator_id, creator_data, opponent_id, opponent_data,
-        winner_id, winner_ign, resolution_notes, chat_messages, created_at, room_generated_at, settled_at, is_public
+        winner_id, winner_ign, resolution_notes, chat_messages, created_at, room_generated_at, settled_at, is_public, conflict_retries
       )
       VALUES (
         ${escapeSql(match.id)},
@@ -634,7 +649,8 @@ async function saveMatchToDb(match: any) {
         ${escapeSql(match.createdAt)},
         ${escapeSql(match.roomGeneratedAt || null)},
         ${escapeSql(match.settled_at || match.settledAt || null)},
-        ${escapeSql(match.isPublic !== false)}
+        ${escapeSql(match.isPublic !== false)},
+        ${escapeSql(match.conflictRetries || 0)}
       )
       ON CONFLICT (id) DO UPDATE SET
         room_code = EXCLUDED.room_code,
@@ -655,7 +671,8 @@ async function saveMatchToDb(match: any) {
         chat_messages = EXCLUDED.chat_messages,
         room_generated_at = EXCLUDED.room_generated_at,
         settled_at = EXCLUDED.settled_at,
-        is_public = EXCLUDED.is_public;
+        is_public = EXCLUDED.is_public,
+        conflict_retries = EXCLUDED.conflict_retries;
     `);
 
     try {
@@ -846,6 +863,136 @@ async function requireAdminAuth(req: any, res: any, next: any) {
 }
 
 app.use('/api/msksksnuwje', requireAdminAuth);
+
+// Anti-Multi-Accounting Admin Endpoints
+app.get('/api/msksksnuwje/flagged-accounts', async (req, res) => {
+  try {
+    const usersRes = await pool.query(`SELECT * FROM users ORDER BY created_at DESC`);
+    const users = usersRes.rows;
+
+    const flaggedUsersMap = new Map<string, any>();
+    const clusters: any[] = [];
+
+    const emailMap = new Map<string, any[]>();
+    const phoneMap = new Map<string, any[]>();
+    const ignMap = new Map<string, any[]>();
+    const accMap = new Map<string, any[]>();
+
+    for (const u of users) {
+      const em = (u.email || '').trim().toLowerCase();
+      const ph = (u.phone || '').trim().replace(/\D/g, '');
+      const ign = (u.codm_ign || u.username || '').trim().toLowerCase();
+      const acc = (u.account_number || '').trim().replace(/\D/g, '');
+
+      if (em) {
+        if (!emailMap.has(em)) emailMap.set(em, []);
+        emailMap.get(em)!.push(u);
+      }
+      if (ph && ph.length >= 7) {
+        const key = ph.slice(-10);
+        if (!phoneMap.has(key)) phoneMap.set(key, []);
+        phoneMap.get(key)!.push(u);
+      }
+      if (ign) {
+        if (!ignMap.has(ign)) ignMap.set(ign, []);
+        ignMap.get(ign)!.push(u);
+      }
+      if (acc && acc.length >= 8) {
+        if (!accMap.has(acc)) accMap.set(acc, []);
+        accMap.get(acc)!.push(u);
+      }
+    }
+
+    const checkAndAddCluster = (attrName: string, map: Map<string, any[]>) => {
+      for (const [val, group] of map.entries()) {
+        if (group.length > 1) {
+          clusters.push({
+            attribute: attrName,
+            value: val,
+            users: group.map(g => ({ id: g.id, codmIgn: g.codm_ign || g.username, email: g.email, phone: g.phone, accountNumber: g.account_number })),
+          });
+          for (const u of group) {
+            flaggedUsersMap.set(u.id, {
+              id: u.id,
+              username: u.username || u.codm_ign,
+              codmIgn: u.codm_ign,
+              email: u.email,
+              phone: u.phone,
+              bankName: u.bank_name,
+              accountNumber: u.account_number,
+              accountName: u.account_name,
+              balance: parseFloat(u.balance || 0),
+              isFlagged: true,
+              flagReason: `Shared ${attrName}: ${val} with ${group.filter(g => g.id !== u.id).map(g => g.codm_ign).join(', ')}`,
+              flaggedWithUserId: group.find(g => g.id !== u.id)?.id,
+              createdAt: parseInt(u.created_at || '0', 10),
+            });
+          }
+        }
+      }
+    };
+
+    checkAndAddCluster('Email', emailMap);
+    checkAndAddCluster('Phone Number', phoneMap);
+    checkAndAddCluster('CODM IGN', ignMap);
+    checkAndAddCluster('Bank Account Number', accMap);
+
+    for (const u of users) {
+      if (u.is_flagged && !flaggedUsersMap.has(u.id)) {
+        flaggedUsersMap.set(u.id, {
+          id: u.id,
+          username: u.username || u.codm_ign,
+          codmIgn: u.codm_ign,
+          email: u.email,
+          phone: u.phone,
+          bankName: u.bank_name,
+          accountNumber: u.account_number,
+          accountName: u.account_name,
+          balance: parseFloat(u.balance || 0),
+          isFlagged: true,
+          flagReason: u.flag_reason || 'Flagged by multi-accounting detection system',
+          flaggedWithUserId: u.flagged_with_user_id,
+          createdAt: parseInt(u.created_at || '0', 10),
+        });
+      }
+    }
+
+    res.json({
+      flaggedUsers: Array.from(flaggedUsersMap.values()),
+      clusters,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to fetch flagged accounts' });
+  }
+});
+
+app.post('/api/msksksnuwje/flagged-accounts/:userId/dismiss', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    await pool.query(`
+      UPDATE users 
+      SET is_flagged = false, flag_reason = NULL, flagged_with_user_id = NULL, flag_matches = NULL 
+      WHERE id = ${escapeSql(userId)}
+    `);
+    res.json({ success: true, message: 'Account flag dismissed' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to dismiss flag' });
+  }
+});
+
+app.post('/api/msksksnuwje/flagged-accounts/:userId/ban', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    await pool.query(`
+      UPDATE users 
+      SET role = 'banned', balance = 0, is_flagged = true, flag_reason = 'Account banned for multi-accounting violation'
+      WHERE id = ${escapeSql(userId)}
+    `);
+    res.json({ success: true, message: 'Account banned successfully' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to ban account' });
+  }
+});
 
 // REST API ROUTES
 app.post('/api/msksksnuwje/withdraw', async (req, res) => {
@@ -3589,12 +3736,49 @@ app.post('/api/auth/register', async (req, res) => {
     referredBy = referrer.id;
   }
 
-  // Check directly in database if email or IGN already exists
-  const existingEmail = await getUserByEmailOrIgn(email);
-  const existingIgn = await getUserByEmailOrIgn(codmIgn);
+  // Strict Multi-Accounting Prevention Check (Email, Phone, CODM IGN, and Bank Account Number)
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanPhone = phone.trim().replace(/\D/g, '');
+  const cleanIgn = codmIgn.trim().toLowerCase();
+  const cleanAccNum = accountNumber.trim().replace(/\D/g, '');
 
-  if (existingEmail || existingIgn) {
-    return res.status(400).json({ error: 'An account with this email or CODM IGN already exists' });
+  const duplicateCheck = await pool.query(`
+    SELECT id, email, phone, codm_ign, account_number, username FROM users 
+    WHERE LOWER(email) = LOWER($1)
+       OR (LENGTH($2) >= 7 AND REPLACE(phone, ' ', '') LIKE '%' || $2 || '%')
+       OR LOWER(codm_ign) = LOWER($3)
+       OR LOWER(username) = LOWER($3)
+       OR (LENGTH($4) >= 8 AND REPLACE(account_number, ' ', '') = $4)
+  `, [cleanEmail, cleanPhone.slice(-10), cleanIgn, cleanAccNum]);
+
+  if (duplicateCheck.rows.length > 0) {
+    const dup = duplicateCheck.rows[0];
+    let matchedAttr = 'Email, Phone, CODM IGN, or Bank Account';
+    if (dup.email && dup.email.toLowerCase() === cleanEmail) matchedAttr = 'Email address';
+    else if (dup.phone && dup.phone.replace(/\D/g, '').includes(cleanPhone.slice(-10))) matchedAttr = 'Phone number';
+    else if ((dup.codm_ign || '').toLowerCase() === cleanIgn || (dup.username || '').toLowerCase() === cleanIgn) matchedAttr = 'CODM Username (IGN)';
+    else if (dup.account_number && dup.account_number.replace(/\D/g, '') === cleanAccNum) matchedAttr = 'Bank Account Number';
+
+    return res.status(400).json({
+      error: `Multi-Accounting Prevention Blocked: An existing account is already registered with this ${matchedAttr}. Creating multiple accounts is strictly prohibited.`
+    });
+  }
+
+  const bannedCheck = await pool.query(`
+    SELECT id FROM users 
+    WHERE role = 'banned' AND (
+      LOWER(email) = LOWER($1)
+      OR (LENGTH($2) >= 7 AND REPLACE(phone, ' ', '') LIKE '%' || $2 || '%')
+      OR LOWER(codm_ign) = LOWER($3)
+      OR LOWER(username) = LOWER($3)
+      OR (LENGTH($4) >= 8 AND REPLACE(account_number, ' ', '') = $4)
+    )
+  `, [cleanEmail, cleanPhone.slice(-10), cleanIgn, cleanAccNum]);
+
+  if (bannedCheck.rows.length > 0) {
+    return res.status(403).json({
+      error: 'Registration Blocked: The email, phone number, CODM username, or bank account provided is associated with a permanently banned account and cannot be used again.'
+    });
   }
 
   const id = `user_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
@@ -3653,6 +3837,12 @@ app.post('/api/auth/login', async (req, res) => {
   const account = await getUserByEmailOrIgn(identifier);
   if (!account) {
     return res.status(404).json({ error: 'No account found matching this email or username' });
+  }
+
+  if (account.user.role === 'banned') {
+    return res.status(403).json({
+      error: 'Account Banned: This account has been permanently banned due to policy or multi-accounting violations. Funds are locked and credentials are blacklisted.'
+    });
   }
 
   // Seamless login for admin b@gmail.com or demo accounts
@@ -6097,6 +6287,46 @@ app.post('/api/matches/:id/cancel', async (req, res) => {
 // Analyzes magic bytes, dimension ratios, entropy & embedded metadata without relying on AI LLMs
 // ==========================================
 
+async function analyzeScreenshotWithGemini(base64Data: string, playerIgn: string, claim: string): Promise<any> {
+  if (!ai || !base64Data) return null;
+  try {
+    const cleanBase64 = base64Data.replace(/^data:image\/[a-z0-9.+-]+;base64,/, '');
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [
+        {
+          inlineData: {
+            mimeType: 'image/jpeg',
+            data: cleanBase64,
+          },
+        },
+        {
+          text: `You are an expert game referee and forensic AI analyst for Call of Duty: Mobile (CODM). Analyze this post-match scoreboard screenshot submitted by gladiator "${playerIgn}" who claimed "${claim}".
+          Evaluate:
+          1. Is this an authentic original game capture or a synthetic, AI-generated fake, or edited image?
+          2. Does the scoreboard result support the claim (${claim})?
+          Return strict JSON with fields:
+          - isLikelyFake (boolean)
+          - confidenceScore (number between 0 and 1)
+          - verdict (string summary)
+          - detectedPlayerName (string)
+          - detectedOutcome (string: VICTORY, DEFEAT, or DRAW)
+          - redFlags (array of strings explaining any manipulations or AI artifacts)
+          - reasoning (string)`
+        }
+      ]
+    });
+    const text = response.text || '';
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+  } catch (err: any) {
+    console.warn('Gemini AI screenshot forensics error:', err.message);
+  }
+  return null;
+}
+
 export function analyzeImageSystemLogic(base64Data: string, filename?: string) {
   if (!base64Data || typeof base64Data !== 'string') {
     return {
@@ -6400,6 +6630,17 @@ app.post('/api/matches/:id/submit-result', rateLimitMiddleware(15, 60000), secur
 
   if (screenshotBase64) {
     systemAnalysis = analyzeImageSystemLogic(screenshotBase64);
+    const geminiAiResult = await analyzeScreenshotWithGemini(screenshotBase64, playerIgn, claim);
+    if (geminiAiResult) {
+      systemAnalysis = {
+        ...systemAnalysis,
+        isLikelyFake: systemAnalysis.isLikelyFake || geminiAiResult.isLikelyFake,
+        confidenceScore: Math.max(systemAnalysis.confidenceScore, geminiAiResult.confidenceScore || 0),
+        verdict: geminiAiResult.isLikelyFake ? `GEMINI AI DETECTED FAKE: ${geminiAiResult.verdict}` : systemAnalysis.verdict,
+        redFlags: [...(systemAnalysis.redFlags || []), ...(geminiAiResult.redFlags || [])],
+        aiAnalysis: geminiAiResult,
+      };
+    }
   }
 
   // Record submission
@@ -6719,15 +6960,39 @@ app.post('/api/matches/:id/submit-result', rateLimitMiddleware(15, 60000), secur
       }
     }
   } else if (resolveWinner === 'dispute') {
-    match.status = 'DISPUTED';
-    match.resolutionNotes = '⚠️ CONFLICT DETECTED: Both players submitted conflicting results! Post-game scoreboard screenshots are now required to verify the winner.';
-    match.chatMessages.push({
-      id: `msg_${Date.now()}_dispute`,
-      senderId: 'SYSTEM',
-      senderName: 'CODM Referee Bot',
-      text: `⚠️ CONFLICT DETECTED: Both players claimed conflicting results! The ₦${match.potAmount.toLocaleString()} escrow pot is safely frozen. Both players must now upload their post-match scoreboard screenshot as proof.`,
-      timestamp: Date.now(),
-    });
+    match.conflictRetries = (match.conflictRetries || 0) + 1;
+
+    if (match.conflictRetries < 3) {
+      match.status = 'SUBMITTING_RESULTS';
+      delete match.creator.resultClaim;
+      delete match.creator.screenshotUrl;
+      delete match.creator.screenshotAnalysis;
+      delete match.creator.submittedAt;
+      if (match.opponent) {
+        delete match.opponent.resultClaim;
+        delete match.opponent.screenshotUrl;
+        delete match.opponent.screenshotAnalysis;
+        delete match.opponent.submittedAt;
+      }
+      match.resolutionNotes = `⚠️ Result Conflict Detected (Retry Attempt ${match.conflictRetries} of 3). Both players must re-confirm match result.`;
+      match.chatMessages.push({
+        id: `msg_${Date.now()}_retry`,
+        senderId: 'SYSTEM',
+        senderName: 'CODM Referee Bot',
+        text: `⚠️ RESULT CONFLICT DETECTED (Retry Attempt ${match.conflictRetries} of 3): Conflicting claims submitted. Both players are given another chance to confirm correct result before mandatory screenshot review.`,
+        timestamp: Date.now(),
+      });
+    } else {
+      match.status = 'DISPUTED';
+      match.resolutionNotes = `🚨 Maximum 3 conflict retries reached. Match has been escalated to Admin Review Queue for manual referee inspection and winnings screenshot review.`;
+      match.chatMessages.push({
+        id: `msg_${Date.now()}_dispute_final`,
+        senderId: 'SYSTEM',
+        senderName: 'CODM Referee Bot',
+        text: `🚨 MAXIMUM 3 CONFLICT RETRIES REACHED: Match escalated to Admin Review Queue. Both players must submit post-game winnings screenshots for manual review. Pending admin verdict.`,
+        timestamp: Date.now(),
+      });
+    }
   } else {
     match.status = 'SUBMITTING_RESULTS';
     const waitingForIgn = isCreator ? (match.opponent?.codmIgn || 'Rival') : match.creator.codmIgn;

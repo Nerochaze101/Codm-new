@@ -803,6 +803,48 @@ export async function verifyDepositSession(depositId: string, userId: string, se
   return await res.json();
 }
 
+export interface FlaggedAccountItem {
+  id: string;
+  username: string;
+  codmIgn: string;
+  email: string;
+  phone: string;
+  bankName?: string;
+  accountNumber?: string;
+  accountName?: string;
+  balance: number;
+  isFlagged: boolean;
+  flagReason?: string;
+  flaggedWithUserId?: string;
+  createdAt: number;
+}
+
+export async function fetchFlaggedAccounts(adminUserId: string): Promise<{ flaggedUsers: FlaggedAccountItem[]; clusters: any[] }> {
+  const res = await fetch(`/api/msksksnuwje/flagged-accounts?userId=${encodeURIComponent(adminUserId)}`, {
+    headers: { 'X-Admin-Id': adminUserId },
+  });
+  return await parseResponse(res);
+}
+
+export async function dismissAccountFlag(adminUserId: string, targetUserId: string) {
+  const res = await fetch(`/api/msksksnuwje/flagged-accounts/${targetUserId}/dismiss`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
+    body: JSON.stringify({ adminUserId }),
+  });
+  return await parseResponse(res);
+}
+
+export async function banDuplicateAccount(adminUserId: string, targetUserId: string) {
+  const res = await fetch(`/api/msksksnuwje/flagged-accounts/${targetUserId}/ban`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
+    body: JSON.stringify({ adminUserId }),
+  });
+  return await parseResponse(res);
+}
+
+
 
 
 
