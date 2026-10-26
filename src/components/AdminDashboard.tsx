@@ -176,6 +176,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
   const [withdrawSuccessMsg, setWithdrawSuccessMsg] = useState<string | null>(null);
   const [withdrawErrorMsg, setWithdrawErrorMsg] = useState<string | null>(null);
 
+  // Platform Fee Rate Configuration state (1v1 vs 5v5 Squad)
+  const [soloFeeRate, setSoloFeeRate] = useState<number>(10);
+  const [squadFeeRate, setSquadFeeRate] = useState<number>(5);
+  const [isSavingFees, setIsSavingFees] = useState(false);
+  const [feeSaveMsg, setFeeSaveMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
   // Disputes Hub state
   const [disputesList, setDisputesList] = useState<Match[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState<string | null>(null);
@@ -271,6 +277,41 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     }
   };
 
+  const loadFeeSettings = async () => {
+    try {
+      const res = await fetch('/api/admin/fee-settings');
+      const data = await res.json();
+      if (data.soloFeePercent) setSoloFeeRate(data.soloFeePercent);
+      if (data.squadFeePercent) setSquadFeeRate(data.squadFeePercent);
+    } catch (e) {
+      console.error('Error loading fee settings:', e);
+    }
+  };
+
+  const handleSaveFeeSettings = async () => {
+    setIsSavingFees(true);
+    setFeeSaveMsg(null);
+    try {
+      const res = await fetch('/api/admin/fee-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          soloFeePercent: soloFeeRate,
+          squadFeePercent: squadFeeRate,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update fee rates');
+      setFeeSaveMsg({ type: 'success', text: `Saved! 1v1 Solo: ${data.soloFeePercent}%, 5v5 Squad: ${data.squadFeePercent}%` });
+      setTimeout(() => setFeeSaveMsg(null), 4000);
+    } catch (err: any) {
+      setFeeSaveMsg({ type: 'error', text: err.message || 'Error updating fee rates' });
+    } finally {
+      setIsSavingFees(false);
+    }
+  };
+
   const loadUsers = async () => {
     try {
       const list = await fetchAdminUsers(currentUser.id, usersSearch);
@@ -319,7 +360,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
 
   const reloadAll = async () => {
     setRefreshing(true);
-    await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue()]);
+    await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings()]);
     if (onRefreshUser) onRefreshUser();
     setRefreshing(false);
   };
@@ -328,7 +369,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     const init = async () => {
       setLoading(true);
       if (currentUser.role === 'admin') {
-        await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue()]);
+        await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings()]);
       }
       setLoading(false);
     };
@@ -1217,6 +1258,113 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                     {withdrawSuccessMsg ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
                     {withdrawSuccessMsg || withdrawErrorMsg}
                   </div>
+                </div>
+              )}
+            </section>
+
+            {/* PLATFORM FEE CONFIGURATION (1v1 vs 5v5 SQUAD) */}
+            <section className="bg-neutral-900 border border-neutral-800 rounded-[2.5rem] p-8 sm:p-10 shadow-2xl relative overflow-hidden">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 border-b border-neutral-800/50 pb-8 mb-8">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded-full bg-amber-400/10 text-amber-400 border border-amber-400/20">
+                      Rake & Commission Engine
+                    </span>
+                    <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                      Differentiated Rates Active
+                    </span>
+                  </div>
+                  <h3 className="text-2xl font-black text-white uppercase tracking-tighter">Platform Fee Rates</h3>
+                  <p className="text-neutral-500 text-xs mt-0.5">Configure dedicated platform fees for 1v1 duels vs 10-player 5v5 Squad battles.</p>
+                </div>
+                <button
+                  onClick={handleSaveFeeSettings}
+                  disabled={isSavingFees}
+                  className="px-6 py-3 bg-emerald-400 hover:bg-emerald-300 text-neutral-950 font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg shadow-emerald-500/10 active:scale-95 disabled:opacity-50 flex items-center gap-2 cursor-pointer"
+                >
+                  {isSavingFees ? <Loader2 size={16} className="animate-spin" /> : <ShieldCheck size={16} />}
+                  <span>Save Fee Rates</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Solo 1v1 Setting */}
+                <div className="p-6 rounded-2xl bg-black/60 border border-neutral-800 space-y-4">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-black uppercase text-amber-400 tracking-wider flex items-center gap-2">
+                      <Zap size={16} /> Solo (1v1) Duel Fee
+                    </span>
+                    <span className="text-lg font-mono font-black text-white">{soloFeeRate}%</span>
+                  </div>
+                  <p className="text-[11px] text-neutral-400">Standard platform fee applied to 2-player 1v1 duels. Default is 10%.</p>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="number"
+                      min="1"
+                      max="30"
+                      value={soloFeeRate}
+                      onChange={e => setSoloFeeRate(Math.max(1, Math.min(30, parseInt(e.target.value, 10) || 10)))}
+                      className="w-24 bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white font-mono font-bold text-sm focus:border-amber-400 focus:outline-none"
+                    />
+                    <div className="flex gap-1.5">
+                      {[7, 8, 10, 12].map(pct => (
+                        <button
+                          key={pct}
+                          onClick={() => setSoloFeeRate(pct)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
+                            soloFeeRate === pct ? 'bg-amber-400 text-neutral-950' : 'bg-neutral-800 text-neutral-400 hover:text-white'
+                          }`}
+                        >
+                          {pct}%
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 5v5 Squad Setting */}
+                <div className="p-6 rounded-2xl bg-black/60 border border-emerald-500/40 space-y-4">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-black uppercase text-emerald-400 tracking-wider flex items-center gap-2">
+                      <Users size={16} /> 5v5 Squad ("Squared") Fee
+                    </span>
+                    <span className="text-lg font-mono font-black text-emerald-400">{squadFeeRate}%</span>
+                  </div>
+                  <p className="text-[11px] text-neutral-400">
+                    Reduced platform fee for 10-player squad wagers to incentivize team coordination. Default is 5%.
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="number"
+                      min="1"
+                      max="30"
+                      value={squadFeeRate}
+                      onChange={e => setSquadFeeRate(Math.max(1, Math.min(30, parseInt(e.target.value, 10) || 5)))}
+                      className="w-24 bg-neutral-900 border border-emerald-500/40 rounded-xl px-3 py-2 text-white font-mono font-bold text-sm focus:border-emerald-400 focus:outline-none"
+                    />
+                    <div className="flex gap-1.5">
+                      {[4, 5, 7, 8].map(pct => (
+                        <button
+                          key={pct}
+                          onClick={() => setSquadFeeRate(pct)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
+                            squadFeeRate === pct ? 'bg-emerald-400 text-neutral-950' : 'bg-neutral-800 text-neutral-400 hover:text-white'
+                          }`}
+                        >
+                          {pct}%
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {feeSaveMsg && (
+                <div className={`mt-5 p-4 rounded-xl text-xs font-bold flex items-center gap-2 border animate-in fade-in ${
+                  feeSaveMsg.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                }`}>
+                  {feeSaveMsg.type === 'success' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+                  <span>{feeSaveMsg.text}</span>
                 </div>
               )}
             </section>

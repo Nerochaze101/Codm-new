@@ -68,11 +68,10 @@ export const RulesView: React.FC = () => {
           <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
             <Trophy className="w-5 h-5" />
           </div>
-          <h3 className="text-base font-bold text-white">4. Payouts & 10% Platform Fee</h3>
-          <p className="text-xs text-neutral-300 leading-relaxed">
-            Upon verified victory, the total match pot (e.g. ₦2,000) is paid out to the winner minus a 10% platform referee fee (₦200).
-            The winner receives <strong>₦1,800</strong> credited directly to their available balance, with zero withdrawal lockouts.
-            The loser receives ₦0.
+          <h3 className="text-base font-bold text-white">4. Payouts & Differentiated Platform Fees</h3>
+          <p className="text-xs text-neutral-300 leading-relaxed space-y-1">
+            <span>• <strong>1v1 Duels:</strong> 10% standard platform referee fee (e.g. ₦2,000 pot pays ₦1,800 to the winner).</span><br />
+            <span>• <strong>5v5 Squad Battles:</strong> Special reduced <strong>5% Squad Fee</strong> (e.g. 10 x ₦1,000 = ₦10,000 gross pot, ₦500 fee). Each of the 5 winning teammates receives <strong>₦1,900</strong> directly!</span>
           </p>
         </div>
       </div>

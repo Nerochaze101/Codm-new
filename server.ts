@@ -241,12 +241,45 @@ function escapeSql(val: any): string {
   return "'" + String(val).replace(/'/g, "''") + "'";
 }
 
-// Helper to calculate tiered rake percentage based on stake amount
-function getRakePercentage(stake: number): number {
-  if (stake >= 10000) return 0.05; // 5% for ₦10,000+
-  if (stake >= 5000) return 0.07;  // 7% for ₦5,000
-  if (stake >= 2500) return 0.08;  // 8% for ₦2,500
-  return 0.10;                     // 10% for ₦100 - ₦1,000
+// Database-backed Platform Fee Settings helper (Default 10% 1v1, 5% 5v5 Squad)
+async function getPlatformFeeSettings(): Promise<{ soloFeePercent: number; squadFeePercent: number }> {
+  try {
+    const res = await pool.query(`SELECT key, value FROM platform_settings WHERE key IN ('solo_fee_percent', 'squad_fee_percent')`);
+    let soloFeePercent = 10;
+    let squadFeePercent = 5;
+    for (const row of res.rows) {
+      if (row.key === 'solo_fee_percent') soloFeePercent = parseInt(row.value, 10) || 10;
+      if (row.key === 'squad_fee_percent') squadFeePercent = parseInt(row.value, 10) || 5;
+    }
+    return { soloFeePercent, squadFeePercent };
+  } catch {
+    return { soloFeePercent: 10, squadFeePercent: 5 };
+  }
+}
+
+// 1v1 Solo Platform Fee Percentage (Default 10%, tiered down for high-stakes)
+function getSoloRakePercentage(totalPotAmount: number, baseRate: number = 10): number {
+  if (totalPotAmount >= 100000) return Math.min(baseRate / 100, 0.035); // 3.5% for High-Roller Pots (₦100,000+)
+  if (totalPotAmount >= 50000) return Math.min(baseRate / 100, 0.04);   // 4% for Large Pots (₦50,000+)
+  if (totalPotAmount >= 10000) return Math.min(baseRate / 100, 0.05);   // 5% for Medium Pots (₦10,000+)
+  if (totalPotAmount >= 5000) return Math.min(baseRate / 100, 0.07);    // 7% for ₦5,000+ pots
+  if (totalPotAmount >= 2500) return Math.min(baseRate / 100, 0.08);    // 8% for ₦2,500+ pots
+  return baseRate / 100;                                                // Default 10%
+}
+
+// 5v5 Squad ("Squared") Platform Fee (Special 5% reduced rate vs 1v1)
+// Squad matches aggregate 10 players, so a lower platform fee % is charged
+// to reward organized clan warfare and maximize individual squad member winnings!
+function getSquadRakePercentage(stakePerPlayer: number, totalPotAmount: number, baseSquadRate: number = 5): number {
+  if (totalPotAmount >= 100000) return Math.min(baseSquadRate / 100, 0.03); // 3.0% for Mega Squad Tournaments
+  if (totalPotAmount >= 50000) return Math.min(baseSquadRate / 100, 0.035); // 3.5% for ₦50,000+ Squad Pots
+  if (totalPotAmount >= 25000) return Math.min(baseSquadRate / 100, 0.04);  // 4% for ₦25,000+ Squad Pots
+  return baseSquadRate / 100;                                               // Default 5% Squad Fee
+}
+
+// Legacy fallback helper for backwards compatibility
+function getRakePercentage(stakeOrPot: number): number {
+  return getSoloRakePercentage(stakeOrPot);
 }
 
 // Helper to generate a room code like CODM-8392-SHP
@@ -606,6 +639,10 @@ async function saveMatchToDb(match: any) {
       ON CONFLICT (id) DO UPDATE SET
         room_code = EXCLUDED.room_code,
         status = EXCLUDED.status,
+        pot_amount = EXCLUDED.pot_amount,
+        platform_fee_percentage = EXCLUDED.platform_fee_percentage,
+        platform_fee = EXCLUDED.platform_fee,
+        winner_payout = EXCLUDED.winner_payout,
         match_duration_minutes = EXCLUDED.match_duration_minutes,
         match_type = EXCLUDED.match_type,
         squad_data = EXCLUDED.squad_data,
@@ -958,6 +995,47 @@ app.get('/api/msksksnuwje/finance', async (req, res) => {
     res.status(500).json({ error: err.message || 'Failed to fetch platform finance' });
   }
 });
+
+// Get platform fee settings (solo 10%, squad 5%)
+app.get('/api/admin/fee-settings', async (req, res) => {
+  try {
+    const settings = await getPlatformFeeSettings();
+    res.json(settings);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to load fee settings' });
+  }
+});
+
+// Update platform fee settings
+app.post('/api/admin/fee-settings', async (req, res) => {
+  try {
+    const { userId, soloFeePercent, squadFeePercent } = req.body;
+    if (userId) {
+      const user = await getUserFromDb(userId);
+      if (!user || user.role !== 'admin') {
+        return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+      }
+    }
+
+    const cleanSolo = Math.max(1, Math.min(30, parseInt(soloFeePercent, 10) || 10));
+    const cleanSquad = Math.max(1, Math.min(30, parseInt(squadFeePercent, 10) || 5));
+
+    await pool.query(`
+      INSERT INTO platform_settings (key, value, updated_at)
+      VALUES 
+        ('solo_fee_percent', ${escapeSql(String(cleanSolo))}, ${Date.now()}),
+        ('squad_fee_percent', ${escapeSql(String(cleanSquad))}, ${Date.now()})
+      ON CONFLICT (key) DO UPDATE SET 
+        value = EXCLUDED.value,
+        updated_at = EXCLUDED.updated_at
+    `);
+
+    res.json({ success: true, soloFeePercent: cleanSolo, squadFeePercent: cleanSquad });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to save fee settings' });
+  }
+});
+
 
 // Fetch withdrawal requests for Admin Dashboard
 app.get('/api/msksksnuwje/withdrawals', async (req, res) => {
@@ -4221,10 +4299,10 @@ export async function postMatchToPublicChannel(match: Match, origin?: string) {
       const filledSlots = squad?.slots ? squad.slots.filter((s: any) => s.staked).length : 1;
       const openSlots = Math.max(0, 10 - filledSlots);
       const grossPot = match.potAmount;
-      const feeAmount = match.platformFee || Math.round(grossPot * 0.10);
-      const feePercent = match.platformFeePercentage || 10;
+      const feePercent = match.platformFeePercentage || 5;
+      const feeAmount = match.platformFee !== undefined ? match.platformFee : Math.round(grossPot * (feePercent / 100));
       const netSquadPool = grossPot - feeAmount;
-      const perPlayerPayout = match.winnerPayout;
+      const perPlayerPayout = match.winnerPayout || Math.floor(netSquadPool / 5);
 
       messageText = 
         `🛡️ <b>NEW 5v5 SQUAD WAGER - OPS STAKE</b> 🛡️\n\n` +
@@ -4232,9 +4310,9 @@ export async function postMatchToPublicChannel(match: Match, origin?: string) {
         `👤 <b>Host (Alpha #1):</b> ${match.creator.codmIgn}\n` +
         `💵 <b>Entry Stake:</b> ₦${match.stakeAmount.toLocaleString()} / player\n` +
         `🏆 <b>Total Gross Pot:</b> ₦${grossPot.toLocaleString()} (10 Players Pool)\n` +
-        `⚙️ <b>Platform Rake:</b> ₦${feeAmount.toLocaleString()} (${feePercent}% Fee)\n` +
-        `💰 <b>Winning Squad Pool:</b> ₦${netSquadPool.toLocaleString()}\n` +
-        `🎯 <b>Exact Payout:</b> <b>₦${perPlayerPayout.toLocaleString()}</b> per winning player\n` +
+        `⚙️ <b>Squad Platform Fee:</b> ₦${feeAmount.toLocaleString()} (${feePercent}% Squad Fee - Reduced vs 1v1!)\n` +
+        `💰 <b>Winning Squad Pool:</b> ₦${netSquadPool.toLocaleString()} (Split across 5 winners)\n` +
+        `🎯 <b>Exact Payout / Winner:</b> <b>₦${perPlayerPayout.toLocaleString()}</b> per player\n` +
         `👥 <b>Open Slots:</b> <b>${openSlots}/10 Slots Remaining</b>\n` +
         `🎯 <b>Game Mode:</b> ${match.gameMode}\n` +
         `🗺️ <b>Map:</b> ${match.map}\n` +
@@ -4372,10 +4450,10 @@ export async function sendTelegramSquadSlotJoinedAlert(
   try {
     const squad = match.squadData;
     const grossPot = match.potAmount;
-    const feeAmount = match.platformFee || Math.round(grossPot * 0.10);
-    const feePercent = match.platformFeePercentage || 10;
+    const feePercent = match.platformFeePercentage || 5;
+    const feeAmount = match.platformFee !== undefined ? match.platformFee : Math.round(grossPot * (feePercent / 100));
     const netSquadPool = grossPot - feeAmount;
-    const perPlayerPayout = match.winnerPayout;
+    const perPlayerPayout = match.winnerPayout || Math.floor(netSquadPool / 5);
     const teamLabel = team === 'ALPHA' ? 'Team Alpha (Blue)' : 'Team Bravo (Red)';
 
     let messageText = '';
@@ -4385,7 +4463,7 @@ export async function sendTelegramSquadSlotJoinedAlert(
         `🎯 <b>All 10 slots are filled and locked into escrow!</b>\n\n` +
         `💵 <b>Stake / Player:</b> ₦${match.stakeAmount.toLocaleString()}\n` +
         `🏆 <b>Total Gross Pot:</b> ₦${grossPot.toLocaleString()} (10 Players)\n` +
-        `⚙️ <b>Platform Fee:</b> ₦${feeAmount.toLocaleString()} (${feePercent}% Rake)\n` +
+        `⚙️ <b>Squad Platform Fee:</b> ₦${feeAmount.toLocaleString()} (${feePercent}% Squad Fee)\n` +
         `💰 <b>Winning Squad Pool:</b> ₦${netSquadPool.toLocaleString()}\n` +
         `🎯 <b>Exact Payout:</b> <b>₦${perPlayerPayout.toLocaleString()}</b> per winning squad member\n\n` +
         `🔑 <b>In-Game CODM Room Code:</b> <code>#${match.roomCode || 'Ready'}</code>\n` +
@@ -4399,7 +4477,8 @@ export async function sendTelegramSquadSlotJoinedAlert(
         `📊 <b>Lobby Progress:</b> <b>${filledCount}/10 Slots Staked</b> (${10 - filledCount} slots open)\n` +
         `💵 <b>Entry Stake:</b> ₦${match.stakeAmount.toLocaleString()} / player\n` +
         `🏆 <b>Total Gross Pot:</b> ₦${grossPot.toLocaleString()} (10 Players)\n` +
-        `🎯 <b>Exact Payout:</b> <b>₦${perPlayerPayout.toLocaleString()}</b> per winning squad player\n` +
+        `⚙️ <b>Squad Fee:</b> ${feePercent}% (₦${feeAmount.toLocaleString()})\n` +
+        `🎯 <b>Exact Payout:</b> <b>₦${perPlayerPayout.toLocaleString()}</b> per winning player (₦${netSquadPool.toLocaleString()} Team Total)\n` +
         `🏷️ <b>Lobby Code:</b> #${match.challengeCode}\n\n` +
         `⏳ <i>Waiting for ${10 - filledCount} more player(s) to stake and lock in...</i>`;
     }
@@ -4452,9 +4531,10 @@ export async function sendTelegramMatchSettledAlert(match: Match, winningSideOrW
     if (isSquad) {
       const squad = match.squadData;
       const grossPot = match.potAmount;
-      const feeAmount = match.platformFee || Math.round(grossPot * 0.10);
+      const feePercent = match.platformFeePercentage || 5;
+      const feeAmount = match.platformFee !== undefined ? match.platformFee : Math.round(grossPot * (feePercent / 100));
       const netSquadPool = grossPot - feeAmount;
-      const perPlayerPayout = match.winnerPayout;
+      const perPlayerPayout = match.winnerPayout || Math.floor(netSquadPool / 5);
       const winningTeam = (winningSideOrWinnerIgn === 'BRAVO' || winningSideOrWinnerIgn === 'opponent') ? 'BRAVO' : 'ALPHA';
       const teamLabel = winningTeam === 'ALPHA' ? 'Team Alpha (Blue)' : 'Team Bravo (Red)';
 
@@ -4464,9 +4544,9 @@ export async function sendTelegramMatchSettledAlert(match: Match, winningSideOrW
         `💰 <b>Exact Winnings Credited:</b> <b>₦${perPlayerPayout.toLocaleString()}</b> has been deposited into your wallet balance!\n\n` +
         `📊 <b>Squad Economics:</b>\n` +
         `• 10 Players Gross Pot: ₦${grossPot.toLocaleString()}\n` +
-        `• Platform Rake (${match.platformFeePercentage || 10}%): ₦${feeAmount.toLocaleString()}\n` +
+        `• Squad Platform Fee (${feePercent}%): ₦${feeAmount.toLocaleString()}\n` +
         `• Net Winning Squad Pool: ₦${netSquadPool.toLocaleString()}\n` +
-        `• Exact Individual Payout: ₦${perPlayerPayout.toLocaleString()} each for 5 squad members\n\n` +
+        `• Exact Individual Payout: ₦${perPlayerPayout.toLocaleString()} each for all 5 squad members\n\n` +
         `⚡ <i>Your winnings are ready for instant bank cashout or your next wager in the Arena!</i>`;
 
       if (squad?.slots && Array.isArray(squad.slots)) {
@@ -4899,8 +4979,9 @@ export async function handleTelegramMessage(message: any) {
         summaryText += 
           `🛡️ <b>5v5 Squad #${m.challengeCode}</b>\n` +
           `• Stake / Player: ₦${m.stakeAmount.toLocaleString()}\n` +
-          `• 10 Players Pot: ₦${m.potAmount.toLocaleString()}\n` +
-          `• Exact Payout: <b>₦${m.winnerPayout.toLocaleString()} / winner</b>\n` +
+          `• 10 Players Gross Pot: ₦${m.potAmount.toLocaleString()}\n` +
+          `• Squad Fee: ${m.platformFeePercentage || 5}%\n` +
+          `• Exact Win Payout: <b>₦${m.winnerPayout.toLocaleString()} / winner</b> (₦${((m.winnerPayout || 0) * 5).toLocaleString()} Team Pool)\n` +
           `• Open Slots: <b>${10 - slotsFilled}/10 open</b>\n` +
           `• Host: ${m.creator.codmIgn}\n\n`;
       } else {
@@ -5116,11 +5197,11 @@ app.get('/api/matches/:id', async (req, res) => {
   res.json(sanitizeMatchForPublic(match));
 });
 
-// Helper to calculate squad economics for 5v5 matches
-function calculateSquadEconomics(stakePerPlayer: number, playersPerTeam: number = 5) {
+// Helper to calculate squad economics for 5v5 matches with dedicated squad platform fee (default 5%)
+function calculateSquadEconomics(stakePerPlayer: number, playersPerTeam: number = 5, squadFeePercent: number = 5) {
   const totalPlayers = playersPerTeam * 2;
   const totalPot = Math.max(0, stakePerPlayer) * totalPlayers;
-  const rakeRate = getRakePercentage(totalPot);
+  const rakeRate = getSquadRakePercentage(stakePerPlayer, totalPot, squadFeePercent);
   const platformFee = Math.round(totalPot * rakeRate);
   const netWinningPool = totalPot - platformFee;
   const payoutPerPlayer = Math.floor(netWinningPool / playersPerTeam);
@@ -5190,19 +5271,20 @@ app.post('/api/matches', async (req, res) => {
     const matchId = `match_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
     const challengeCode = `CHALLENGE-${Math.floor(1000 + Math.random() * 9000)}`;
     
+    const feeSettings = await getPlatformFeeSettings();
     const isSquad = matchType === 'squad';
     let potAmount = numStake * 2;
-    let rakeRate = getRakePercentage(potAmount);
+    let rakeRate = getSoloRakePercentage(potAmount, feeSettings.soloFeePercent);
     let platformFee = Math.round(potAmount * rakeRate);
     let winnerPayout = potAmount - platformFee;
     let platformFeePercentage = Math.round(rakeRate * 100);
     let squadData: any = undefined;
 
     if (isSquad) {
-      const squadEcon = calculateSquadEconomics(numStake, 5);
+      const squadEcon = calculateSquadEconomics(numStake, 5, feeSettings.squadFeePercent);
       potAmount = squadEcon.totalPot;
       platformFee = squadEcon.platformFee;
-      winnerPayout = squadEcon.payoutPerPlayer; // payout per winning player
+      winnerPayout = squadEcon.payoutPerPlayer; // exact payout per winning squad player
       rakeRate = squadEcon.rakeRate;
       platformFeePercentage = Math.round(squadEcon.rakeRate * 100);
 
@@ -6488,7 +6570,7 @@ app.post('/api/matches/:id/submit-result', rateLimitMiddleware(15, 60000), secur
       match.winnerId = winningTeam;
       match.winnerIgn = teamLabel;
 
-      const platformFee = match.platformFee || Math.round(match.potAmount * 0.10);
+      const platformFee = match.platformFee !== undefined ? match.platformFee : Math.round(match.potAmount * ((match.platformFeePercentage || 5) / 100));
       await updatePlatformFinance(platformFee);
 
       // Settle Escrow for all 10 players
@@ -6763,7 +6845,7 @@ app.post('/api/matches/:id/admin-resolve', async (req, res) => {
     match.winnerId = winningTeam;
     match.winnerIgn = teamLabel;
 
-    const platformFee = match.platformFee || Math.round(match.potAmount * 0.10);
+    const platformFee = match.platformFee !== undefined ? match.platformFee : Math.round(match.potAmount * ((match.platformFeePercentage || 5) / 100));
     await updatePlatformFinance(platformFee);
 
     // Settle Escrow for all 10 players

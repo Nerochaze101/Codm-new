@@ -363,30 +363,36 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
           {betType === 'squad' ? (() => {
             const squadEcon = calculateSquadEconomics(Math.max(0, stakeAmount), 5);
             return (
-              <div className="p-3.5 rounded-xl bg-neutral-950 border border-emerald-500/30 text-xs space-y-1.5 font-mono-nums">
-                <div className="flex items-center justify-between text-emerald-400 font-bold border-b border-neutral-800 pb-1.5 mb-1.5">
-                  <span className="flex items-center gap-1"><Users className="w-3.5 h-3.5" /> 5v5 Squad Wager (10 Players Total)</span>
-                  <span className="text-[10px] text-neutral-400 font-normal">Auto 5vs5 Split</span>
+              <div className="p-3.5 rounded-xl bg-neutral-950 border border-emerald-500/40 text-xs space-y-2 font-mono">
+                <div className="flex items-center justify-between text-emerald-400 font-bold border-b border-neutral-800 pb-1.5 font-sans">
+                  <span className="flex items-center gap-1.5"><Users className="w-4 h-4 text-emerald-400" /> 5v5 Squad Wager (10 Players Pool)</span>
+                  <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded border border-emerald-500/30 font-bold">5% Squad Fee</span>
                 </div>
                 <div className="flex items-center justify-between text-neutral-400">
-                  <span>Individual Stake:</span>
+                  <span>Stake / Player:</span>
                   <span className="text-white font-bold">₦{squadEcon.stakePerPlayer.toLocaleString()} / player</span>
                 </div>
                 <div className="flex items-center justify-between text-neutral-400">
-                  <span>Total Gross Pot (10 x Stake):</span>
+                  <span>Gross Pot (10 Players):</span>
                   <span className="text-amber-400 font-bold text-sm">₦{squadEcon.totalPot.toLocaleString()}</span>
                 </div>
-                <div className="flex items-center justify-between text-neutral-400">
-                  <span>OpsSTAKE Rake ({squadEcon.rakePercentFormatted}):</span>
-                  <span className="text-rose-400">-₦{squadEcon.platformFee.toLocaleString()}</span>
+                <div className="flex items-center justify-between text-neutral-400 border-t border-neutral-800/80 pt-1.5">
+                  <span className="flex items-center gap-1">
+                    <span>Squad Platform Fee ({squadEcon.rakePercentFormatted}):</span>
+                    <span className="text-[9px] text-emerald-400 font-sans font-bold">(Reduced vs 10% 1v1)</span>
+                  </span>
+                  <span className="text-rose-400 font-bold">-₦{squadEcon.platformFee.toLocaleString()}</span>
                 </div>
-                <div className="flex items-center justify-between text-emerald-400 font-bold pt-1.5 border-t border-neutral-800">
+                <div className="flex items-center justify-between text-neutral-300 font-bold">
                   <span>Net Squad Prize Pool:</span>
-                  <span className="text-sm">₦{squadEcon.netWinningPool.toLocaleString()}</span>
+                  <span className="text-sm text-emerald-300">₦{squadEcon.netWinningPool.toLocaleString()}</span>
                 </div>
-                <div className="flex items-center justify-between text-emerald-300 font-bold bg-emerald-950/40 p-2 rounded-lg border border-emerald-500/20 mt-1">
-                  <span>Payout per Winning Player (5 Winners):</span>
-                  <span className="text-sm text-emerald-400">₦{squadEcon.payoutPerPlayer.toLocaleString()}</span>
+                <div className="flex items-center justify-between text-emerald-300 font-bold bg-gradient-to-r from-emerald-950/60 to-neutral-900 p-2.5 rounded-xl border border-emerald-500/40 mt-1">
+                  <div>
+                    <span className="text-xs block font-sans uppercase font-black text-emerald-400">Exact Payout Per Winner:</span>
+                    <span className="text-[10px] text-neutral-400 font-normal font-sans">All 5 winning players receive this amount</span>
+                  </div>
+                  <span className="text-base font-black text-emerald-400 font-mono">₦{squadEcon.payoutPerPlayer.toLocaleString()}</span>
                 </div>
               </div>
             );

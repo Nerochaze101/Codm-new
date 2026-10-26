@@ -306,6 +306,18 @@ export async function initDatabase() {
         total_fees_withdrawn NUMERIC DEFAULT 0
       );
 
+      CREATE TABLE IF NOT EXISTS platform_settings (
+        key VARCHAR(100) PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at BIGINT NOT NULL
+      );
+
+      INSERT INTO platform_settings (key, value, updated_at)
+      VALUES 
+        ('solo_fee_percent', '10', 1700000000000),
+        ('squad_fee_percent', '5', 1700000000000)
+      ON CONFLICT (key) DO NOTHING;
+
       CREATE TABLE IF NOT EXISTS withdrawal_requests (
         id VARCHAR(255) PRIMARY KEY,
         user_id VARCHAR(255) NOT NULL,

@@ -30,6 +30,7 @@ import { WalletPage } from './components/WalletPage';
 import { AdminDashboard } from './components/AdminDashboard';
 import { NotificationToast } from './components/NotificationToast';
 import { NotificationCenterModal } from './components/NotificationCenterModal';
+import { MatchCreatedSuccessModal } from './components/MatchCreatedSuccessModal';
 
 const socket = io('/');
 
@@ -308,6 +309,7 @@ function MainApp() {
   const [isOnboardingModalOpen, setIsOnboardingModalOpen] = useState(false);
   const [onboardingTargetMatch, setOnboardingTargetMatch] = useState<Match | null>(null);
   const [isFundWalletModalOpen, setIsFundWalletModalOpen] = useState(false);
+  const [createdMatchSuccess, setCreatedMatchSuccess] = useState<Match | null>(null);
 
   // Determine current tab from pathname
   const pathname = location.pathname;
@@ -442,10 +444,11 @@ function MainApp() {
         data: { matchId: newMatch.id, url: '/arena' },
       });
 
-      // 4. Immediately close modal and navigate to Arena view
+      // 4. Immediately close creation input modal, open payout success modal, and navigate to Arena view
       setIsCreateBetOpen(false);
       setCreateBetInitialMode(undefined);
       setCreateBetInitialStake(undefined);
+      setCreatedMatchSuccess(newMatch);
       navigate('/arena');
 
       // 5. Parallel background sync without blocking UI or showing full page loading spinners
@@ -931,6 +934,17 @@ function MainApp() {
           setCreateBetInitialStake(undefined);
         }}
         onSubmit={handleCreateBet}
+      />
+
+      {/* Immediate Post-Creation Exact Payout & Squad Economics Modal */}
+      <MatchCreatedSuccessModal
+        match={createdMatchSuccess}
+        isOpen={Boolean(createdMatchSuccess)}
+        onClose={() => setCreatedMatchSuccess(null)}
+        onOpenMatchRoom={() => {
+          setCreatedMatchSuccess(null);
+          navigate('/arena');
+        }}
       />
 
       <OpponentOnboardingModal

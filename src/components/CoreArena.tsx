@@ -202,9 +202,15 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
       {arenaTab === 'live' && (
         <div className="space-y-6">
           {myActiveMatch && (
-            <div className="p-4 rounded-2xl bg-neutral-900 border-2 border-amber-400 flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in">
+            <div className={`p-4 rounded-2xl bg-neutral-900 border-2 flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in shadow-xl ${
+              myActiveMatch.matchType === 'squad' ? 'border-emerald-500/80' : 'border-amber-400'
+            }`}>
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-amber-400 text-neutral-950 flex items-center justify-center font-black shrink-0"><Zap size={20} /></div>
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black shrink-0 ${
+                  myActiveMatch.matchType === 'squad' ? 'bg-emerald-400 text-neutral-950' : 'bg-amber-400 text-neutral-950'
+                }`}>
+                  {myActiveMatch.matchType === 'squad' ? <Users size={20} /> : <Zap size={20} />}
+                </div>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-black text-amber-400 uppercase tracking-widest">
@@ -212,17 +218,34 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                     </span>
                     {myActiveMatch.matchType === 'squad' && (
                       <span className="text-[10px] font-bold bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/30">
-                        {(myActiveMatch.squadData?.slots?.filter(s => s.staked).length || 1)}/10 Slots
+                        {(myActiveMatch.squadData?.slots?.filter(s => s.staked).length || 1)}/10 Slots Staked
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-neutral-300 font-mono mt-0.5">
-                    Pot: <strong className="text-amber-400">₦{myActiveMatch.potAmount.toLocaleString()}</strong> · Winner Payout: <strong className="text-emerald-400">₦{myActiveMatch.winnerPayout.toLocaleString()}{myActiveMatch.matchType === 'squad' ? ' / player' : ''}</strong>
-                    {myActiveMatch.matchType === 'squad' && <span className="text-neutral-400 font-sans ml-1 text-[11px]">(₦{(myActiveMatch.winnerPayout * 5).toLocaleString()} Team Pool)</span>}
-                  </p>
+                  <div className="text-xs text-neutral-300 font-mono mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span>Pot: <strong className="text-amber-400">₦{myActiveMatch.potAmount.toLocaleString()}</strong></span>
+                    <span>·</span>
+                    <span>Fee: <strong className="text-rose-400">₦{(myActiveMatch.platformFee || 0).toLocaleString()} ({myActiveMatch.platformFeePercentage}%)</strong></span>
+                    <span>·</span>
+                    <span className="text-emerald-400 font-bold bg-emerald-500/15 px-2 py-0.5 rounded border border-emerald-500/30">
+                      Exact Payout: ₦{myActiveMatch.winnerPayout.toLocaleString()}{myActiveMatch.matchType === 'squad' ? ' / winning player' : ''}
+                    </span>
+                    {myActiveMatch.matchType === 'squad' && (
+                      <span className="text-neutral-400 font-sans text-[11px]">
+                        (₦{(myActiveMatch.winnerPayout * 5).toLocaleString()} Team Prize Pool)
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
-              <button onClick={() => setArenaTab('active')} className="w-full sm:w-auto px-6 py-2.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs uppercase flex items-center justify-center gap-2 cursor-pointer transition-all shrink-0">Open Match Room <ArrowRight size={16} /></button>
+              <button
+                onClick={() => setArenaTab('active')}
+                className={`w-full sm:w-auto px-6 py-2.5 font-black rounded-xl text-xs uppercase flex items-center justify-center gap-2 cursor-pointer transition-all shrink-0 ${
+                  myActiveMatch.matchType === 'squad' ? 'bg-emerald-400 hover:bg-emerald-300 text-neutral-950' : 'bg-amber-400 hover:bg-amber-300 text-neutral-950'
+                }`}
+              >
+                Open Match Room <ArrowRight size={16} />
+              </button>
             </div>
           )}
 
@@ -425,7 +448,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                         <span className="font-bold text-amber-400 text-sm">₦{myActiveMatch.potAmount.toLocaleString()}</span>
                       </div>
                       <div className="p-2.5 rounded-xl bg-neutral-900/90 border border-neutral-800">
-                        <span className="text-[10px] text-neutral-400 block uppercase font-sans">OpsSTAKE Rake ({myActiveMatch.platformFeePercentage}%)</span>
+                        <span className="text-[10px] text-neutral-400 block uppercase font-sans">Squad Fee ({myActiveMatch.platformFeePercentage}%)</span>
                         <span className="font-bold text-rose-400 text-sm">-₦{myActiveMatch.platformFee.toLocaleString()}</span>
                       </div>
                       <div className="p-2.5 rounded-xl bg-emerald-500/15 border-2 border-emerald-400/50 shadow">
@@ -441,9 +464,10 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                         <span className="text-emerald-400 font-black text-sm bg-black/60 px-2 py-0.5 rounded border border-emerald-500/40 font-mono">
                           ₦{myActiveMatch.winnerPayout.toLocaleString()}
                         </span>
+                        <span className="text-[10px] text-neutral-400 font-normal font-sans">/ player</span>
                       </span>
                       <span className="text-[11px] text-neutral-400">
-                        All 5 players on winning squad credited ₦{myActiveMatch.winnerPayout.toLocaleString()} each (₦{(myActiveMatch.winnerPayout * 5).toLocaleString()} total)
+                        All 5 players on winning squad credited ₦{myActiveMatch.winnerPayout.toLocaleString()} each (₦{((myActiveMatch.winnerPayout || 0) * 5).toLocaleString()} Team Prize Pool)
                       </span>
                     </div>
                   </div>
