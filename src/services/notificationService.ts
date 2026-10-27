@@ -215,6 +215,8 @@ export async function showBrowserNotification(payload: NotificationPayload): Pro
     tag: payload.tag || `codm_alert_${Date.now()}`,
     data: payload.data || { url: '/arena' },
     requireInteraction: true,
+    silent: false,
+    sound: '/assets/audio/shotgun.mp3'
   };
 
   try {
