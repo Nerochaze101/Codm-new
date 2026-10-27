@@ -15,6 +15,7 @@ import {
   showBrowserNotification,
   NotificationPayload,
 } from './services/notificationService';
+import { playShotgunSound } from './hooks/useSound';
 import { Navbar } from './components/Navbar';
 import { LandingPage } from './components/LandingPage';
 import { AuthPage } from './components/AuthPage';
@@ -85,6 +86,9 @@ function MainApp() {
   const triggerNotificationAlert = useCallback((payload: NotificationPayload) => {
     showBrowserNotification(payload);
     setActiveToast(payload);
+    
+    // Play custom tactical shotgun sound for all incoming alerts
+    playShotgunSound();
 
     setNotifications((prev) => {
       const filtered = prev.filter((n) => n.id !== payload.id);

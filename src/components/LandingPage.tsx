@@ -9,6 +9,8 @@ import {
 import { CODM_IMAGES } from '../assets/images';
 import { calculateMatchEconomics, TIERED_COMMISSION_SCHEDULE } from '../utils/pricing';
 import { Logo } from './Logo';
+import { playShotgunSound } from '../hooks/useSound';
+import { useEffect } from 'react';
 
 export interface LandingPageProps {
   matches: Match[];
@@ -54,6 +56,15 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   const [calcStake, setCalcStake] = useState<number>(100);
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+
+  // Home Screen Entry Sound (Tactical Ready Chime)
+  useEffect(() => {
+    // Small delay to ensure user interaction context if they clicked a link
+    const timer = setTimeout(() => {
+      playShotgunSound();
+    }, 500);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Filter open challenges
   const openChallenges = matches.filter(
@@ -155,6 +166,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             alt="CODM Action Hero"
             className="w-full h-full object-cover object-center opacity-25"
             referrerPolicy="no-referrer"
+            loading="eager" // Hero image should load fast
+            fetchPriority="high"
             onError={(e) => {
               (e.target as HTMLImageElement).src = CODM_IMAGES.heroActionFallback;
             }}
@@ -423,6 +436,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 alt="Solo 1v1"
                 className="w-full h-full object-cover opacity-20 group-hover:scale-105 transition-transform duration-500"
                 referrerPolicy="no-referrer"
+                loading="lazy"
                 onError={(e) => {
                   (e.target as HTMLImageElement).src = CODM_IMAGES.shipment1v1Fallback;
                 }}
@@ -474,6 +488,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 alt="Squad Team"
                 className="w-full h-full object-cover opacity-20 group-hover:scale-105 transition-transform duration-500"
                 referrerPolicy="no-referrer"
+                loading="lazy"
                 onError={(e) => {
                   (e.target as HTMLImageElement).src = CODM_IMAGES.squadTacticalFallback;
                 }}

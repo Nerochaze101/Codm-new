@@ -14,10 +14,11 @@ import { MatchLobbyChat } from './MatchLobbyChat';
 import { calculateAbandonedMatchRefund } from '../utils/feeCalculator';
 import { requestNotificationPermission, getNotificationPermission, isIOS, isStandalone } from '../services/notificationService';
 import { IOSNotificationGuideModal } from './IOSNotificationGuideModal';
+import { playShotgunSound } from '../hooks/useSound';
 
 const CardBackground = () => (
   <div className="absolute inset-0 z-0 opacity-10">
-    <img src={CODM_IMAGES.cardBgSubtle} alt="" className="w-full h-full object-cover" />
+    <img src={CODM_IMAGES.cardBgSubtle} alt="" className="w-full h-full object-cover" loading="lazy" />
     <div className="absolute inset-0 bg-neutral-900/60" />
   </div>
 );
@@ -131,8 +132,20 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   }, [myActiveMatch, serverTimeOffset]);
 
   useEffect(() => {
-    if (myActiveMatch && ['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(myActiveMatch.status)) setArenaTab('active');
+    if (myActiveMatch && ['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(myActiveMatch.status)) {
+      setArenaTab('active');
+      // Play tactical sound when entering an active match room
+      playShotgunSound();
+    }
   }, [myActiveMatch?.status]);
+
+  useEffect(() => {
+    // Play entry sound on mount for the Arena
+    const timer = setTimeout(() => {
+      playShotgunSound();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, []);
 
   const openChallenges = matches.filter(m => m.status === 'PENDING_OPPONENT_STAKE' && m.isPublic !== false);
   const myHostedBets = matches.filter(m => m.creator.id === currentUser.id && m.status === 'PENDING_OPPONENT_STAKE');
@@ -377,7 +390,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
       {arenaTab === 'active' && (
         myActiveMatch ? (
           <div className="relative overflow-hidden rounded-2xl bg-neutral-900 border border-amber-500/40 p-5 sm:p-6 shadow-xl space-y-5 group">
-            <div className="absolute inset-0 z-0 opacity-20"><img src={CODM_IMAGES.matchRoomBg} className="w-full h-full object-cover" alt="" /><div className="absolute inset-0 bg-neutral-950/80" /></div>
+            <div className="absolute inset-0 z-0 opacity-20"><img src={CODM_IMAGES.matchRoomBg} className="w-full h-full object-cover" alt="" loading="lazy" /><div className="absolute inset-0 bg-neutral-950/80" /></div>
             
             <div className="relative z-10 flex flex-wrap items-center justify-between gap-3 pb-3.5 border-b border-neutral-800/80">
               <div className="flex items-center gap-3">
