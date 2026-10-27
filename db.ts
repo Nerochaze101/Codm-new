@@ -283,7 +283,9 @@ export async function initDatabase() {
         settled_at BIGINT,
         result_submitted_at BIGINT,
         result_submitted_by VARCHAR(255),
-        is_public BOOLEAN DEFAULT true
+        is_public BOOLEAN DEFAULT true,
+        creator_screenshot TEXT,
+        opponent_screenshot TEXT
       );
 
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS match_duration_minutes INT DEFAULT 15;

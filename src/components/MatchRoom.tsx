@@ -962,6 +962,15 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                 </div>
 
                 <div className="p-4 rounded-xl bg-neutral-900 border border-neutral-800 space-y-3">
+                  {match.conflictRetries && match.conflictRetries > 0 && (
+                    <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg flex items-start gap-2.5 mb-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="text-[11px] font-black text-amber-400 uppercase tracking-wider">Conflict Retry Attempt {match.conflictRetries} of 3</div>
+                        <p className="text-[10px] text-neutral-300">A conflict was detected. Both players must re-confirm their result. If conflict persists after 3 retries, scoreboard screenshots will be required.</p>
+                      </div>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-neutral-400 font-bold uppercase tracking-wider">Your Submitted Outcome:</span>
                     <span className={`text-xs font-black px-2.5 py-1 rounded-lg border font-mono ${
@@ -979,10 +988,12 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                     <Clock className="w-5 h-5 text-amber-400 shrink-0 mt-0.5 animate-spin" />
                     <div className="space-y-1 text-xs">
                       <div className="font-bold text-white">
-                        Waiting for {opponentObj?.codmIgn || 'Opponent'} to confirm on their screen...
+                        {match.conflictRetries && match.conflictRetries > 0 
+                          ? 'Waiting for rival to re-confirm result...'
+                          : `Waiting for ${opponentObj?.codmIgn || 'Opponent'} to confirm on their screen...`}
                       </div>
                       <p className="text-neutral-400 text-[11px] leading-relaxed">
-                        The referee system will not declare a winner or loser until both players have submitted. Once {opponentObj?.codmIgn || 'your rival'} confirms, the match will settle immediately and funds will be released!
+                        The referee system will not declare a winner or loser until both players have submitted identical results. Once {opponentObj?.codmIgn || 'your rival'} confirms, the match will settle immediately and funds will be released!
                       </p>
                     </div>
                   </div>

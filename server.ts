@@ -230,6 +230,8 @@ export interface Match {
     timestamp: number;
   };
   conflictRetries?: number;
+  creatorScreenshot?: string;
+  opponentScreenshot?: string;
 }
 
 // SQL escape helper to maintain compatibility with Supabase transaction pooler (PgBouncer)
@@ -331,7 +333,7 @@ async function getUserFromDb(idOrEmail: string): Promise<UserProfile | null> {
   try {
     if (!idOrEmail) return null;
     const userRes = await pool.query(
-      `SELECT * FROM users WHERE id = $1 OR LOWER(email) = LOWER($1) LIMIT 1`,
+      `SELECT id, username, codm_ign, codm_uid, email, phone, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, telegram_chat_id, telegram_username, is_flagged, flag_reason, flagged_with_user_id, flag_matches FROM users WHERE id = $1 OR LOWER(email) = LOWER($1) LIMIT 1`,
       [idOrEmail]
     );
     if (userRes.rows.length === 0) return null;
@@ -388,7 +390,7 @@ async function getUserByEmailOrIgn(identifier: string): Promise<{ user: UserProf
   try {
     const cleanIdent = identifier.trim().toLowerCase();
     const userRes = await pool.query(
-      `SELECT * FROM users WHERE LOWER(email) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(codm_ign) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(username) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(referral_code) = LOWER(${escapeSql(cleanIdent)})`
+      `SELECT id, username, codm_ign, codm_uid, email, phone, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, telegram_chat_id, telegram_username, is_flagged, flag_reason, flagged_with_user_id, flag_matches, password_hash FROM users WHERE LOWER(email) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(codm_ign) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(username) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(referral_code) = LOWER(${escapeSql(cleanIdent)})`
     );
     if (userRes.rows.length === 0) return null;
     const r = userRes.rows[0];
@@ -570,6 +572,8 @@ async function getMatchFromDb(id: string): Promise<Match | null> {
       roomGeneratedAt: m.room_generated_at ? parseInt(m.room_generated_at, 10) : undefined,
       isPublic: m.is_public ?? true,
       conflictRetries: parseInt(m.conflict_retries || '0', 10),
+      creatorScreenshot: m.creator_screenshot || undefined,
+      opponentScreenshot: m.opponent_screenshot || undefined,
     };
   } catch (err) {
     console.error(`Error getting match ${id} from DB:`, err);
@@ -579,7 +583,16 @@ async function getMatchFromDb(id: string): Promise<Match | null> {
 
 async function getAllMatchesFromDb(): Promise<Match[]> {
   try {
-    const res = await pool.query('SELECT * FROM matches ORDER BY created_at DESC LIMIT 100');
+    const res = await pool.query(`
+      SELECT id, challenge_code, room_code, game_mode, map, rules, stake_amount, pot_amount, 
+             platform_fee_percentage, platform_fee, winner_payout, match_duration_minutes, 
+             match_type, squad_data, status, created_at, creator_id, creator_data, 
+             opponent_id, opponent_data, winner_id, winner_ign, resolution_notes, 
+             chat_messages, room_generated_at, settled_at, is_public, conflict_retries
+      FROM matches 
+      ORDER BY created_at DESC 
+      LIMIT 100
+    `);
     return res.rows.map((m) => ({
       id: m.id,
       challengeCode: m.challenge_code,
@@ -606,6 +619,7 @@ async function getAllMatchesFromDb(): Promise<Match[]> {
       roomGeneratedAt: m.room_generated_at ? parseInt(m.room_generated_at, 10) : undefined,
       isPublic: m.is_public ?? true,
       conflictRetries: parseInt(m.conflict_retries || '0', 10),
+      // screenshots excluded for list performance!
     }));
   } catch (err) {
     console.error('Error getting matches from DB:', err);
@@ -615,12 +629,22 @@ async function getAllMatchesFromDb(): Promise<Match[]> {
 
 async function saveMatchToDb(match: any) {
   try {
+    const creatorToSave = { ...match.creator };
+    const opponentToSave = match.opponent ? { ...match.opponent } : null;
+    const creatorScreenshot = creatorToSave.screenshotUrl;
+    const opponentScreenshot = opponentToSave ? opponentToSave.screenshotUrl : null;
+
+    // Prune massive Base64 screenshots from JSON for performance
+    delete creatorToSave.screenshotUrl;
+    if (opponentToSave) delete opponentToSave.screenshotUrl;
+
     await pool.query(`
       INSERT INTO matches (
         id, challenge_code, room_code, game_mode, map, rules,
         stake_amount, pot_amount, platform_fee_percentage, platform_fee, winner_payout,
         match_duration_minutes, match_type, squad_data, status, creator_id, creator_data, opponent_id, opponent_data,
-        winner_id, winner_ign, resolution_notes, chat_messages, created_at, room_generated_at, settled_at, is_public, conflict_retries
+        winner_id, winner_ign, resolution_notes, chat_messages, created_at, room_generated_at, settled_at, is_public, conflict_retries,
+        creator_screenshot, opponent_screenshot
       )
       VALUES (
         ${escapeSql(match.id)},
@@ -639,9 +663,9 @@ async function saveMatchToDb(match: any) {
         ${match.squadData ? escapeSql(match.squadData) : 'NULL'},
         ${escapeSql(match.status)},
         ${escapeSql(match.creator.id)},
-        ${escapeSql(match.creator)},
+        ${escapeSql(creatorToSave)},
         ${match.opponent ? escapeSql(match.opponent.id) : 'NULL'},
-        ${match.opponent ? escapeSql(match.opponent) : 'NULL'},
+        ${opponentToSave ? escapeSql(opponentToSave) : 'NULL'},
         ${escapeSql(match.winnerId || null)},
         ${escapeSql(match.winnerIgn || null)},
         ${escapeSql(match.resolutionNotes || null)},
@@ -650,7 +674,9 @@ async function saveMatchToDb(match: any) {
         ${escapeSql(match.roomGeneratedAt || null)},
         ${escapeSql(match.settled_at || match.settledAt || null)},
         ${escapeSql(match.isPublic !== false)},
-        ${escapeSql(match.conflictRetries || 0)}
+        ${escapeSql(match.conflictRetries || 0)},
+        ${escapeSql(creatorScreenshot || null)},
+        ${escapeSql(opponentScreenshot || null)}
       )
       ON CONFLICT (id) DO UPDATE SET
         room_code = EXCLUDED.room_code,
@@ -672,7 +698,9 @@ async function saveMatchToDb(match: any) {
         room_generated_at = EXCLUDED.room_generated_at,
         settled_at = EXCLUDED.settled_at,
         is_public = EXCLUDED.is_public,
-        conflict_retries = EXCLUDED.conflict_retries;
+        conflict_retries = EXCLUDED.conflict_retries,
+        creator_screenshot = EXCLUDED.creator_screenshot,
+        opponent_screenshot = EXCLUDED.opponent_screenshot;
     `);
 
     try {
@@ -797,7 +825,7 @@ app.post('/api/inbound-email', express.json({ limit: '5mb' }), async (req, res) 
 });
 
 // Public Profile Sanitization Helpers to prevent PII (email, bank info, phone) leakage
-export function sanitizePublicPlayerProfile(player: any): any {
+export function sanitizePublicPlayerProfile(player: any, includeScreenshot: boolean = false): any {
   if (!player) return undefined;
   return {
     id: player.id,
@@ -808,7 +836,7 @@ export function sanitizePublicPlayerProfile(player: any): any {
     staked: Boolean(player.staked),
     resultClaim: player.resultClaim,
     submittedAt: player.submittedAt,
-    screenshotUrl: player.screenshotUrl,
+    screenshotUrl: includeScreenshot ? player.screenshotUrl : undefined,
     screenshotAnalysis: player.screenshotAnalysis,
     systemAiDetection: player.systemAiDetection,
     forensicAnalysis: player.forensicAnalysis,
@@ -817,12 +845,22 @@ export function sanitizePublicPlayerProfile(player: any): any {
   };
 }
 
-export function sanitizeMatchForPublic(match: Match): Match {
+export function sanitizeMatchForPublic(match: Match, includeScreenshots: boolean = false): Match {
   if (!match) return match;
+  
+  const creator = sanitizePublicPlayerProfile(match.creator, includeScreenshots);
+  const opponent = match.opponent ? sanitizePublicPlayerProfile(match.opponent, includeScreenshots) : undefined;
+
+  // If including screenshots, pull them from the separate columns if they aren't already in the objects
+  if (includeScreenshots) {
+    if (match.creatorScreenshot && !creator.screenshotUrl) creator.screenshotUrl = match.creatorScreenshot;
+    if (match.opponent && match.opponentScreenshot && !opponent.screenshotUrl) opponent.screenshotUrl = match.opponentScreenshot;
+  }
+
   return {
     ...match,
-    creator: sanitizePublicPlayerProfile(match.creator),
-    opponent: match.opponent ? sanitizePublicPlayerProfile(match.opponent) : undefined,
+    creator,
+    opponent,
   };
 }
 
@@ -5384,7 +5422,8 @@ app.get('/api/matches', async (req, res) => {
 app.get('/api/matches/:id', async (req, res) => {
   const match = await getMatchFromDb(req.params.id);
   if (!match) return res.status(404).json({ error: 'Match not found' });
-  res.json(sanitizeMatchForPublic(match));
+  // Always include screenshots for single match detail view
+  res.json(sanitizeMatchForPublic(match, true));
 });
 
 // Helper to calculate squad economics for 5v5 matches with dedicated squad platform fee (default 5%)
@@ -6673,16 +6712,14 @@ app.post('/api/matches/:id/submit-result', rateLimitMiddleware(15, 60000), secur
         id: `msg_${Date.now()}`,
         senderId: 'SYSTEM',
         senderName: 'CODM Referee Bot',
-        text: `📸 ${playerIgn} submitted dispute scoreboard screenshot: ${analysisResult.detectedOutcome} (${Math.round((analysisResult.confidence || 0.95) * 100)}% Confidence).`,
+        text: `📸 ${playerIgn} submitted dispute scoreboard screenshot. Manual review required by admin.`,
         timestamp: Date.now(),
       });
 
-      // Auto-resolve dispute if screenshot clearly shows victory
-      if (analysisResult.detectedOutcome === 'VICTORY' && (analysisResult.confidence || 0) >= 0.8) {
-        resolveWinner = isCreator ? 'creator' : 'opponent';
-      } else if (analysisResult.detectedOutcome === 'DEFEAT') {
-        resolveWinner = isCreator ? 'opponent' : 'creator';
-      }
+      // DISBALE AUTO-RESOLUTION: Once screenshots are involved in a dispute, ONLY admin can resolve.
+      resolveWinner = null; 
+      match.status = 'DISPUTED';
+      match.resolutionNotes = `Awaiting referee review of screenshots submitted by ${playerIgn}. Pot ₦${match.potAmount.toLocaleString()} remains locked.`;
     } else {
       match.chatMessages.push({
         id: `msg_${Date.now()}`,

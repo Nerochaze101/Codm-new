@@ -161,6 +161,9 @@ export interface Match {
     timestamp: number;
   };
   isPublic?: boolean;
+  conflictRetries?: number;
+  creatorScreenshot?: string;
+  opponentScreenshot?: string;
 }
 
 
