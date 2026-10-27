@@ -80,9 +80,10 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   const [isMicActive, setIsMicActive] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
-  const [opponentSpeaking, setOpponentSpeaking] = useState(false);
-  const [micLevel, setMicLevel] = useState(0);
   const [audioError, setAudioError] = useState<string | null>(null);
+  const [opponentPresence, setOpponentPresence] = useState<boolean>(false);
+  const [isOpponentTyping, setIsOpponentTyping] = useState<boolean>(false);
+  const [isTtsEnabled, setIsTtsEnabled] = useState<boolean>(true);
 
   const socketRef = useRef<Socket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -92,6 +93,29 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   const nextPlayTimeRef = useRef<number>(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isSpeakingRef = useRef<boolean>(false);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const myTypingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const ttsQueueRef = useRef<string[]>([]);
+
+  const speakMessage = useCallback((text: string, senderName: string) => {
+    if (!isTtsEnabled) return;
+    
+    try {
+      const utterance = new SpeechSynthesisUtterance(`${senderName} says: ${text}`);
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      utterance.volume = 1.0;
+      
+      // Attempt to use a more "tactical" or professional voice if available
+      const voices = window.speechSynthesis.getVoices();
+      const preferredVoice = voices.find(v => v.name.includes('Google UK English Male') || v.name.includes('Daniel'));
+      if (preferredVoice) utterance.voice = preferredVoice;
+
+      window.speechSynthesis.speak(utterance);
+    } catch (err) {
+      console.warn('Speech synthesis failed:', err);
+    }
+  }, [isTtsEnabled]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -241,19 +265,53 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   };
 
   useEffect(() => {
-    const socket = io('/', { query: { matchId, userId: currentUser.id } });
+    console.log(`[Chat] Initializing socket for match ${matchId}`);
+    const socket = io('/', { 
+      query: { matchId, userId: currentUser.id },
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
+      timeout: 20000
+    });
     socketRef.current = socket;
 
     socket.on('connect', () => {
       setIsConnected(true);
-      socket.emit('joinMatch', { matchId });
+      socket.emit('joinMatch', { matchId, userId: currentUser.id });
     });
 
     socket.on('disconnect', () => setIsConnected(false));
 
+    socket.on('presence', (data) => {
+      if (data.matchId === matchId) {
+        // If there's at least one user other than me, opponent is "present"
+        const others = data.users.filter((uid: string) => uid !== currentUser.id);
+        const isPresent = others.length > 0;
+        
+        setOpponentPresence(prev => {
+          if (!prev && isPresent) {
+            // Opponent just entered! Play tactical sound if not me
+            try {
+              const audio = new Audio('/assets/audio/shotgun.mp3');
+              audio.volume = 0.4;
+              audio.play().catch(() => {});
+            } catch (e) {}
+          }
+          return isPresent;
+        });
+      }
+    });
+
     socket.on('chat', (msg: ChatMessage) => {
+      setIsOpponentTyping(false); // Stop typing indicator on message arrival
       setMessages(prev => {
         if (prev.some(m => m.id === msg.id)) return prev;
+        
+        // Speak message if it's from opponent
+        if (msg.senderId !== currentUser.id) {
+          speakMessage(msg.text, msg.senderName || opponentName);
+        }
+        
         return [...prev, msg];
       });
     });
@@ -282,6 +340,18 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
 
     socket.on('mic_state', (data) => {
       if (data.userId !== currentUser.id) setOpponentSpeaking(data.isSpeaking);
+    });
+
+    socket.on('typing', (data) => {
+      if (data.userId !== currentUser.id) {
+        setIsOpponentTyping(data.isTyping);
+        
+        // Auto-clear after 4s if no stop event
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        if (data.isTyping) {
+          typingTimeoutRef.current = setTimeout(() => setIsOpponentTyping(false), 4000);
+        }
+      }
     });
 
     return () => {
@@ -314,6 +384,19 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
     setTimeout(() => setIsSending(false), 200);
   };
 
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setInputText(e.target.value);
+    
+    // Emit typing start
+    socketRef.current?.emit('typing', { matchId, userId: currentUser.id, isTyping: true });
+    
+    // Reset timeout to emit typing stop
+    if (myTypingTimeoutRef.current) clearTimeout(myTypingTimeoutRef.current);
+    myTypingTimeoutRef.current = setTimeout(() => {
+      socketRef.current?.emit('typing', { matchId, userId: currentUser.id, isTyping: false });
+    }, 2000);
+  };
+
   return (
     <div className="flex flex-col h-[520px] bg-[#0c1317] rounded-3xl border border-neutral-800 shadow-2xl overflow-hidden font-sans select-none">
       {/* Header */}
@@ -328,10 +411,21 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <span className="text-white font-bold text-sm">{opponentName}</span>
-              {opponentSpeaking && (
+              {opponentPresence ? (
                 <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-widest flex items-center gap-1">
                   <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />
-                  Live
+                  Online
+                </span>
+              ) : (
+                <span className="text-[10px] text-neutral-500 font-bold uppercase tracking-widest flex items-center gap-1">
+                  <div className="w-1.5 h-1.5 bg-neutral-600 rounded-full" />
+                  Offline
+                </span>
+              )}
+              {opponentSpeaking && (
+                <span className="text-[10px] text-amber-400 font-bold uppercase tracking-widest flex items-center gap-1">
+                  <div className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-bounce" />
+                  Speaking
                 </span>
               )}
             </div>
@@ -352,6 +446,13 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setIsTtsEnabled(!isTtsEnabled)}
+            className={`p-2 rounded-full transition-all ${isTtsEnabled ? 'bg-amber-500/20 text-amber-400' : 'bg-neutral-800 text-neutral-500'}`}
+            title={isTtsEnabled ? 'Disable Text-to-Speech' : 'Enable Text-to-Speech'}
+          >
+            {isTtsEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+          </button>
           {isMicActive && (
             <button
               onClick={() => setIsMuted(!isMuted)}
@@ -414,6 +515,19 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
             </div>
           );
         })}
+
+        {isOpponentTyping && (
+          <div className="flex justify-start animate-in slide-in-from-left-2 duration-300">
+            <div className="bg-[#202c33] px-3 py-2 rounded-2xl rounded-tl-none border border-white/5 flex items-center gap-1.5 shadow-md">
+              <div className="flex gap-1">
+                <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
+                <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
+                <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-bounce" />
+              </div>
+              <span className="text-[10px] text-neutral-400 font-bold uppercase tracking-widest italic">{opponentName} is typing...</span>
+            </div>
+          </div>
+        )}
         <div ref={messagesEndRef} />
       </div>
 
@@ -422,7 +536,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
         <input
           type="text"
           value={inputText}
-          onChange={e => setInputText(e.target.value)}
+          onChange={handleInputChange}
           onKeyDown={e => e.key === 'Enter' && handleSend()}
           disabled={isSettled}
           placeholder="Type message..."

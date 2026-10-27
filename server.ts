@@ -8092,12 +8092,34 @@ async function startServer() {
   globalIo = io;
   (app as any).io = io;
 
+  const roomUsers = new Map<string, Set<string>>();
+
   io.on('connection', (socket) => {
+    let currentMatchId: string | null = null;
+    let currentUserId: string | null = null;
+
     // Client joins match room
     socket.on('joinMatch', (data) => {
       const matchId = typeof data === 'string' ? data : data?.matchId;
+      const userId = data?.userId;
+      
       if (matchId) {
         socket.join(matchId);
+        currentMatchId = matchId;
+        
+        if (userId) {
+          currentUserId = userId;
+          if (!roomUsers.has(matchId)) {
+            roomUsers.set(matchId, new Set());
+          }
+          roomUsers.get(matchId)!.add(userId);
+          
+          // Broadcast presence update
+          io.to(matchId).emit('presence', {
+            matchId,
+            users: Array.from(roomUsers.get(matchId)!)
+          });
+        }
       }
     });
 
@@ -8176,6 +8198,16 @@ async function startServer() {
       }
     });
 
+    // Real-time typing indicator relay
+    socket.on('typing', (data) => {
+      if (data && data.matchId) {
+        socket.to(data.matchId).emit('typing', {
+          userId: data.userId,
+          isTyping: data.isTyping
+        });
+      }
+    });
+
     // Clear chat handler
     socket.on('clear_chat', async (data) => {
       const matchId = typeof data === 'string' ? data : data?.matchId;
@@ -8206,7 +8238,20 @@ async function startServer() {
     });
 
     socket.on('disconnect', () => {
-      // socket disconnected
+      if (currentMatchId && currentUserId) {
+        const users = roomUsers.get(currentMatchId);
+        if (users) {
+          users.delete(currentUserId);
+          if (users.size === 0) {
+            roomUsers.delete(currentMatchId);
+          } else {
+            io.to(currentMatchId).emit('presence', {
+              matchId: currentMatchId,
+              users: Array.from(users)
+            });
+          }
+        }
+      }
     });
   });
 

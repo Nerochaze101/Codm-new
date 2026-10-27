@@ -82,6 +82,18 @@ function MainApp() {
     initNotificationService();
   }, []);
 
+  const speakChatMessage = useCallback((text: string, senderName: string) => {
+    try {
+      const utterance = new SpeechSynthesisUtterance(`${senderName} says: ${text}`);
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      utterance.volume = 1.0;
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      // fallback
+    }
+  }, []);
+
   // Centralized alert dispatcher (vibrates phone, plays chime, shows lock-screen notification + toast)
   const triggerNotificationAlert = useCallback((payload: NotificationPayload) => {
     showBrowserNotification(payload);
@@ -186,6 +198,11 @@ function MainApp() {
           url: '/arena',
         },
       });
+      
+      // Speak out the message if app is minimized or user is on another page
+      if (location.pathname !== '/arena' || !document.hasFocus()) {
+        speakChatMessage(chatAlert.text, chatAlert.senderName);
+      }
     });
 
     socket.on('matchUpdated', (updatedMatch: Match) => {
