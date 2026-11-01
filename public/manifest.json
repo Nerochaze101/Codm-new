@@ -11,21 +11,21 @@
   "theme_color": "#f59e0b",
   "icons": [
     {
-      "src": "/assets/aistudio/IMG_2853_9c73529e.jpeg",
+      "src": "/logo.png",
       "sizes": "180x180",
-      "type": "image/jpeg",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/assets/aistudio/IMG_2853_9c73529e.jpeg",
+      "src": "/logo.png",
       "sizes": "192x192",
-      "type": "image/jpeg",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/assets/aistudio/IMG_2853_9c73529e.jpeg",
+      "src": "/logo.png",
       "sizes": "512x512",
-      "type": "image/jpeg",
+      "type": "image/png",
       "purpose": "any"
     }
   ]

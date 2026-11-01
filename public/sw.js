@@ -4,7 +4,7 @@ const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
   '/manifest.json',
-  '/assets/aistudio/IMG_2853_9c73529e.jpeg',
+  '/logo.png',
 ];
 
 self.addEventListener('install', (event) => {
@@ -113,8 +113,8 @@ self.addEventListener('push', (event) => {
   const title = data.title || '⚔️ CODM Match Alert';
   const options = {
     body: data.body || 'Your challenge has an update.',
-    icon: data.icon || '/assets/aistudio/IMG_2853_9c73529e.jpeg',
-    badge: data.badge || '/assets/aistudio/IMG_2853_9c73529e.jpeg',
+    icon: data.icon || '/logo.png',
+    badge: data.badge || '/logo.png',
     vibrate: [200, 100, 200, 100, 250],
     data: data.data || { url: '/arena' },
     tag: data.tag || `codm_alert_${Date.now()}`,
