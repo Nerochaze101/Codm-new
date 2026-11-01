@@ -113,7 +113,12 @@ if (process.env.GEMINI_API_KEY) {
 async function sendEmail(to: string, subject: string, html: string) {
   try {
     const resendKey = process.env.RESEND_API_KEY;
-    const senderEmail = process.env.SENDER_EMAIL || 'noreply@opsstake.online';
+    let senderEmail = process.env.SENDER_EMAIL || 'noreply@opsstake.online';
+    
+    // Ensure senderEmail is actually an email address, not just a name
+    if (!senderEmail.includes('@')) {
+      senderEmail = 'noreply@opsstake.online';
+    }
 
     if (!resendKey) {
       console.warn('[Email Service] RESEND_API_KEY not configured. Outbound email blocked.');
@@ -3924,7 +3929,7 @@ app.post('/api/auth/register', async (req, res) => {
     // Send Welcome Email
     sendEmail(
       newUser.email,
-      '⚔️ Welcome to the OpsSTAKE Arena!',
+      'Welcome to the OpsSTAKE Arena!',
       `
       <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: auto; padding: 30px; border: 1px solid #222; background: #0a0a0a; color: #eee; border-radius: 12px;">
         <div style="text-align: center; margin-bottom: 30px;">
@@ -4005,7 +4010,7 @@ app.post('/api/auth/request-verification', async (req, res) => {
         type = EXCLUDED.type
     `, [cleanEmail, code, expiresAt, type]);
 
-    const subject = type === 'RESET_PASSWORD' ? '🔑 Password Reset Code - OpsSTAKE' : '🛡️ Verification Code - OpsSTAKE';
+    const subject = type === 'RESET_PASSWORD' ? 'Password Reset Code - OpsSTAKE' : 'Verification Code - OpsSTAKE';
     const actionText = type === 'RESET_PASSWORD' ? 'reset your password' : 'create your account';
 
     const sent = await sendEmail(
