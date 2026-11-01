@@ -287,6 +287,19 @@ export async function abandonMatch(matchId: string, reason?: string): Promise<{ 
   return await parseResponse<{ success: boolean; match: Match; data: any }>(res);
 }
 
+export async function sendMutualAction(
+  matchId: string,
+  userId: string,
+  action: 'REQUEST_RESTART_TIMER' | 'REQUEST_MUTUAL_REFUND' | 'ACCEPT_ACTION' | 'DECLINE_ACTION'
+): Promise<{ success: boolean; match: Match; message: string }> {
+  const res = await fetch(`/api/matches/${matchId}/mutual-action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-User-Id': userId },
+    body: JSON.stringify({ userId, action }),
+  });
+  return await parseResponse<{ success: boolean; match: Match; message: string }>(res);
+}
+
 export async function adminAbandonMatch(matchId: string, adminUserId: string, reason?: string): Promise<{ success: boolean; match: Match; data: any }> {
   const res = await fetch(`/api/msksksnuwje/matches/${matchId}/abandon`, {
     method: 'POST',

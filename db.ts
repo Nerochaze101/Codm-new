@@ -301,6 +301,7 @@ export async function initDatabase() {
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS reviewer_name VARCHAR(255);
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS creator_screenshot TEXT;
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS opponent_screenshot TEXT;
+      ALTER TABLE matches ADD COLUMN IF NOT EXISTS mutual_action_data JSONB;
 
 
       CREATE TABLE IF NOT EXISTS transactions (

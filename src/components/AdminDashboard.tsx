@@ -699,16 +699,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
         </div>
         <div className="text-center space-y-2">
           <h2 className="text-4xl font-black uppercase tracking-tighter text-white">Sector Restricted</h2>
-          <p className="text-neutral-500 max-w-xs mx-auto leading-relaxed">Authorization required. Enter the Admin or Moderator Terminal Passcode to access your Command Center.</p>
+          <p className="text-neutral-500 max-w-xs mx-auto leading-relaxed text-xs">Access restricted to verified staff members. Security credentials required to initialize session.</p>
         </div>
         <form onSubmit={async (e) => { e.preventDefault(); try { await claimAdminRole(currentUser.id, adminPasscode.trim()); window.location.reload(); } catch(err:any) { setClaimMsg(err.message); } }} className="w-full space-y-4">
           <div className="space-y-1.5">
-            <label className="text-[10px] font-black text-neutral-500 uppercase tracking-widest ml-4">Terminal Passcode</label>
-            <input type="password" value={adminPasscode} onChange={e => setAdminPasscode(e.target.value)} placeholder="••••••••" className="w-full bg-black border border-neutral-800 rounded-2xl px-6 py-5 text-center font-mono tracking-[1em] focus:border-amber-400 focus:outline-none transition-all placeholder:tracking-normal placeholder:font-sans" />
-            <p className="text-[10px] text-neutral-500 text-center pt-1 font-mono">Accepts Administrator or Moderator passcodes</p>
+            <label className="text-[10px] font-black text-neutral-500 uppercase tracking-widest ml-4">Authorization Key</label>
+            <input
+              type="password"
+              name="auth_key"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              value={adminPasscode}
+              onChange={e => setAdminPasscode(e.target.value)}
+              placeholder="••••••••"
+              className="w-full bg-black border border-neutral-800 rounded-2xl px-6 py-5 text-center font-mono tracking-[1em] focus:border-amber-400 focus:outline-none transition-all placeholder:tracking-normal placeholder:font-sans"
+            />
           </div>
           {claimMsg && <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-500 text-[10px] font-black uppercase tracking-widest text-center rounded-xl">{claimMsg}</div>}
-          <button type="submit" className="w-full bg-amber-400 text-black font-black py-5 rounded-2xl uppercase tracking-[0.2em] hover:bg-amber-300 transition-all active:scale-[0.98] shadow-lg shadow-amber-400/20">Authorize Terminal</button>
+          <button type="submit" className="w-full bg-amber-400 text-black font-black py-5 rounded-2xl uppercase tracking-[0.2em] hover:bg-amber-300 transition-all active:scale-[0.98] shadow-lg shadow-amber-400/20">Authenticate Session</button>
         </form>
       </div>
     );
@@ -1899,12 +1909,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                             </div>
                           </td>
                           <td className="px-10 py-7">
-                             <span className={`px-4 py-1.5 rounded-full text-[9px] font-black border tracking-widest ${u.role === 'admin' ? 'bg-rose-500/10 border-rose-500/20 text-rose-500' : 'bg-neutral-800/50 border-neutral-700/50 text-neutral-500'}`}>
+                             <span className={`px-4 py-1.5 rounded-full text-[9px] font-black border tracking-widest ${u.role === 'admin' ? 'bg-rose-500/10 border-rose-500/20 text-rose-500' : u.role === 'banned' ? 'bg-rose-950/40 border-rose-500/40 text-rose-400 font-bold' : 'bg-neutral-800/50 border-neutral-700/50 text-neutral-500'}`}>
                                {u.role.toUpperCase()}
                              </span>
                           </td>
                           <td className="px-10 py-7 text-right">
                              <div className="flex items-center justify-end gap-3">
+                               {u.role === 'banned' && (
+                                 <button
+                                   onClick={async () => {
+                                     if (confirm(`Unban account for ${u.codmIgn}?`)) {
+                                       try {
+                                         await unbanAccount(currentUser.id, u.id);
+                                         loadUsers();
+                                       } catch (err: any) {
+                                         alert(err.message || 'Failed to unban account');
+                                       }
+                                     }
+                                   }}
+                                   className="p-3 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 rounded-2xl transition-all border border-emerald-500/20 active:scale-90"
+                                   title="Unban Account"
+                                 >
+                                   <UserCheck size={18} />
+                                 </button>
+                               )}
                                <button 
                                 onClick={() => setBalanceModal({ ...balanceModal, isOpen: true, user: u })} 
                                 className="p-3 bg-neutral-800 hover:bg-amber-400/10 text-amber-400 rounded-2xl transition-all border border-neutral-800 hover:border-amber-400/40 active:scale-90"

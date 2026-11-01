@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { Logo } from './Logo';
+import { TermsModal } from './TermsModal';
 import { requestVerification, resetPassword } from '../services/api';
 
 interface AuthPageProps {
@@ -80,6 +81,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams();
   const defaultRef = urlParams.get('ref') || initialReferralCode || '';
   const [signupReferralCode, setSignupReferralCode] = useState(defaultRef);
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
 
   // Sign In Form State
   const [signinIdentifier, setSigninIdentifier] = useState('');
@@ -205,6 +208,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({
     }
     if (!signupAccountName.trim()) {
       setError('Please wait for account resolution or enter your official legal account name');
+      return;
+    }
+    if (!agreedToTerms) {
+      setError('You must read and agree to the Terms of Service & Arena Protocols (including the No Auto-Settlement & Mutual Agreement policy for abandoned matches) before signing up.');
       return;
     }
 
@@ -625,12 +632,38 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                 )}
               </div>
 
+              {/* Mandatory Terms & Conditions Agreement */}
+              <div className="p-3.5 rounded-2xl bg-neutral-950/80 border border-neutral-800 space-y-2">
+                <label className="flex items-start gap-3 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={agreedToTerms}
+                    onChange={(e) => setAgreedToTerms(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 rounded border-neutral-700 bg-neutral-900 text-amber-500 focus:ring-amber-400 focus:ring-offset-0 cursor-pointer shrink-0 accent-amber-400"
+                  />
+                  <div className="text-xs text-neutral-300 leading-snug">
+                    <span>I have read, understood, and agree to the </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowTermsModal(true)}
+                      className="text-amber-400 font-bold underline hover:text-amber-300 cursor-pointer inline"
+                    >
+                      Terms of Service & Arena Protocols
+                    </button>
+                    <span className="text-[10px] text-neutral-400 block mt-1 font-mono">
+                      Strictly No Auto-Settlement: Both users must mutually agree to restart the timer or refund abandoned/stalled bets.
+                    </span>
+                  </div>
+                </label>
+              </div>
+
               {/* Submit Button */}
               <button
                 type="submit"
-                disabled={loading || isResolvingNuban || !codeSent}
+                disabled={loading || isResolvingNuban || !codeSent || !agreedToTerms}
                 className="w-full py-4 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-neutral-950 font-black rounded-2xl text-sm transition-all shadow-xl cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide"
               >
+
                 {loading ? (
                   <span>Registering Secure Profile...</span>
                 ) : (
@@ -866,6 +899,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({
       <div className="relative z-10 max-w-5xl w-full mx-auto text-center pt-6 text-xs text-neutral-500">
         Call of Duty: Mobile Esports Escrow Arena · Minimum Wager ₦100 · 10% Platform Rake
       </div>
+
+      <TermsModal
+        isOpen={showTermsModal}
+        onClose={() => setShowTermsModal(false)}
+        onAccept={() => setAgreedToTerms(true)}
+      />
     </div>
   );
 };
+

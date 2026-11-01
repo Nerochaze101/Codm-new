@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Match, UserProfile } from '../types';
 import { X, Swords, ShieldCheck, Wallet, CheckCircle, ArrowRight, AlertCircle, Sparkles, LogIn } from 'lucide-react';
+import { TermsModal } from './TermsModal';
 
 interface OpponentOnboardingModalProps {
   match: Match | null;
@@ -31,6 +32,8 @@ export const OpponentOnboardingModal: React.FC<OpponentOnboardingModalProps> = (
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('+234 8');
   const [loginIdentifier, setLoginIdentifier] = useState('');
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,6 +43,10 @@ export const OpponentOnboardingModal: React.FC<OpponentOnboardingModalProps> = (
     e.preventDefault();
     if (!codmIgn.trim()) {
       setError('Please enter your Call of Duty: Mobile In-Game Name (IGN)');
+      return;
+    }
+    if (!agreedToTerms) {
+      setError('You must read and agree to the Terms of Service & Arena Protocols (including No Auto-Settlement on abandoned matches) to register.');
       return;
     }
 
@@ -265,9 +272,34 @@ export const OpponentOnboardingModal: React.FC<OpponentOnboardingModalProps> = (
                     </div>
                   </div>
 
+                  {/* Terms & Conditions Checkbox */}
+                  <div className="p-3 rounded-xl bg-neutral-950 border border-neutral-800 space-y-1">
+                    <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={agreedToTerms}
+                        onChange={(e) => setAgreedToTerms(e.target.checked)}
+                        className="mt-0.5 w-4 h-4 rounded border-neutral-700 bg-neutral-900 text-amber-500 focus:ring-amber-400 focus:ring-offset-0 cursor-pointer shrink-0 accent-amber-400"
+                      />
+                      <div className="text-[11px] text-neutral-300 leading-tight">
+                        <span>I have read and agree to the </span>
+                        <button
+                          type="button"
+                          onClick={() => setShowTermsModal(true)}
+                          className="text-amber-400 font-bold underline hover:text-amber-300 cursor-pointer inline"
+                        >
+                          Terms & Arena Protocols
+                        </button>
+                        <span className="text-[10px] text-neutral-400 block mt-0.5 font-mono">
+                          (Strictly No Auto-Settlement: Both users must mutually agree to restart timer or refund)
+                        </span>
+                      </div>
+                    </label>
+                  </div>
+
                   <button
                     type="submit"
-                    disabled={loading}
+                    disabled={loading || !agreedToTerms}
                     className="w-full py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-bold rounded-xl text-sm transition-all cursor-pointer shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 mt-2"
                   >
                     {loading ? 'Creating Account...' : 'Sign Up & Accept Challenge'}
@@ -305,6 +337,13 @@ export const OpponentOnboardingModal: React.FC<OpponentOnboardingModalProps> = (
           )}
         </div>
       </div>
+
+      <TermsModal
+        isOpen={showTermsModal}
+        onClose={() => setShowTermsModal(false)}
+        onAccept={() => setAgreedToTerms(true)}
+      />
     </div>
   );
 };
+

@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { StakePaymentModal } from './StakePaymentModal';
 import { MatchLobbyChat } from './MatchLobbyChat';
+import { sendMutualAction } from '../services/api';
 
 interface MatchRoomProps {
   match: Match;
@@ -59,6 +60,22 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
 
   const [timeLeft, setTimeLeft] = useState<string>('');
   const [isExpired, setIsExpired] = useState<boolean>(false);
+  const [mutualLoading, setMutualLoading] = useState(false);
+  const [mutualMsg, setMutualMsg] = useState<string | null>(null);
+
+  const handleMutualAction = async (action: 'REQUEST_RESTART_TIMER' | 'REQUEST_MUTUAL_REFUND' | 'ACCEPT_ACTION' | 'DECLINE_ACTION') => {
+    try {
+      setMutualLoading(true);
+      setMutualMsg(null);
+      const res = await sendMutualAction(match.id, currentUser.id, action);
+      setMutualMsg(res.message);
+      if (onRefreshMatch) await onRefreshMatch();
+    } catch (err: any) {
+      setMutualMsg(err.message || 'Mutual action failed');
+    } finally {
+      setMutualLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!match.roomGeneratedAt || !match.matchDurationMinutes) return;
@@ -568,6 +585,111 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
         </div>
       )}
 
+      {/* Mutual Agreement Panel for Expired / Stalled Matches (Strictly No Auto-Settlement) */}
+      {(isExpired || match.mutualActionState) && ['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(match.status) && (
+        <div className="p-5 rounded-2xl bg-neutral-900 border-2 border-amber-500/50 space-y-4 shadow-2xl animate-in fade-in duration-300">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
+              <ShieldCheck className="w-5 h-5" />
+            </div>
+            <div className="space-y-1 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-black uppercase tracking-wider text-amber-400">Arena Integrity Notice</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-400 font-bold uppercase">No Auto-Settlement</span>
+              </div>
+              <p className="text-xs text-neutral-300 leading-relaxed">
+                Match countdown timer has exceeded or stalled. Under OPS STAKE arena rules, <strong>there is strictly no automatic settlement</strong>. Neither player can unilaterally claim a refund or restart the timer. <strong>Both players must agree</strong> to restart the timer or void/refund the match.
+              </p>
+            </div>
+          </div>
+
+          {/* Pending Mutual Action State */}
+          {match.mutualActionState ? (
+            <div className="p-4 rounded-xl bg-black border border-amber-500/40 space-y-3">
+              {match.mutualActionState.requestedBy === currentUser.id ? (
+                <div className="space-y-2">
+                  <div className="text-xs text-amber-300 flex items-center gap-2">
+                    <RefreshCw className="w-4 h-4 animate-spin text-amber-400" />
+                    <span>
+                      You requested <strong>{match.mutualActionState.action === 'RESTART_TIMER' ? 'a Countdown Timer Restart' : 'a Mutual 100% Refund'}</strong>.
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-neutral-400">
+                    Waiting for {opponentObj?.codmIgn || 'your rival'} to accept or decline in their match room.
+                  </p>
+                  <button
+                    disabled={mutualLoading}
+                    onClick={() => handleMutualAction('DECLINE_ACTION')}
+                    className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-bold rounded-lg text-xs uppercase cursor-pointer transition-colors"
+                  >
+                    Cancel Request
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="text-xs text-white">
+                    <strong className="text-amber-400">{match.mutualActionState.requestedByName}</strong> has requested to{' '}
+                    <strong>
+                      {match.mutualActionState.action === 'RESTART_TIMER'
+                        ? 'restart the match countdown timer'
+                        : 'mutually void the match with a full 100% refund'}
+                    </strong>. Both players must agree to proceed.
+                  </div>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <button
+                      disabled={mutualLoading}
+                      onClick={() => handleMutualAction('ACCEPT_ACTION')}
+                      className="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs uppercase transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Check className="w-4 h-4 stroke-[3]" />
+                      <span>
+                        {match.mutualActionState.action === 'RESTART_TIMER'
+                          ? 'Agree & Restart Timer'
+                          : 'Agree & Void Match (100% Refund)'}
+                      </span>
+                    </button>
+                    <button
+                      disabled={mutualLoading}
+                      onClick={() => handleMutualAction('DECLINE_ACTION')}
+                      className="px-4 py-2.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 font-bold rounded-xl text-xs uppercase transition-colors cursor-pointer"
+                    >
+                      Decline Request
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            /* Action Buttons to initiate agreement */
+            <div className="flex flex-wrap gap-3 pt-1">
+              <button
+                disabled={mutualLoading}
+                onClick={() => handleMutualAction('REQUEST_RESTART_TIMER')}
+                className="px-4 py-2.5 bg-amber-400/20 hover:bg-amber-400/30 border border-amber-400/50 text-amber-300 font-black rounded-xl text-xs uppercase transition-all flex items-center gap-2 cursor-pointer"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>Request Timer Restart</span>
+              </button>
+              <button
+                disabled={mutualLoading}
+                onClick={() => handleMutualAction('REQUEST_MUTUAL_REFUND')}
+                className="px-4 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold rounded-xl text-xs uppercase transition-all flex items-center gap-2 cursor-pointer"
+              >
+                <XCircle className="w-4 h-4 text-neutral-400" />
+                <span>Request Mutual 100% Refund</span>
+              </button>
+            </div>
+          )}
+
+          {mutualMsg && (
+            <div className="p-3 bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs rounded-xl font-medium">
+              {mutualMsg}
+            </div>
+          )}
+        </div>
+      )}
+
+
       {/* STEP 3 BANNER: Both Stakes Confirmed -> Room Number Generated */}
       {isReadyToPlay && match.roomCode && (
         <div className="p-6 rounded-2xl bg-gradient-to-r from-amber-500/10 via-neutral-900 to-emerald-500/10 border border-amber-500/60 shadow-2xl space-y-3 text-center">
@@ -807,6 +929,16 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                   Capture final scoreboard showing Victory/Defeat badge with both player names visible.
                 </p>
               </div>
+
+              <div className="p-3 rounded-lg bg-neutral-950/80 border border-sky-500/30 space-y-1 sm:col-span-2">
+                <div className="font-bold text-sky-400 flex items-center justify-between">
+                  <span>5. Admin Screen Recording Telegram Group</span>
+                  <a href="https://t.me/+I5vcFF4RXwJkMWVk" target="_blank" rel="noopener noreferrer" className="text-[10px] bg-sky-500 text-black px-2 py-0.5 rounded font-black hover:bg-sky-400">Join Telegram</a>
+                </div>
+                <p className="text-neutral-300 text-xs">
+                  Admins and players must join the official Telegram group for screen recordings and evidence review: <a href="https://t.me/+I5vcFF4RXwJkMWVk" target="_blank" rel="noopener noreferrer" className="text-sky-400 underline font-mono">https://t.me/+I5vcFF4RXwJkMWVk</a>
+                </p>
+              </div>
             </div>
           </div>
 
@@ -1023,8 +1155,19 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                   </div>
                 </div>
               </div>
+            ) : !isExpired ? (
+              /* LOCKED UNTIL TIMER COUNTDOWN ENDS */
+              <div className="p-6 rounded-2xl bg-neutral-950 border border-neutral-800 text-center space-y-3">
+                <Clock className="w-8 h-8 text-amber-400 mx-auto animate-spin" />
+                <div className="text-sm font-bold text-white uppercase tracking-wider">
+                  Match In Progress — Timer Active ({timeLeft || 'Running'})
+                </div>
+                <p className="text-xs text-neutral-400 max-w-md mx-auto leading-relaxed">
+                  Per Arena rules, result confirmation buttons ("I Won", "I Lost", "Draw") are locked until the match countdown timer reaches 00:00. Finish your CODM battle!
+                </p>
+              </div>
             ) : (
-              /* 3-BUTTON SUBMISSION FORM (NO SCREENSHOT REQUIRED) */
+              /* 3-BUTTON SUBMISSION FORM (UNLOCKED AFTER TIMER ENDS) */
               <div className="space-y-4">
                 {opponentObj && (isCreator ? match.opponent?.resultClaim : match.creator.resultClaim) && (
                   <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2">

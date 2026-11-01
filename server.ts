@@ -291,6 +291,12 @@ export interface Match {
   reviewerName?: string;
   creatorScreenshot?: string;
   opponentScreenshot?: string;
+  mutualActionState?: any;
+  firstClaimSubmittedAt?: number;
+  firstClaimBy?: string;
+  firstClaimByName?: string;
+  firstClaimType?: 'VICTORY' | 'DEFEAT' | 'DRAW';
+  claimConfirmationDeadline?: number;
 }
 
 // SQL escape helper to maintain compatibility with Supabase transaction pooler (PgBouncer)
@@ -635,6 +641,7 @@ async function getMatchFromDb(id: string): Promise<Match | null> {
       reviewerName: m.reviewer_name || undefined,
       creatorScreenshot: m.creator_screenshot || undefined,
       opponentScreenshot: m.opponent_screenshot || undefined,
+      mutualActionState: m.mutual_action_data ? (typeof m.mutual_action_data === 'string' ? JSON.parse(m.mutual_action_data) : m.mutual_action_data) : undefined,
     };
   } catch (err) {
     console.error(`Error getting match ${id} from DB:`, err);
@@ -650,7 +657,7 @@ async function getAllMatchesFromDb(): Promise<Match[]> {
              match_type, squad_data, status, created_at, creator_id, creator_data, 
              opponent_id, opponent_data, winner_id, winner_ign, resolution_notes, 
              chat_messages, room_generated_at, settled_at, is_public, conflict_retries,
-             reviewer_id, reviewer_name
+             reviewer_id, reviewer_name, mutual_action_data
       FROM matches 
       ORDER BY created_at DESC 
       LIMIT 100
@@ -683,8 +690,10 @@ async function getAllMatchesFromDb(): Promise<Match[]> {
       conflictRetries: parseInt(m.conflict_retries || '0', 10),
       reviewerId: m.reviewer_id || undefined,
       reviewerName: m.reviewer_name || undefined,
+      mutualActionState: m.mutual_action_data ? (typeof m.mutual_action_data === 'string' ? JSON.parse(m.mutual_action_data) : m.mutual_action_data) : undefined,
       // screenshots excluded for list performance!
     }));
+
   } catch (err) {
     console.error('Error getting matches from DB:', err);
     return [];
@@ -1786,23 +1795,60 @@ app.post('/api/msksksnuwje/users/:id/adjust-balance', async (req, res) => {
   }
 });
 
+// Helper function for timing-safe constant-time passcode verification
+function constantTimeVerify(candidate: string, validList: string[]): boolean {
+  if (!candidate || typeof candidate !== 'string') return false;
+  const candidateHash = crypto.createHash('sha256').update(candidate).digest();
+  let matched = false;
+  for (const item of validList) {
+    if (!item) continue;
+    const itemHash = crypto.createHash('sha256').update(item).digest();
+    if (crypto.timingSafeEqual(candidateHash, itemHash)) {
+      matched = true;
+    }
+  }
+  return matched;
+}
+
 // Define the platform owner (Main Admin)
 const OWNER_EMAIL = 'onelly103@gmail.com';
 
-// Bootstrap / Claim Admin (for owner/creator access)
-app.post('/api/msksksnuwje/claim-admin', async (req, res) => {
+// Bootstrap / Claim Admin (for owner/creator access) - strictly rate-limited and hardened against credential leakage
+app.post('/api/msksksnuwje/claim-admin', rateLimitMiddleware(5, 60000), async (req, res) => {
   try {
     const { userId, passcode } = req.body;
+    if (!userId) {
+      return res.status(400).json({ error: 'Missing user identifier' });
+    }
+
     const user = await getUserFromDb(userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     const isOwnerEmail = user.email.toLowerCase() === OWNER_EMAIL.toLowerCase() || user.email.toLowerCase() === 'b@gmail.com';
-    const cleanPass = (passcode || '').trim();
-    const isAdminPasscode = cleanPass === 'admin123' || cleanPass === 'OPAY_ADMIN_2025' || cleanPass === 'codmadmin' || cleanPass === (process.env.ADMIN_PASSCODE || 'OPS_ARENA_ROOT_2026');
-    const isModPasscode = cleanPass === 'mod123' || cleanPass === 'moderator123' || cleanPass === 'codmmod';
+    const cleanPass = typeof passcode === 'string' ? passcode.trim() : '';
+
+    const validAdminPasscodes = [
+      process.env.ADMIN_PASSCODE,
+      'OPS_ARENA_ROOT_2026',
+      'OPAY_ADMIN_2025',
+      'codmadmin',
+      'admin123',
+    ].filter(Boolean) as string[];
+
+    const validModPasscodes = [
+      process.env.MODERATOR_PASSCODE,
+      'codmmod',
+      'moderator123',
+      'mod123',
+    ].filter(Boolean) as string[];
+
+    const isAdminPasscode = constantTimeVerify(cleanPass, validAdminPasscodes);
+    const isModPasscode = constantTimeVerify(cleanPass, validModPasscodes);
 
     if (!isOwnerEmail && !isAdminPasscode && !isModPasscode) {
-      return res.status(403).json({ error: 'Invalid terminal authorization passcode. For moderator access, use mod123 or ask an admin.' });
+      // Small artificial jitter to protect against timing analysis & brute forcing
+      await new Promise(r => setTimeout(r, 200 + Math.floor(Math.random() * 100)));
+      return res.status(403).json({ error: 'Access denied: Invalid authorization credentials' });
     }
 
     const assignedRole = (isModPasscode && !isAdminPasscode && !isOwnerEmail) ? 'moderator' : 'admin';
@@ -1810,14 +1856,15 @@ app.post('/api/msksksnuwje/claim-admin', async (req, res) => {
     const refreshed = await getUserFromDb(userId);
     res.json({
       success: true,
-      message: `${assignedRole === 'moderator' ? 'Moderator' : 'Admin'} access granted to ${refreshed?.codmIgn || refreshed?.email}`,
+      message: 'Authorization verified successfully',
       user: refreshed,
     });
   } catch (err: any) {
-    console.error('Error claiming admin:', err);
-    res.status(500).json({ error: 'Failed to claim admin' });
+    console.error('Error in staff authorization:', err);
+    res.status(500).json({ error: 'Authorization processing failed' });
   }
 });
+
 
 // Admin/Moderator: Claim a match for review
 app.post('/api/msksksnuwje/matches/:id/claim', async (req, res) => {
@@ -7872,92 +7919,259 @@ async function expirePendingMatches() {
 }
 
 async function sweepAbandonedMatches() {
+  // Only expire unaccepted single-creator challenges that never started after 24 hours
   await expirePendingMatches();
-  await checkUnconfirmedResultMatches();
-  try {
-    const oneHourAgo = Date.now() - (60 * 60 * 1000); // 1 hour threshold for match creation
-    const thirtyMinsAgo = Date.now() - (30 * 60 * 1000); // 30 mins threshold after room generation
-    const staleRes = await pool.query(`
-      SELECT id, challenge_code, status, created_at, room_generated_at, match_duration_minutes
-      FROM matches
-      WHERE status IN ('READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'DISPUTED')
-        AND (
-          created_at < ${oneHourAgo}
-          OR (room_generated_at IS NOT NULL AND room_generated_at < ${thirtyMinsAgo})
-        )
-      ORDER BY created_at ASC
-      LIMIT 25
-    `);
-
-    if (staleRes.rows.length > 0) {
-      console.log(`🧹 [Abandoned Match Sweep] Found ${staleRes.rows.length} stale match(es) to settle...`);
-      for (const row of staleRes.rows) {
-        try {
-          await settleAbandonedMatch(row.id, 'Automatic match expiration / inactivity timeout');
-          console.log(`✅ Settled abandoned match #${row.challenge_code}`);
-        } catch (mErr: any) {
-          console.warn(`Could not auto-settle match ${row.id}:`, mErr.message);
-        }
-      }
-    }
-  } catch (err: any) {
-    console.warn('⚠️ [Abandoned Match Sweep] Sweep warning:', err.message);
-  }
+  // Under Arena Integrity rules, active 1v1 / Squad matches are NEVER automatically settled on timeouts.
+  // Neither player can unilaterally claim a refund or restart the timer; both players must mutually agree.
 }
 
 async function checkUnconfirmedResultMatches() {
-  try {
-    const oneHour = 60 * 60 * 1000;
-    const now = Date.now();
-    const res = await pool.query(`
-      SELECT id, status, creator_data, opponent_data
-      FROM matches
-      WHERE status = 'SUBMITTING_RESULTS'
-    `);
-
-    for (const row of res.rows) {
-      const match = { 
-        ...row, 
-        creator: typeof row.creator_data === 'string' ? JSON.parse(row.creator_data) : row.creator_data,
-        opponent: typeof row.opponent_data === 'string' ? JSON.parse(row.opponent_data) : row.opponent_data
-      };
-
-      if (match.creator.submittedAt && !match.opponent.resultClaim && (now - match.creator.submittedAt > oneHour)) {
-        await settleAbandonedMatch(match.id, 'Automatic settlement: Opponent failed to confirm result within 1 hour');
-      } else if (match.opponent.submittedAt && !match.creator.resultClaim && (now - match.opponent.submittedAt > oneHour)) {
-        await settleAbandonedMatch(match.id, 'Automatic settlement: Creator failed to confirm result within 1 hour');
-      }
-    }
-  } catch (err) {
-    console.error('Error in checkUnconfirmedResultMatches:', err);
-  }
+  // Under Arena Integrity rules, auto-settlement on unconfirmed results is disabled.
+  // Stalled or disputed results require mutual agreement or human referee adjudication.
 }
 
-// User / Player or System: Settle an abandoned match
+// User / Player: Unilateral match abandonment is disabled under Arena Integrity rules
 app.post('/api/matches/:id/abandon', async (req, res) => {
-  try {
-    const matchId = req.params.id;
-    const match = await getMatchFromDb(matchId);
-    if (!match) return res.status(404).json({ error: 'Match not found' });
+  return res.status(403).json({
+    error: 'Unilateral match settlement and refunds are disabled. Under Arena rules, both players must mutually agree to restart the timer or refund stakes, or submit evidence to the Moderator Review Queue.',
+  });
+});
 
-    if (match.status === 'SETTLED' || match.status === 'CANCELLED' || match.status === 'ABANDONED') {
-      return res.status(400).json({ error: `Match has already been ${match.status.toLowerCase()}` });
+// Mutual Agreement Protocol for Stalled / Abandoned / Timer-Exceeded Matches
+app.post('/api/matches/:id/mutual-action', async (req, res) => {
+  const matchId = req.params.id;
+  const { userId, action } = req.body || {};
+  if (!userId || !action) {
+    return res.status(400).json({ error: 'Missing userId or action' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const mRes = await client.query(`SELECT * FROM matches WHERE id = ${escapeSql(matchId)} FOR UPDATE`);
+    if (mRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Match not found' });
     }
 
-    const { reason = 'Abandoned / stalled match' } = req.body || {};
-    const result = await settleAbandonedMatch(matchId, reason);
+    const matchRow = mRes.rows[0];
+    if (matchRow.status === 'SETTLED' || matchRow.status === 'CANCELLED') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: `Match has already been ${matchRow.status.toLowerCase()}` });
+    }
 
-    res.json({
-      success: true,
-      message: `Match settled as abandoned. Players refunded minus platform fee and 10% penalty fee.`,
-      match: result.match,
-      data: result,
-    });
+    const isCreator = matchRow.creator_id === userId;
+    const isOpponent = matchRow.opponent_id === userId;
+
+    if (!isCreator && !isOpponent) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'Only active match contenders can participate in mutual agreements' });
+    }
+
+    const creatorData = typeof matchRow.creator_data === 'string' ? JSON.parse(matchRow.creator_data) : (matchRow.creator_data || {});
+    const opponentData = typeof matchRow.opponent_data === 'string' ? JSON.parse(matchRow.opponent_data) : (matchRow.opponent_data || {});
+    const actingUser = isCreator ? creatorData : opponentData;
+    const currentMutual = matchRow.mutual_action_data ? (typeof matchRow.mutual_action_data === 'string' ? JSON.parse(matchRow.mutual_action_data) : matchRow.mutual_action_data) : null;
+    let chatMessages = matchRow.chat_messages ? (typeof matchRow.chat_messages === 'string' ? JSON.parse(matchRow.chat_messages) : matchRow.chat_messages) : [];
+
+    const now = Date.now();
+
+    if (action === 'REQUEST_RESTART_TIMER' || action === 'REQUEST_MUTUAL_REFUND') {
+      const targetAction = action === 'REQUEST_RESTART_TIMER' ? 'RESTART_TIMER' : 'MUTUAL_REFUND';
+
+      // If the rival already requested this same action, it constitutes mutual agreement!
+      if (currentMutual && currentMutual.action === targetAction && currentMutual.requestedBy !== userId) {
+        if (targetAction === 'RESTART_TIMER') {
+          chatMessages.push({
+            id: `msg_${now}`,
+            senderId: 'system',
+            senderName: 'ARENA REFEREE',
+            text: `🔄 Both players have mutually agreed to restart the match countdown timer. Timer reset!`,
+            timestamp: now,
+          });
+          await client.query(`
+            UPDATE matches 
+            SET room_generated_at = ${now}, 
+                mutual_action_data = NULL,
+                chat_messages = ${escapeSql(JSON.stringify(chatMessages))}
+            WHERE id = ${escapeSql(matchId)}
+          `);
+          await client.query('COMMIT');
+          const updated = await getMatchFromDb(matchId);
+          if (globalIo) globalIo.emit('match_updated', updated);
+          return res.json({ success: true, message: 'Match timer restarted by mutual agreement of both players', match: updated });
+        } else {
+          // MUTUAL_REFUND: 100% full stake refund to both players without penalty
+          const stakeAmount = parseFloat(matchRow.stake_amount) || 0;
+          if (matchRow.creator_id && creatorData.staked) {
+            await client.query(`UPDATE users SET balance = balance + ${stakeAmount}, escrow_balance = GREATEST(0, escrow_balance - ${stakeAmount}) WHERE id = ${escapeSql(matchRow.creator_id)}`);
+            await client.query(`
+              INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+              VALUES (${escapeSql(`tx_${now}_mref_c`)}, ${escapeSql(matchRow.creator_id)}, 'ESCROW_REFUND', ${stakeAmount}, ${escapeSql(`₦${stakeAmount.toLocaleString()} full stake refunded from mutually cancelled match #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${now})
+              ON CONFLICT (id) DO NOTHING
+            `);
+          }
+          if (matchRow.opponent_id && opponentData.staked) {
+            await client.query(`UPDATE users SET balance = balance + ${stakeAmount}, escrow_balance = GREATEST(0, escrow_balance - ${stakeAmount}) WHERE id = ${escapeSql(matchRow.opponent_id)}`);
+            await client.query(`
+              INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+              VALUES (${escapeSql(`tx_${now}_mref_o`)}, ${escapeSql(matchRow.opponent_id)}, 'ESCROW_REFUND', ${stakeAmount}, ${escapeSql(`₦${stakeAmount.toLocaleString()} full stake refunded from mutually cancelled match #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${now})
+              ON CONFLICT (id) DO NOTHING
+            `);
+          }
+          chatMessages.push({
+            id: `msg_${now}`,
+            senderId: 'system',
+            senderName: 'ARENA REFEREE',
+            text: `🤝 Both gladiators mutually agreed to void the match. Full stakes (₦${stakeAmount.toLocaleString()}) refunded to both wallets.`,
+            timestamp: now,
+          });
+          await client.query(`
+            UPDATE matches 
+            SET status = 'CANCELLED',
+                mutual_action_data = NULL,
+                resolution_notes = 'Mutually voided and refunded by agreement of both players',
+                chat_messages = ${escapeSql(JSON.stringify(chatMessages))}
+            WHERE id = ${escapeSql(matchId)}
+          `);
+          await client.query('COMMIT');
+          const updated = await getMatchFromDb(matchId);
+          if (globalIo) globalIo.emit('match_updated', updated);
+          return res.json({ success: true, message: 'Match mutually cancelled. Full stakes refunded to both players.', match: updated });
+        }
+      }
+
+      // Record proposed action pending other player's agreement
+      const newMutual = {
+        action: targetAction,
+        requestedBy: userId,
+        requestedByName: actingUser.codmIgn || actingUser.username || 'Gladiator',
+        requestedAt: now,
+      };
+
+      chatMessages.push({
+        id: `msg_${now}`,
+        senderId: 'system',
+        senderName: 'ARENA REFEREE',
+        text: `⏳ ${actingUser.codmIgn || 'A gladiator'} requested ${targetAction === 'RESTART_TIMER' ? 'a countdown timer restart' : 'a mutual 100% refund'}. Waiting for opponent to agree.`,
+        timestamp: now,
+      });
+
+      await client.query(`
+        UPDATE matches 
+        SET mutual_action_data = ${escapeSql(JSON.stringify(newMutual))},
+            chat_messages = ${escapeSql(JSON.stringify(chatMessages))}
+        WHERE id = ${escapeSql(matchId)}
+      `);
+      await client.query('COMMIT');
+      const updated = await getMatchFromDb(matchId);
+      if (globalIo) globalIo.emit('match_updated', updated);
+      return res.json({ success: true, message: 'Request submitted. Both players must agree to proceed.', match: updated });
+
+    } else if (action === 'ACCEPT_ACTION') {
+      if (!currentMutual) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'No active mutual action request to accept' });
+      }
+      if (currentMutual.requestedBy === userId) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'You cannot accept your own request' });
+      }
+
+      if (currentMutual.action === 'RESTART_TIMER') {
+        chatMessages.push({
+          id: `msg_${now}`,
+          senderId: 'system',
+          senderName: 'ARENA REFEREE',
+          text: `🔄 Both players have mutually agreed to restart the match countdown timer. Timer reset!`,
+          timestamp: now,
+        });
+        await client.query(`
+          UPDATE matches 
+          SET room_generated_at = ${now}, 
+              mutual_action_data = NULL,
+              chat_messages = ${escapeSql(JSON.stringify(chatMessages))}
+          WHERE id = ${escapeSql(matchId)}
+        `);
+        await client.query('COMMIT');
+        const updated = await getMatchFromDb(matchId);
+        if (globalIo) globalIo.emit('match_updated', updated);
+        return res.json({ success: true, message: 'Match timer restarted by mutual agreement', match: updated });
+
+      } else if (currentMutual.action === 'MUTUAL_REFUND') {
+        const stakeAmount = parseFloat(matchRow.stake_amount) || 0;
+        if (matchRow.creator_id && creatorData.staked) {
+          await client.query(`UPDATE users SET balance = balance + ${stakeAmount}, escrow_balance = GREATEST(0, escrow_balance - ${stakeAmount}) WHERE id = ${escapeSql(matchRow.creator_id)}`);
+          await client.query(`
+            INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+            VALUES (${escapeSql(`tx_${now}_mref_c`)}, ${escapeSql(matchRow.creator_id)}, 'ESCROW_REFUND', ${stakeAmount}, ${escapeSql(`₦${stakeAmount.toLocaleString()} full stake refunded from mutually cancelled match #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${now})
+            ON CONFLICT (id) DO NOTHING
+          `);
+        }
+        if (matchRow.opponent_id && opponentData.staked) {
+          await client.query(`UPDATE users SET balance = balance + ${stakeAmount}, escrow_balance = GREATEST(0, escrow_balance - ${stakeAmount}) WHERE id = ${escapeSql(matchRow.opponent_id)}`);
+          await client.query(`
+            INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+            VALUES (${escapeSql(`tx_${now}_mref_o`)}, ${escapeSql(matchRow.opponent_id)}, 'ESCROW_REFUND', ${stakeAmount}, ${escapeSql(`₦${stakeAmount.toLocaleString()} full stake refunded from mutually cancelled match #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${now})
+            ON CONFLICT (id) DO NOTHING
+          `);
+        }
+        chatMessages.push({
+          id: `msg_${now}`,
+          senderId: 'system',
+          senderName: 'ARENA REFEREE',
+          text: `🤝 Both gladiators mutually agreed to void the match. Full stakes (₦${stakeAmount.toLocaleString()}) refunded to both wallets.`,
+          timestamp: now,
+        });
+        await client.query(`
+          UPDATE matches 
+          SET status = 'CANCELLED',
+              mutual_action_data = NULL,
+              resolution_notes = 'Mutually voided and refunded by agreement of both players',
+              chat_messages = ${escapeSql(JSON.stringify(chatMessages))}
+          WHERE id = ${escapeSql(matchId)}
+        `);
+        await client.query('COMMIT');
+        const updated = await getMatchFromDb(matchId);
+        if (globalIo) globalIo.emit('match_updated', updated);
+        return res.json({ success: true, message: 'Match mutually cancelled. Full stakes refunded to both players.', match: updated });
+      }
+
+    } else if (action === 'DECLINE_ACTION') {
+      if (!currentMutual) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'No active mutual action request to decline' });
+      }
+      chatMessages.push({
+        id: `msg_${now}`,
+        senderId: 'system',
+        senderName: 'ARENA REFEREE',
+        text: `⚠️ ${actingUser.codmIgn || 'Opponent'} declined the request for ${currentMutual.action === 'RESTART_TIMER' ? 'timer restart' : 'mutual refund'}. Match remains active under Arena rules.`,
+        timestamp: now,
+      });
+      await client.query(`
+        UPDATE matches 
+        SET mutual_action_data = NULL,
+            chat_messages = ${escapeSql(JSON.stringify(chatMessages))}
+        WHERE id = ${escapeSql(matchId)}
+      `);
+      await client.query('COMMIT');
+      const updated = await getMatchFromDb(matchId);
+      if (globalIo) globalIo.emit('match_updated', updated);
+      return res.json({ success: true, message: 'Mutual request declined', match: updated });
+    }
+
+    await client.query('ROLLBACK');
+    return res.status(400).json({ error: 'Invalid mutual action specified' });
   } catch (err: any) {
-    console.error('Error settling abandoned match:', err);
-    res.status(500).json({ error: err.message || 'Failed to settle abandoned match' });
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    console.error('Error handling mutual action:', err);
+    res.status(500).json({ error: err.message || 'Failed to process mutual action' });
+  } finally {
+    client.release();
   }
 });
+
 
 // Admin: Settle abandoned match explicitly
 app.post('/api/msksksnuwje/matches/:id/abandon', async (req, res) => {

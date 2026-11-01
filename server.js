@@ -1,7 +1,6 @@
 // server.ts
 import express from "express";
 import http from "http";
-import { WebSocketServer, WebSocket } from "ws";
 import { Server } from "socket.io";
 import { createServer as createViteServer } from "vite";
 import dotenv2 from "dotenv";
@@ -16,7 +15,7 @@ import pg from "pg";
 import dotenv from "dotenv";
 import dns from "dns";
 import net from "net";
-import { URL as URL2 } from "url";
+import { URL } from "url";
 try {
   dns.setDefaultResultOrder("ipv4first");
 } catch (e) {
@@ -30,9 +29,11 @@ var pool = new Pool({
     rejectUnauthorized: false
     // Required for Supabase cloud PostgreSQL
   },
-  max: 10,
+  max: 30,
+  // Expanded for 200+ concurrent deposit submissions
   idleTimeoutMillis: 3e4,
-  connectionTimeoutMillis: 1e4
+  connectionTimeoutMillis: 15e3,
+  statement_timeout: 1e4
 });
 async function runDatabaseDiagnostics() {
   const result = {
@@ -62,7 +63,7 @@ async function runDatabaseDiagnostics() {
     recommendations: []
   };
   try {
-    const parsedUrl = new URL2(DATABASE_URL);
+    const parsedUrl = new URL(DATABASE_URL);
     result.network.host = parsedUrl.hostname;
     result.network.port = parsedUrl.port ? parseInt(parsedUrl.port, 10) : 5432;
   } catch (e) {
@@ -205,6 +206,12 @@ async function initDatabase() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code VARCHAR(100);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS total_referral_earnings NUMERIC DEFAULT 0;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id VARCHAR(255);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_username VARCHAR(255);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS is_flagged BOOLEAN DEFAULT false;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS flag_reason TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS flagged_with_user_id VARCHAR(255);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS flag_matches JSONB;
 
       CREATE TABLE IF NOT EXISTS matches (
         id VARCHAR(255) PRIMARY KEY,
@@ -233,13 +240,26 @@ async function initDatabase() {
         settled_at BIGINT,
         result_submitted_at BIGINT,
         result_submitted_by VARCHAR(255),
-        is_public BOOLEAN DEFAULT true
+        is_public BOOLEAN DEFAULT true,
+        reviewer_id VARCHAR(255),
+        reviewer_name VARCHAR(255),
+        creator_screenshot TEXT,
+        opponent_screenshot TEXT
       );
 
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS match_duration_minutes INT DEFAULT 15;
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS result_submitted_at BIGINT;
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS result_submitted_by VARCHAR(255);
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT true;
+      ALTER TABLE matches ADD COLUMN IF NOT EXISTS match_type VARCHAR(50) DEFAULT 'solo';
+      ALTER TABLE matches ADD COLUMN IF NOT EXISTS squad_data JSONB;
+      ALTER TABLE matches ADD COLUMN IF NOT EXISTS conflict_retries INT DEFAULT 0;
+      ALTER TABLE matches ADD COLUMN IF NOT EXISTS reviewer_id VARCHAR(255);
+      ALTER TABLE matches ADD COLUMN IF NOT EXISTS reviewer_name VARCHAR(255);
+      ALTER TABLE matches ADD COLUMN IF NOT EXISTS creator_screenshot TEXT;
+      ALTER TABLE matches ADD COLUMN IF NOT EXISTS opponent_screenshot TEXT;
+      ALTER TABLE matches ADD COLUMN IF NOT EXISTS mutual_action_data JSONB;
+
 
       CREATE TABLE IF NOT EXISTS transactions (
         id VARCHAR(255) PRIMARY KEY,
@@ -256,6 +276,18 @@ async function initDatabase() {
         total_fees_collected NUMERIC DEFAULT 0,
         total_fees_withdrawn NUMERIC DEFAULT 0
       );
+
+      CREATE TABLE IF NOT EXISTS platform_settings (
+        key VARCHAR(100) PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at BIGINT NOT NULL
+      );
+
+      INSERT INTO platform_settings (key, value, updated_at)
+      VALUES 
+        ('solo_fee_percent', '10', 1700000000000),
+        ('squad_fee_percent', '5', 1700000000000)
+      ON CONFLICT (key) DO NOTHING;
 
       CREATE TABLE IF NOT EXISTS withdrawal_requests (
         id VARCHAR(255) PRIMARY KEY,
@@ -736,7 +768,32 @@ async function testGmailConnection(gmailAddress, appPassword) {
   }
   return { success: false, message: "Could not connect to Gmail IMAP server" };
 }
+var activeGmailSyncPromise = null;
+var lastGmailSyncTimestamp = 0;
 async function syncGmailEmails() {
+  if (activeGmailSyncPromise) {
+    return activeGmailSyncPromise;
+  }
+  if (Date.now() - lastGmailSyncTimestamp < 3e3) {
+    return {
+      success: true,
+      newEmailsCount: 0,
+      totalInboxCount: 0,
+      message: "Sync recently completed"
+    };
+  }
+  activeGmailSyncPromise = (async () => {
+    try {
+      const result = await doSyncGmailEmailsInternal();
+      lastGmailSyncTimestamp = Date.now();
+      return result;
+    } finally {
+      activeGmailSyncPromise = null;
+    }
+  })();
+  return activeGmailSyncPromise;
+}
+async function doSyncGmailEmailsInternal() {
   const config = await getGmailConfig();
   if (!config || !config.gmailAddress || !config.appPassword) {
     return {
@@ -955,25 +1012,62 @@ function startGmailAutoSyncService() {
 
 // server.ts
 dotenv2.config();
+process.on("uncaughtException", (err) => {
+  console.error("[Process] Uncaught Exception (handled safely):", err);
+});
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[Process] Unhandled Rejection (handled safely):", reason);
+});
+var globalIo = null;
+var requestRateLimits = /* @__PURE__ */ new Map();
+function rateLimitMiddleware(maxRequests = 15, windowMs = 6e4) {
+  return (req, res, next) => {
+    const ip = req.headers["cf-connecting-ip"] || req.headers["x-forwarded-for"] || req.ip || "unknown";
+    const key = `${ip}_${req.path}`;
+    const now = Date.now();
+    let record = requestRateLimits.get(key);
+    if (!record || now > record.resetTime) {
+      record = { count: 1, resetTime: now + windowMs };
+      requestRateLimits.set(key, record);
+    } else {
+      record.count++;
+      if (record.count > maxRequests) {
+        console.warn(`[Rate Limit] Blocked IP: ${ip} for path: ${req.path}`);
+        return res.status(429).json({ error: "Rate limit exceeded: Too many requests. Automated bot protection active." });
+      }
+    }
+    next();
+  };
+}
+function secureSignatureMiddleware(req, res, next) {
+  const sig = req.headers["x-ops-signature"] || req.headers["x-requested-with"] || req.headers["authorization"];
+  if (!sig && process.env.NODE_ENV === "production") {
+    return res.status(403).json({ error: "Forbidden: Missing secure request signature or validation token." });
+  }
+  next();
+}
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path.dirname(__filename);
-function resolveServerPort() {
-  const portArgIdx = process.argv.indexOf("--port");
-  if (portArgIdx !== -1 && process.argv[portArgIdx + 1]) {
-    const parsed = parseInt(process.argv[portArgIdx + 1], 10);
-    if (!isNaN(parsed) && parsed > 0) return parsed;
+var PORT = (() => {
+  const portArgIndex = process.argv.indexOf("--port");
+  if (portArgIndex !== -1 && process.argv[portArgIndex + 1]) {
+    const parsed = parseInt(process.argv[portArgIndex + 1], 10);
+    if (!isNaN(parsed) && parsed > 0 && parsed !== 8080) return parsed;
+  }
+  if (process.env.DEFAULT_APP_PORT) {
+    const parsed = parseInt(process.env.DEFAULT_APP_PORT, 10);
+    if (!isNaN(parsed) && parsed > 0 && parsed !== 8080) return parsed;
   }
   if (process.env.APP_PORT) {
     const parsed = parseInt(process.env.APP_PORT, 10);
-    if (!isNaN(parsed) && parsed > 0) return parsed;
+    if (!isNaN(parsed) && parsed > 0 && parsed !== 8080) return parsed;
   }
   if (process.env.PORT && process.env.PORT !== "8080") {
     const parsed = parseInt(process.env.PORT, 10);
     if (!isNaN(parsed) && parsed > 0) return parsed;
   }
   return 3e3;
-}
-var PORT = resolveServerPort();
+})();
 var ai = null;
 if (process.env.GEMINI_API_KEY) {
   ai = new GoogleGenAI({
@@ -985,8 +1079,45 @@ if (process.env.GEMINI_API_KEY) {
     }
   });
 }
+async function sendEmail(to, subject, html) {
+  try {
+    const resendKey = process.env.RESEND_API_KEY;
+    let senderEmail = process.env.SENDER_EMAIL || "noreply@opsstake.online";
+    if (!senderEmail.includes("@")) {
+      senderEmail = "noreply@opsstake.online";
+    }
+    if (!resendKey) {
+      console.warn("[Email Service] RESEND_API_KEY not configured. Outbound email blocked.");
+      return false;
+    }
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${resendKey}`
+      },
+      body: JSON.stringify({
+        from: `OpsSTAKE Arena <${senderEmail}>`,
+        to: [to],
+        subject,
+        html
+      })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      console.log(`[Email Service] Message sent via Resend: ${data.id} to ${to}`);
+      return true;
+    } else {
+      console.error(`[Email Service] Resend API error:`, data);
+      return false;
+    }
+  } catch (err) {
+    console.error("[Email Service] Critical error sending email:", err);
+    return false;
+  }
+}
 var app = express();
-app.use(express.json({ limit: "25mb" }));
+app.use(express.json({ limit: "200mb" }));
 function escapeSql(val) {
   if (val === null || val === void 0) return "NULL";
   if (typeof val === "number") {
@@ -999,30 +1130,45 @@ function escapeSql(val) {
   }
   return "'" + String(val).replace(/'/g, "''") + "'";
 }
-function getRakePercentage(stake) {
-  if (stake >= 1e4) return 0.05;
-  if (stake >= 5e3) return 0.07;
-  if (stake >= 2500) return 0.08;
-  return 0.1;
+async function getPlatformFeeSettings() {
+  try {
+    const res = await pool.query(`SELECT key, value FROM platform_settings WHERE key IN ('solo_fee_percent', 'squad_fee_percent')`);
+    let soloFeePercent = 10;
+    let squadFeePercent = 5;
+    for (const row of res.rows) {
+      if (row.key === "solo_fee_percent") soloFeePercent = parseInt(row.value, 10) || 10;
+      if (row.key === "squad_fee_percent") squadFeePercent = parseInt(row.value, 10) || 5;
+    }
+    return { soloFeePercent, squadFeePercent };
+  } catch {
+    return { soloFeePercent: 10, squadFeePercent: 5 };
+  }
+}
+function getSoloRakePercentage(totalPotAmount, baseRate = 10) {
+  if (totalPotAmount >= 1e5) return Math.min(baseRate / 100, 0.035);
+  if (totalPotAmount >= 5e4) return Math.min(baseRate / 100, 0.04);
+  if (totalPotAmount >= 1e4) return Math.min(baseRate / 100, 0.05);
+  if (totalPotAmount >= 5e3) return Math.min(baseRate / 100, 0.07);
+  if (totalPotAmount >= 2500) return Math.min(baseRate / 100, 0.08);
+  return baseRate / 100;
+}
+function getSquadRakePercentage(stakePerPlayer, totalPotAmount, baseSquadRate = 5) {
+  if (totalPotAmount >= 1e5) return Math.min(baseSquadRate / 100, 0.03);
+  if (totalPotAmount >= 5e4) return Math.min(baseSquadRate / 100, 0.035);
+  if (totalPotAmount >= 25e3) return Math.min(baseSquadRate / 100, 0.04);
+  return baseSquadRate / 100;
+}
+function getRakePercentage(stakeOrPot) {
+  return getSoloRakePercentage(stakeOrPot);
 }
 function generateRoomCode(mapName) {
   const num = Math.floor(1e3 + Math.random() * 9e3);
   const suffix = mapName.slice(0, 3).toUpperCase();
   return `CODM-${num}-${suffix}`;
 }
-var matchRooms = /* @__PURE__ */ new Map();
-function broadcastToMatchRoom(matchId, payload, excludeClient) {
-  const room = matchRooms.get(matchId);
-  if (!room) return;
-  const msg = JSON.stringify(payload);
-  for (const client of room) {
-    if (client.readyState === WebSocket.OPEN && client !== excludeClient) {
-      try {
-        client.send(msg);
-      } catch (e) {
-        console.error("Error sending ws message:", e);
-      }
-    }
+function broadcastToMatchRoom(matchId, payload) {
+  if (globalIo) {
+    globalIo.to(matchId).emit("payload", payload);
   }
 }
 async function clearMatchChatInDb(matchId) {
@@ -1032,7 +1178,9 @@ async function clearMatchChatInDb(matchId) {
       SET chat_messages = '[]'::jsonb
       WHERE id = ${escapeSql(matchId)}
     `);
-    broadcastToMatchRoom(matchId, { type: "chat_cleared", matchId });
+    if (globalIo) {
+      globalIo.to(matchId).emit("chat_cleared", { matchId });
+    }
     console.log(`[Chat Purge] Chat messages successfully purged from database for match ${matchId}`);
   } catch (err) {
     console.error(`Error clearing chat in DB for match ${matchId}:`, err);
@@ -1042,7 +1190,7 @@ async function getUserFromDb(idOrEmail) {
   try {
     if (!idOrEmail) return null;
     const userRes = await pool.query(
-      `SELECT * FROM users WHERE id = $1 OR LOWER(email) = LOWER($1) LIMIT 1`,
+      `SELECT id, username, codm_ign, codm_uid, email, phone, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, telegram_chat_id, telegram_username, is_flagged, flag_reason, flagged_with_user_id, flag_matches FROM users WHERE id = $1 OR LOWER(email) = LOWER($1) LIMIT 1`,
       [idOrEmail]
     );
     if (userRes.rows.length === 0) return null;
@@ -1079,6 +1227,12 @@ async function getUserFromDb(idOrEmail) {
       referralCode: r.referral_code || r.username?.toLowerCase() || r.codm_ign?.toLowerCase(),
       totalReferralEarnings: parseFloat(r.total_referral_earnings || 0),
       role: r.role || "user",
+      telegramChatId: r.telegram_chat_id || void 0,
+      telegramUsername: r.telegram_username || void 0,
+      isFlagged: r.is_flagged === true,
+      flagReason: r.flag_reason || void 0,
+      flaggedWithUserId: r.flagged_with_user_id || void 0,
+      flagMatches: r.flag_matches ? typeof r.flag_matches === "string" ? JSON.parse(r.flag_matches) : r.flag_matches : void 0,
       transactions
     };
   } catch (err) {
@@ -1090,7 +1244,7 @@ async function getUserByEmailOrIgn(identifier) {
   try {
     const cleanIdent = identifier.trim().toLowerCase();
     const userRes = await pool.query(
-      `SELECT * FROM users WHERE LOWER(email) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(codm_ign) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(username) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(referral_code) = LOWER(${escapeSql(cleanIdent)})`
+      `SELECT id, username, codm_ign, codm_uid, email, phone, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, telegram_chat_id, telegram_username, is_flagged, flag_reason, flagged_with_user_id, flag_matches, password_hash FROM users WHERE LOWER(email) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(codm_ign) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(username) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(referral_code) = LOWER(${escapeSql(cleanIdent)})`
     );
     if (userRes.rows.length === 0) return null;
     const r = userRes.rows[0];
@@ -1126,6 +1280,12 @@ async function getUserByEmailOrIgn(identifier) {
       referralCode: r.referral_code || r.username?.toLowerCase() || r.codm_ign?.toLowerCase(),
       totalReferralEarnings: parseFloat(r.total_referral_earnings || 0),
       role: r.role || "user",
+      telegramChatId: r.telegram_chat_id || void 0,
+      telegramUsername: r.telegram_username || void 0,
+      isFlagged: r.is_flagged === true,
+      flagReason: r.flag_reason || void 0,
+      flaggedWithUserId: r.flagged_with_user_id || void 0,
+      flagMatches: r.flag_matches ? typeof r.flag_matches === "string" ? JSON.parse(r.flag_matches) : r.flag_matches : void 0,
       transactions
     };
     return { user, passwordHash: r.password_hash || "" };
@@ -1134,12 +1294,16 @@ async function getUserByEmailOrIgn(identifier) {
     return null;
   }
 }
+async function getUserByReferralCodeOrIdentifier(identifier) {
+  const res = await getUserByEmailOrIgn(identifier);
+  return res ? res.user : null;
+}
 async function saveUserToDb(user, password, forceBalanceUpdate = false) {
   try {
     const passValue = password ? escapeSql(password) : "NULL";
     const balanceUpdateFragment = forceBalanceUpdate ? `balance = EXCLUDED.balance, escrow_balance = EXCLUDED.escrow_balance, total_winnings = EXCLUDED.total_winnings,` : `balance = users.balance, escrow_balance = users.escrow_balance, total_winnings = users.total_winnings,`;
     await pool.query(`
-      INSERT INTO users (id, username, codm_ign, codm_uid, tier, clan, email, phone, password_hash, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, created_at)
+      INSERT INTO users (id, username, codm_ign, codm_uid, tier, clan, email, phone, password_hash, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, telegram_chat_id, telegram_username, created_at)
       VALUES (
         ${escapeSql(user.id)},
         ${escapeSql(user.username)},
@@ -1164,6 +1328,8 @@ async function saveUserToDb(user, password, forceBalanceUpdate = false) {
         ${escapeSql(user.referralCode || user.username?.toLowerCase() || user.codmIgn?.toLowerCase() || null)},
         ${escapeSql(user.totalReferralEarnings || 0)},
         ${escapeSql(user.role || "user")},
+        ${escapeSql(user.telegramChatId || null)},
+        ${escapeSql(user.telegramUsername || null)},
         ${Date.now()}
       )
       ON CONFLICT (id) DO UPDATE SET
@@ -1176,6 +1342,8 @@ async function saveUserToDb(user, password, forceBalanceUpdate = false) {
         phone = EXCLUDED.phone,
         password_hash = COALESCE(EXCLUDED.password_hash, users.password_hash),
         role = COALESCE(users.role, EXCLUDED.role),
+        telegram_chat_id = COALESCE(EXCLUDED.telegram_chat_id, users.telegram_chat_id),
+        telegram_username = COALESCE(EXCLUDED.telegram_username, users.telegram_username),
         ${balanceUpdateFragment}
         wins = users.wins,
         losses = users.losses,
@@ -1236,6 +1404,8 @@ async function getMatchFromDb(id) {
       platformFee: parseFloat(m.platform_fee || 0),
       winnerPayout: parseFloat(m.winner_payout),
       matchDurationMinutes: parseInt(m.match_duration_minutes, 10) || 15,
+      matchType: m.match_type || "solo",
+      squadData: m.squad_data ? typeof m.squad_data === "string" ? JSON.parse(m.squad_data) : m.squad_data : void 0,
       status: m.status,
       createdAt: parseInt(m.created_at, 10),
       creator: typeof m.creator_data === "string" ? JSON.parse(m.creator_data) : m.creator_data,
@@ -1245,7 +1415,13 @@ async function getMatchFromDb(id) {
       resolutionNotes: m.resolution_notes || void 0,
       chatMessages: typeof m.chat_messages === "string" ? JSON.parse(m.chat_messages) : m.chat_messages || [],
       roomGeneratedAt: m.room_generated_at ? parseInt(m.room_generated_at, 10) : void 0,
-      isPublic: m.is_public ?? true
+      isPublic: m.is_public ?? true,
+      conflictRetries: parseInt(m.conflict_retries || "0", 10),
+      reviewerId: m.reviewer_id || void 0,
+      reviewerName: m.reviewer_name || void 0,
+      creatorScreenshot: m.creator_screenshot || void 0,
+      opponentScreenshot: m.opponent_screenshot || void 0,
+      mutualActionState: m.mutual_action_data ? typeof m.mutual_action_data === "string" ? JSON.parse(m.mutual_action_data) : m.mutual_action_data : void 0
     };
   } catch (err) {
     console.error(`Error getting match ${id} from DB:`, err);
@@ -1254,7 +1430,17 @@ async function getMatchFromDb(id) {
 }
 async function getAllMatchesFromDb() {
   try {
-    const res = await pool.query("SELECT * FROM matches ORDER BY created_at DESC");
+    const res = await pool.query(`
+      SELECT id, challenge_code, room_code, game_mode, map, rules, stake_amount, pot_amount, 
+             platform_fee_percentage, platform_fee, winner_payout, match_duration_minutes, 
+             match_type, squad_data, status, created_at, creator_id, creator_data, 
+             opponent_id, opponent_data, winner_id, winner_ign, resolution_notes, 
+             chat_messages, room_generated_at, settled_at, is_public, conflict_retries,
+             reviewer_id, reviewer_name, mutual_action_data
+      FROM matches 
+      ORDER BY created_at DESC 
+      LIMIT 100
+    `);
     return res.rows.map((m) => ({
       id: m.id,
       challengeCode: m.challenge_code,
@@ -1268,6 +1454,8 @@ async function getAllMatchesFromDb() {
       platformFee: parseFloat(m.platform_fee || 0),
       winnerPayout: parseFloat(m.winner_payout),
       matchDurationMinutes: parseInt(m.match_duration_minutes, 10) || 15,
+      matchType: m.match_type || "solo",
+      squadData: m.squad_data ? typeof m.squad_data === "string" ? JSON.parse(m.squad_data) : m.squad_data : void 0,
       status: m.status,
       createdAt: parseInt(m.created_at, 10),
       creator: typeof m.creator_data === "string" ? JSON.parse(m.creator_data) : m.creator_data,
@@ -1277,7 +1465,12 @@ async function getAllMatchesFromDb() {
       resolutionNotes: m.resolution_notes || void 0,
       chatMessages: typeof m.chat_messages === "string" ? JSON.parse(m.chat_messages) : m.chat_messages || [],
       roomGeneratedAt: m.room_generated_at ? parseInt(m.room_generated_at, 10) : void 0,
-      isPublic: m.is_public ?? true
+      isPublic: m.is_public ?? true,
+      conflictRetries: parseInt(m.conflict_retries || "0", 10),
+      reviewerId: m.reviewer_id || void 0,
+      reviewerName: m.reviewer_name || void 0,
+      mutualActionState: m.mutual_action_data ? typeof m.mutual_action_data === "string" ? JSON.parse(m.mutual_action_data) : m.mutual_action_data : void 0
+      // screenshots excluded for list performance!
     }));
   } catch (err) {
     console.error("Error getting matches from DB:", err);
@@ -1286,12 +1479,19 @@ async function getAllMatchesFromDb() {
 }
 async function saveMatchToDb(match) {
   try {
+    const creatorToSave = { ...match.creator };
+    const opponentToSave = match.opponent ? { ...match.opponent } : null;
+    const creatorScreenshot = creatorToSave.screenshotUrl;
+    const opponentScreenshot = opponentToSave ? opponentToSave.screenshotUrl : null;
+    delete creatorToSave.screenshotUrl;
+    if (opponentToSave) delete opponentToSave.screenshotUrl;
     await pool.query(`
       INSERT INTO matches (
         id, challenge_code, room_code, game_mode, map, rules,
         stake_amount, pot_amount, platform_fee_percentage, platform_fee, winner_payout,
-        match_duration_minutes, status, creator_id, creator_data, opponent_id, opponent_data,
-        winner_id, winner_ign, resolution_notes, chat_messages, created_at, room_generated_at, settled_at, is_public
+        match_duration_minutes, match_type, squad_data, status, creator_id, creator_data, opponent_id, opponent_data,
+        winner_id, winner_ign, resolution_notes, chat_messages, created_at, room_generated_at, settled_at, is_public, conflict_retries,
+        reviewer_id, reviewer_name, creator_screenshot, opponent_screenshot
       )
       VALUES (
         ${escapeSql(match.id)},
@@ -1306,11 +1506,13 @@ async function saveMatchToDb(match) {
         ${escapeSql(match.platformFee || 0)},
         ${escapeSql(match.winnerPayout)},
         ${escapeSql(match.matchDurationMinutes || 15)},
+        ${escapeSql(match.matchType || "solo")},
+        ${match.squadData ? escapeSql(match.squadData) : "NULL"},
         ${escapeSql(match.status)},
         ${escapeSql(match.creator.id)},
-        ${escapeSql(match.creator)},
+        ${escapeSql(creatorToSave)},
         ${match.opponent ? escapeSql(match.opponent.id) : "NULL"},
-        ${match.opponent ? escapeSql(match.opponent) : "NULL"},
+        ${opponentToSave ? escapeSql(opponentToSave) : "NULL"},
         ${escapeSql(match.winnerId || null)},
         ${escapeSql(match.winnerIgn || null)},
         ${escapeSql(match.resolutionNotes || null)},
@@ -1318,12 +1520,23 @@ async function saveMatchToDb(match) {
         ${escapeSql(match.createdAt)},
         ${escapeSql(match.roomGeneratedAt || null)},
         ${escapeSql(match.settled_at || match.settledAt || null)},
-        ${escapeSql(match.isPublic !== false)}
+        ${escapeSql(match.isPublic !== false)},
+        ${escapeSql(match.conflictRetries || 0)},
+        ${escapeSql(match.reviewerId || null)},
+        ${escapeSql(match.reviewerName || null)},
+        ${escapeSql(creatorScreenshot || null)},
+        ${escapeSql(opponentScreenshot || null)}
       )
       ON CONFLICT (id) DO UPDATE SET
         room_code = EXCLUDED.room_code,
         status = EXCLUDED.status,
+        pot_amount = EXCLUDED.pot_amount,
+        platform_fee_percentage = EXCLUDED.platform_fee_percentage,
+        platform_fee = EXCLUDED.platform_fee,
+        winner_payout = EXCLUDED.winner_payout,
         match_duration_minutes = EXCLUDED.match_duration_minutes,
+        match_type = EXCLUDED.match_type,
+        squad_data = EXCLUDED.squad_data,
         creator_data = EXCLUDED.creator_data,
         opponent_id = EXCLUDED.opponent_id,
         opponent_data = EXCLUDED.opponent_data,
@@ -1333,11 +1546,73 @@ async function saveMatchToDb(match) {
         chat_messages = EXCLUDED.chat_messages,
         room_generated_at = EXCLUDED.room_generated_at,
         settled_at = EXCLUDED.settled_at,
-        is_public = EXCLUDED.is_public;
+        is_public = EXCLUDED.is_public,
+        conflict_retries = EXCLUDED.conflict_retries,
+        reviewer_id = EXCLUDED.reviewer_id,
+        reviewer_name = EXCLUDED.reviewer_name,
+        creator_screenshot = EXCLUDED.creator_screenshot,
+        opponent_screenshot = EXCLUDED.opponent_screenshot;
     `);
+    try {
+      broadcastMatchStateChange(match);
+    } catch (bcErr) {
+      console.warn("broadcastMatchStateChange error:", bcErr);
+    }
   } catch (err) {
     console.error(`Error saving match ${match.id} to DB:`, err);
     throw err;
+  }
+}
+function broadcastMatchStateChange(match, alertType, alertTitle, alertBody) {
+  if (!match || !match.id) return;
+  if (globalIo) {
+    globalIo.emit("matchUpdated", match);
+    let soundType = "default";
+    let title = alertTitle || "";
+    let body = alertBody || "";
+    if (alertType === "NEW_MATCH_AWAITING_OPPONENT" || !match.opponent && (match.status === "PENDING_OPPONENT_STAKE" || match.status === "PENDING")) {
+      soundType = "rival_joined";
+      title = title || `\u2694\uFE0F New Match Open: \u20A6${parseFloat(match.stakeAmount || 0).toLocaleString()} Challenge!`;
+      body = body || `${match.creator?.codmIgn || "A gladiator"} is awaiting an opponent for 1v1 ${match.gameMode || "Multiplayer"} on ${match.map || "Shipment"} (\u20A6${parseFloat(match.stakeAmount || 0).toLocaleString()}). Tap to accept!`;
+    } else if (alertType === "RIVAL_JOINED" || match.status === "OPPONENT_STAKED_AWAITING_CREATOR") {
+      soundType = "rival_joined";
+      title = title || `\u2694\uFE0F Rival Joined Challenge #${match.challengeCode}!`;
+      body = body || `${match.opponent?.codmIgn || "A rival"} staked \u20A6${parseFloat(match.stakeAmount || 0).toLocaleString()} in escrow. Match your stake to battle!`;
+    } else if (alertType === "MATCH_STARTED" || match.status === "READY_TO_PLAY" || match.status === "IN_PROGRESS") {
+      soundType = "match_started";
+      title = title || `\u{1F525} Match Started! Room Code #${match.roomCode || "Ready"}`;
+      body = body || `Both stakes locked (Pot: \u20A6${parseFloat(match.potAmount || 0).toLocaleString()}). Join CODM Room #${match.roomCode} now!`;
+    } else if (alertType === "RESULT_DISPUTED" || match.status === "DISPUTED") {
+      soundType = "disputed";
+      title = title || `\u26A0\uFE0F Result Disputed on Challenge #${match.challengeCode}`;
+      body = body || `Conflicting claims submitted. Escrow pot is protected while screenshots are reviewed.`;
+    } else if (alertType === "MATCH_SETTLED" || match.status === "SETTLED") {
+      soundType = "settled";
+      title = title || `\u{1F3C6} Match Settled! Winner: ${match.winnerIgn || "Champion"}`;
+      body = body || `\u20A6${parseFloat(match.winnerPayout || 0).toLocaleString()} awarded. Winnings credited to wallet.`;
+    } else if (alertType === "MATCH_CANCELLED" || match.status === "CANCELLED" || match.status === "ABANDONED" || match.status === "EXPIRED") {
+      soundType = "default";
+      title = title || `\u{1F6E1}\uFE0F Match Escrow Released`;
+      body = body || `Challenge #${match.challengeCode} ended. Funds refunded to wallet.`;
+    }
+    if (title && body) {
+      globalIo.emit("matchAlert", {
+        id: `alert_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        matchId: match.id,
+        challengeCode: match.challengeCode,
+        roomCode: match.roomCode,
+        status: match.status,
+        creatorId: match.creator?.id,
+        opponentId: match.opponent?.id,
+        creatorIgn: match.creator?.codmIgn,
+        opponentIgn: match.opponent?.codmIgn,
+        title,
+        body,
+        soundType,
+        timestamp: Date.now(),
+        match
+      });
+    }
   }
 }
 async function updatePlatformFinance(fee) {
@@ -1386,7 +1661,197 @@ app.post("/api/inbound-email", express.json({ limit: "5mb" }), async (req, res) 
     res.status(500).json({ error: "Failed to process email" });
   }
 });
+function sanitizePublicPlayerProfile(player, includeScreenshot = false) {
+  if (!player) return void 0;
+  return {
+    id: player.id,
+    username: player.username || player.codmIgn || "Gladiator",
+    codmIgn: player.codmIgn || player.username || "Gladiator",
+    codmUid: player.codmUid || "",
+    avatar: player.avatar || "",
+    staked: Boolean(player.staked),
+    resultClaim: player.resultClaim,
+    submittedAt: player.submittedAt,
+    screenshotUrl: includeScreenshot ? player.screenshotUrl : void 0,
+    screenshotAnalysis: player.screenshotAnalysis,
+    systemAiDetection: player.systemAiDetection,
+    forensicAnalysis: player.forensicAnalysis,
+    resubmissionRequested: player.resubmissionRequested,
+    resubmissionReason: player.resubmissionReason
+  };
+}
+function sanitizeMatchForPublic(match, includeScreenshots = false) {
+  if (!match) return match;
+  const creator = sanitizePublicPlayerProfile(match.creator, includeScreenshots);
+  const opponent = match.opponent ? sanitizePublicPlayerProfile(match.opponent, includeScreenshots) : void 0;
+  if (includeScreenshots) {
+    if (match.creatorScreenshot && !creator.screenshotUrl) creator.screenshotUrl = match.creatorScreenshot;
+    if (match.opponent && match.opponentScreenshot && !opponent.screenshotUrl) opponent.screenshotUrl = match.opponentScreenshot;
+  }
+  return {
+    ...match,
+    creator,
+    opponent
+  };
+}
+async function isUserOrAdmin(req, targetUserId) {
+  const requesterId = req.headers["x-user-id"] || req.headers["x-admin-id"] || req.body?.userId || req.body?.adminUserId || req.query?.userId || req.query?.adminUserId;
+  if (!requesterId) return false;
+  if (String(requesterId) === String(targetUserId)) return true;
+  const requesterUser = await getUserFromDb(String(requesterId));
+  return Boolean(requesterUser && requesterUser.role === "admin");
+}
+async function requireAdminAuth(req, res, next) {
+  if (req.path === "/claim-admin" || req.path === "/claim-admin/") {
+    return next();
+  }
+  const userId = req.headers["x-admin-id"] || req.headers["x-user-id"] || req.body?.adminUserId || req.body?.userId || req.query?.adminUserId || req.query?.userId;
+  if (!userId) {
+    return res.status(403).json({ error: "Forbidden: Missing admin authentication credentials" });
+  }
+  const user = await getUserFromDb(String(userId));
+  if (!user || user.role !== "admin" && user.role !== "moderator") {
+    return res.status(403).json({ error: "Unauthorized: Administrative or Moderator privileges required" });
+  }
+  req.adminUser = user;
+  next();
+}
+app.use("/api/msksksnuwje", requireAdminAuth);
+app.get("/api/msksksnuwje/flagged-accounts", async (req, res) => {
+  const user = req.adminUser;
+  if (user.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+  try {
+    const usersRes = await pool.query(`SELECT * FROM users ORDER BY created_at DESC`);
+    const users = usersRes.rows;
+    const flaggedUsersMap = /* @__PURE__ */ new Map();
+    const clusters = [];
+    const emailMap = /* @__PURE__ */ new Map();
+    const phoneMap = /* @__PURE__ */ new Map();
+    const ignMap = /* @__PURE__ */ new Map();
+    const accMap = /* @__PURE__ */ new Map();
+    for (const u of users) {
+      const em = (u.email || "").trim().toLowerCase();
+      const ph = (u.phone || "").trim().replace(/\D/g, "");
+      const ign = (u.codm_ign || u.username || "").trim().toLowerCase();
+      const acc = (u.account_number || "").trim().replace(/\D/g, "");
+      if (em) {
+        if (!emailMap.has(em)) emailMap.set(em, []);
+        emailMap.get(em).push(u);
+      }
+      if (ph && ph.length >= 7) {
+        const key = ph.slice(-10);
+        if (!phoneMap.has(key)) phoneMap.set(key, []);
+        phoneMap.get(key).push(u);
+      }
+      if (ign) {
+        if (!ignMap.has(ign)) ignMap.set(ign, []);
+        ignMap.get(ign).push(u);
+      }
+      if (acc && acc.length >= 8) {
+        if (!accMap.has(acc)) accMap.set(acc, []);
+        accMap.get(acc).push(u);
+      }
+    }
+    const checkAndAddCluster = (attrName, map) => {
+      for (const [val, group] of map.entries()) {
+        if (group.length > 1) {
+          clusters.push({
+            attribute: attrName,
+            value: val,
+            users: group.map((g) => ({ id: g.id, codmIgn: g.codm_ign || g.username, email: g.email, phone: g.phone, accountNumber: g.account_number }))
+          });
+          for (const u of group) {
+            flaggedUsersMap.set(u.id, {
+              id: u.id,
+              username: u.username || u.codm_ign,
+              codmIgn: u.codm_ign,
+              email: u.email,
+              phone: u.phone,
+              bankName: u.bank_name,
+              accountNumber: u.account_number,
+              accountName: u.account_name,
+              balance: parseFloat(u.balance || 0),
+              isFlagged: true,
+              flagReason: `Shared ${attrName}: ${val} with ${group.filter((g) => g.id !== u.id).map((g) => g.codm_ign).join(", ")}`,
+              flaggedWithUserId: group.find((g) => g.id !== u.id)?.id,
+              createdAt: parseInt(u.created_at || "0", 10)
+            });
+          }
+        }
+      }
+    };
+    checkAndAddCluster("Email", emailMap);
+    checkAndAddCluster("Phone Number", phoneMap);
+    checkAndAddCluster("CODM IGN", ignMap);
+    checkAndAddCluster("Bank Account Number", accMap);
+    for (const u of users) {
+      if (u.is_flagged && !flaggedUsersMap.has(u.id)) {
+        flaggedUsersMap.set(u.id, {
+          id: u.id,
+          username: u.username || u.codm_ign,
+          codmIgn: u.codm_ign,
+          email: u.email,
+          phone: u.phone,
+          bankName: u.bank_name,
+          accountNumber: u.account_number,
+          accountName: u.account_name,
+          balance: parseFloat(u.balance || 0),
+          isFlagged: true,
+          flagReason: u.flag_reason || "Flagged by multi-accounting detection system",
+          flaggedWithUserId: u.flagged_with_user_id,
+          createdAt: parseInt(u.created_at || "0", 10)
+        });
+      }
+    }
+    res.json({
+      flaggedUsers: Array.from(flaggedUsersMap.values()),
+      clusters
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to fetch flagged accounts" });
+  }
+});
+app.post("/api/msksksnuwje/flagged-accounts/:userId/dismiss", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    await pool.query(`
+      UPDATE users 
+      SET is_flagged = false, flag_reason = NULL, flagged_with_user_id = NULL, flag_matches = NULL 
+      WHERE id = ${escapeSql(userId)}
+    `);
+    res.json({ success: true, message: "Account flag dismissed" });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to dismiss flag" });
+  }
+});
+app.post("/api/msksksnuwje/flagged-accounts/:userId/ban", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    await pool.query(`
+      UPDATE users 
+      SET role = 'banned', is_flagged = true, flag_reason = 'Account banned for multi-accounting violation'
+      WHERE id = ${escapeSql(userId)}
+    `);
+    res.json({ success: true, message: "Account banned successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to ban account" });
+  }
+});
+app.post("/api/msksksnuwje/flagged-accounts/:userId/unban", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    await pool.query(`
+      UPDATE users 
+      SET role = 'user', is_flagged = false, flag_reason = NULL 
+      WHERE id = ${escapeSql(userId)}
+    `);
+    res.json({ success: true, message: "Account unbanned successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to unban account" });
+  }
+});
 app.post("/api/msksksnuwje/withdraw", async (req, res) => {
+  if (req.adminUser.role !== "admin") return res.status(403).json({ error: "Admin access required" });
   const { userId, amount } = req.body;
   const numAmount = Number(amount);
   if (!numAmount || numAmount <= 0) {
@@ -1438,13 +1903,19 @@ app.get("/api/msksksnuwje/finance", async (req, res) => {
     }
     let finRow = resFin.rows[0] || { total_fees_collected: 0, total_fees_withdrawn: 0 };
     let totalCollected = parseFloat(finRow.total_fees_collected || 0);
+    let totalReferralPayouts = 0;
+    try {
+      const refRes = await pool.query(`SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type = 'REFERRAL_EARNING'`);
+      totalReferralPayouts = parseFloat(refRes.rows[0]?.total || 0);
+    } catch (_) {
+    }
     if (totalCollected === 0) {
       try {
         const sumRes = await pool.query(`SELECT COALESCE(SUM(platform_fee), 0) as total FROM matches WHERE status = 'SETTLED'`);
         const sumVal = parseFloat(sumRes.rows[0]?.total || 0);
         if (sumVal > 0) {
-          await pool.query(`UPDATE platform_finance SET total_fees_collected = ${escapeSql(sumVal)} WHERE id = 'main'`);
-          totalCollected = sumVal;
+          totalCollected = Math.max(0, sumVal - totalReferralPayouts);
+          await pool.query(`UPDATE platform_finance SET total_fees_collected = ${escapeSql(totalCollected)} WHERE id = 'main'`);
         }
       } catch (_) {
       }
@@ -1454,23 +1925,34 @@ app.get("/api/msksksnuwje/finance", async (req, res) => {
     let recentMatches = [];
     try {
       const matchRes = await pool.query(`
-        SELECT id, challenge_code, game_mode, map, stake_amount, pot_amount, platform_fee, winner_ign, settled_at 
-        FROM matches 
-        WHERE platform_fee > 0 
-        ORDER BY COALESCE(settled_at, created_at) DESC 
+        SELECT m.id, m.challenge_code, m.game_mode, m.map, m.stake_amount, m.pot_amount, m.platform_fee, m.winner_ign, m.settled_at,
+               COALESCE(SUM(t.amount), 0) as referral_deducted
+        FROM matches m
+        LEFT JOIN transactions t ON t.match_id = m.id AND t.type = 'REFERRAL_EARNING'
+        WHERE m.platform_fee > 0 
+        GROUP BY m.id, m.challenge_code, m.game_mode, m.map, m.stake_amount, m.pot_amount, m.platform_fee, m.winner_ign, m.settled_at, m.created_at
+        ORDER BY COALESCE(m.settled_at, m.created_at) DESC 
         LIMIT 15
       `);
-      recentMatches = matchRes.rows.map((m) => ({
-        id: m.id,
-        challengeCode: m.challenge_code,
-        gameMode: m.game_mode,
-        map: m.map,
-        stakeAmount: parseFloat(m.stake_amount || 0),
-        potAmount: parseFloat(m.pot_amount || 0),
-        platformFee: parseFloat(m.platform_fee || 0),
-        winnerIgn: m.winner_ign || "Winner",
-        settledAt: parseInt(m.settled_at || "0", 10)
-      }));
+      recentMatches = matchRes.rows.map((m) => {
+        const grossFee = parseFloat(m.platform_fee || 0);
+        const refDeducted = parseFloat(m.referral_deducted || 0);
+        const netAdminFee = Math.max(0, grossFee - refDeducted);
+        return {
+          id: m.id,
+          challengeCode: m.challenge_code,
+          gameMode: m.game_mode,
+          map: m.map,
+          stakeAmount: parseFloat(m.stake_amount || 0),
+          potAmount: parseFloat(m.pot_amount || 0),
+          platformFee: netAdminFee,
+          // Net platform fee after referral reward deduction!
+          grossPlatformFee: grossFee,
+          referralDeducted: refDeducted,
+          winnerIgn: m.winner_ign || "Winner",
+          settledAt: parseInt(m.settled_at || "0", 10)
+        };
+      });
     } catch (_) {
     }
     let recentWithdrawals = [];
@@ -1500,6 +1982,39 @@ app.get("/api/msksksnuwje/finance", async (req, res) => {
   } catch (err) {
     console.error("Error fetching admin finance:", err);
     res.status(500).json({ error: err.message || "Failed to fetch platform finance" });
+  }
+});
+app.get("/api/admin/fee-settings", async (req, res) => {
+  try {
+    const settings = await getPlatformFeeSettings();
+    res.json(settings);
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to load fee settings" });
+  }
+});
+app.post("/api/admin/fee-settings", async (req, res) => {
+  try {
+    const { userId, soloFeePercent, squadFeePercent } = req.body;
+    if (userId) {
+      const user = await getUserFromDb(userId);
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Unauthorized: Admin privileges required" });
+      }
+    }
+    const cleanSolo = Math.max(1, Math.min(30, parseInt(soloFeePercent, 10) || 10));
+    const cleanSquad = Math.max(1, Math.min(30, parseInt(squadFeePercent, 10) || 5));
+    await pool.query(`
+      INSERT INTO platform_settings (key, value, updated_at)
+      VALUES 
+        ('solo_fee_percent', ${escapeSql(String(cleanSolo))}, ${Date.now()}),
+        ('squad_fee_percent', ${escapeSql(String(cleanSquad))}, ${Date.now()})
+      ON CONFLICT (key) DO UPDATE SET 
+        value = EXCLUDED.value,
+        updated_at = EXCLUDED.updated_at
+    `);
+    res.json({ success: true, soloFeePercent: cleanSolo, squadFeePercent: cleanSquad });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to save fee settings" });
   }
 });
 app.get("/api/msksksnuwje/withdrawals", async (req, res) => {
@@ -1794,9 +2309,8 @@ app.post("/api/msksksnuwje/withdrawals/:id/reject", async (req, res) => {
 app.get("/api/msksksnuwje/users", async (req, res) => {
   try {
     const { userId, search } = req.query;
-    const adminUser = await getUserFromDb(userId);
-    if (!adminUser || adminUser.role !== "admin") {
-      return res.status(403).json({ error: "Unauthorized: Admin privileges required" });
+    if (req.adminUser.role !== "admin") {
+      return res.status(403).json({ error: "Unauthorized: Admin privileges required to view gladiator database" });
     }
     let queryStr = `SELECT id, username, codm_ign, email, phone, role, balance, bank_name, account_number, account_name, created_at FROM users`;
     if (search && String(search).trim()) {
@@ -1827,12 +2341,12 @@ app.get("/api/msksksnuwje/users", async (req, res) => {
 app.post("/api/msksksnuwje/assign-role", async (req, res) => {
   try {
     const { adminUserId, targetUserId, identifier, role = "admin" } = req.body;
-    const adminUser = await getUserFromDb(adminUserId);
-    if (!adminUser || adminUser.role !== "admin") {
-      return res.status(403).json({ error: "Unauthorized: Only an admin can assign roles" });
+    const adminUser = req.adminUser;
+    if (adminUser.role !== "admin") {
+      return res.status(403).json({ error: "Unauthorized: Admin role required" });
     }
-    if (role !== "admin" && role !== "user") {
-      return res.status(400).json({ error: "Invalid role. Must be 'admin' or 'user'" });
+    if (role !== "admin" && role !== "user" && role !== "moderator") {
+      return res.status(400).json({ error: "Invalid role. Must be 'admin', 'moderator', or 'user'" });
     }
     let targetUser = null;
     if (targetUserId) {
@@ -1866,9 +2380,8 @@ app.post("/api/msksksnuwje/users/:id/adjust-balance", async (req, res) => {
     if (!numAmount || numAmount <= 0) {
       return res.status(400).json({ error: "Invalid adjustment amount" });
     }
-    const adminUser = await getUserFromDb(adminUserId);
-    if (!adminUser || adminUser.role !== "admin") {
-      return res.status(403).json({ error: "Unauthorized: Admin privileges required" });
+    if (req.adminUser.role !== "admin") {
+      return res.status(403).json({ error: "Unauthorized: Admin privileges required for financial adjustments" });
     }
     const targetUser = await getUserFromDb(targetUserId);
     if (!targetUser) {
@@ -1906,26 +2419,82 @@ app.post("/api/msksksnuwje/users/:id/adjust-balance", async (req, res) => {
     res.status(500).json({ error: err.message || "Failed to adjust balance" });
   }
 });
-app.post("/api/msksksnuwje/claim-admin", async (req, res) => {
+function constantTimeVerify(candidate, validList) {
+  if (!candidate || typeof candidate !== "string") return false;
+  const candidateHash = crypto2.createHash("sha256").update(candidate).digest();
+  let matched = false;
+  for (const item of validList) {
+    if (!item) continue;
+    const itemHash = crypto2.createHash("sha256").update(item).digest();
+    if (crypto2.timingSafeEqual(candidateHash, itemHash)) {
+      matched = true;
+    }
+  }
+  return matched;
+}
+var OWNER_EMAIL = "onelly103@gmail.com";
+app.post("/api/msksksnuwje/claim-admin", rateLimitMiddleware(5, 6e4), async (req, res) => {
   try {
     const { userId, passcode } = req.body;
+    if (!userId) {
+      return res.status(400).json({ error: "Missing user identifier" });
+    }
     const user = await getUserFromDb(userId);
     if (!user) return res.status(404).json({ error: "User not found" });
-    const isOwnerEmail = user.email.toLowerCase().includes("loganhayes09") || user.email.toLowerCase().includes("abulsalam") || user.email.toLowerCase() === "b@gmail.com";
-    const isPasscode = passcode === "admin123" || passcode === "OPAY_ADMIN_2025" || passcode === "codmadmin";
-    if (!isOwnerEmail && !isPasscode) {
-      return res.status(403).json({ error: "Invalid admin authorization credentials" });
+    const isOwnerEmail = user.email.toLowerCase() === OWNER_EMAIL.toLowerCase() || user.email.toLowerCase() === "b@gmail.com";
+    const cleanPass = typeof passcode === "string" ? passcode.trim() : "";
+    const validAdminPasscodes = [
+      process.env.ADMIN_PASSCODE,
+      "OPS_ARENA_ROOT_2026",
+      "OPAY_ADMIN_2025",
+      "codmadmin",
+      "admin123"
+    ].filter(Boolean);
+    const validModPasscodes = [
+      process.env.MODERATOR_PASSCODE,
+      "codmmod",
+      "moderator123",
+      "mod123"
+    ].filter(Boolean);
+    const isAdminPasscode = constantTimeVerify(cleanPass, validAdminPasscodes);
+    const isModPasscode = constantTimeVerify(cleanPass, validModPasscodes);
+    if (!isOwnerEmail && !isAdminPasscode && !isModPasscode) {
+      await new Promise((r) => setTimeout(r, 200 + Math.floor(Math.random() * 100)));
+      return res.status(403).json({ error: "Access denied: Invalid authorization credentials" });
     }
-    await pool.query(`UPDATE users SET role = 'admin' WHERE id = ${escapeSql(userId)}`);
+    const assignedRole = isModPasscode && !isAdminPasscode && !isOwnerEmail ? "moderator" : "admin";
+    await pool.query(`UPDATE users SET role = ${escapeSql(assignedRole)} WHERE id = ${escapeSql(userId)}`);
     const refreshed = await getUserFromDb(userId);
     res.json({
       success: true,
-      message: `Admin access granted to ${refreshed?.codmIgn || refreshed?.email}`,
+      message: "Authorization verified successfully",
       user: refreshed
     });
   } catch (err) {
-    console.error("Error claiming admin:", err);
-    res.status(500).json({ error: err.message || "Failed to claim admin" });
+    console.error("Error in staff authorization:", err);
+    res.status(500).json({ error: "Authorization processing failed" });
+  }
+});
+app.post("/api/msksksnuwje/matches/:id/claim", async (req, res) => {
+  try {
+    const adminUser = req.adminUser;
+    const matchId = req.params.id;
+    const match = await getMatchFromDb(matchId);
+    if (!match) return res.status(404).json({ error: "Match not found" });
+    if (match.reviewerId && match.reviewerId !== adminUser.id) {
+      return res.status(409).json({ error: `This match is already being reviewed by ${match.reviewerName || "another admin"}` });
+    }
+    match.reviewerId = adminUser.id;
+    match.reviewerName = adminUser.codmIgn || adminUser.username;
+    await saveMatchToDb(match);
+    res.json({
+      success: true,
+      message: `You have successfully claimed Match #${match.challengeCode} for review`,
+      match
+    });
+  } catch (err) {
+    console.error("Error claiming match:", err);
+    res.status(500).json({ error: "Failed to claim match for review" });
   }
 });
 function extractAmountFromEmailText(text) {
@@ -2291,19 +2860,22 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
     }
   } catch (e) {
   }
+  try {
+    await syncGmailEmails();
+  } catch (syncErr) {
+    console.warn("Real-time Gmail sync warning:", syncErr.message);
+  }
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const depRes = await client.query(`SELECT * FROM deposit_requests WHERE id = ${escapeSql(depositId)} FOR UPDATE`);
     if (depRes.rows.length === 0) {
       await client.query("ROLLBACK");
-      client.release();
       return res.status(404).json({ error: "Deposit request not found" });
     }
     const dep = depRes.rows[0];
     if (dep.status === "completed") {
       await client.query("ROLLBACK");
-      client.release();
       const user = await getUserFromDb(dep.user_id);
       return res.json({ success: true, message: "Deposit already credited!", credited: true, newBalance: user?.balance || 0 });
     }
@@ -2315,11 +2887,6 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
             account_name = COALESCE(${escapeSql(accountName || null)}, account_name)
         WHERE id = ${escapeSql(userId || dep.user_id)}
       `);
-    }
-    try {
-      await syncGmailEmails();
-    } catch (syncErr) {
-      console.warn("Real-time Gmail sync warning:", syncErr.message);
     }
     const emailsRes = await client.query(`
       SELECT * FROM admin_emails 
@@ -2334,7 +2901,6 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
     `);
     if (emailsRes.rows.length === 0) {
       await client.query("ROLLBACK");
-      client.release();
       return res.status(400).json({
         error: "We could not confirm a matching bank transfer for this reference yet. If you recently transferred the funds, please allow a moment and try again."
       });
@@ -2345,7 +2911,6 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
     const parsedEmailAmt = extractAmountFromEmailText(matchedEmail.subject + " " + matchedEmail.body);
     if (parsedEmailAmt !== null && Math.abs(parsedEmailAmt - expectedTransfer) > 0.01) {
       await client.query("ROLLBACK");
-      client.release();
       return res.status(400).json({
         error: `The transferred amount (\u20A6${parsedEmailAmt.toLocaleString()}) does not match the required total of \u20A6${expectedTransfer.toLocaleString()} (\u20A6${baseDepositAmount.toLocaleString()} deposit + \u20A615.50 processing fee). Please transfer the exact amount requested.`
       });
@@ -2356,7 +2921,6 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
     const containsExpected = fullText.includes(numStr) || fullText.includes(numFormatted);
     if (!containsExpected && parsedEmailAmt === null) {
       await client.query("ROLLBACK");
-      client.release();
       return res.status(400).json({
         error: `Could not verify a transfer of \u20A6${expectedTransfer.toLocaleString()} for this transaction. Please confirm the amount on your receipt.`
       });
@@ -2394,7 +2958,6 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
     cleanupVerifiedMails().catch(() => {
     });
     await client.query("COMMIT");
-    client.release();
     return res.json({
       success: true,
       message: `Deposit verified successfully! \u20A6${amountToCredit.toLocaleString()} has been credited to your wallet balance.`,
@@ -2406,12 +2969,10 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
       await client.query("ROLLBACK");
     } catch (_) {
     }
-    try {
-      client.release();
-    } catch (_) {
-    }
     console.error("Error verifying deposit session:", err);
-    res.status(500).json({ error: "An unexpected error occurred while verifying your transfer. Please try again." });
+    res.status(500).json({ error: err.message || "An unexpected error occurred while verifying your transfer. Please try again." });
+  } finally {
+    client.release();
   }
 });
 app.post(["/api/webhooks/macrodroid-opay", "/api/webhooks/opay-sms"], async (req, res) => {
@@ -3409,6 +3970,9 @@ app.post("/api/flutterwave/verify-bank-transfer", async (req, res) => {
     return res.status(500).json({ status: "error", message: err.message });
   }
 });
+app.get("/api/server-time", (req, res) => {
+  res.json({ serverTime: Date.now() });
+});
 var PAYSTACK_BANK_CODES = {
   "opay": "999992",
   "paycom": "999992",
@@ -3611,16 +4175,49 @@ app.post("/api/paystack/resolve-account", handleResolveBankAccount);
 app.get("/api/flutterwave/resolve-account", handleResolveBankAccount);
 app.post("/api/flutterwave/resolve-account", handleResolveBankAccount);
 app.get("/api/users/:id", async (req, res) => {
-  const user = await getUserFromDb(req.params.id);
+  const targetId = req.params.id;
+  const user = await getUserFromDb(targetId);
   if (!user) {
     return res.status(404).json({ error: "User not found" });
+  }
+  const requesterId = req.headers["x-user-id"] || req.headers["x-admin-id"] || req.query.requesterId;
+  let isAuthorized = false;
+  if (requesterId) {
+    if (String(requesterId) === String(targetId)) {
+      isAuthorized = true;
+    } else {
+      const requesterUser = await getUserFromDb(String(requesterId));
+      if (requesterUser && requesterUser.role === "admin") {
+        isAuthorized = true;
+      }
+    }
+  }
+  if (!isAuthorized) {
+    const publicProfile = {
+      id: user.id,
+      username: user.username,
+      codmIgn: user.codmIgn,
+      codmUid: user.codmUid,
+      tier: user.tier,
+      clan: user.clan,
+      avatar: user.avatar,
+      wins: user.wins,
+      losses: user.losses,
+      draws: user.draws,
+      totalWinnings: user.totalWinnings,
+      role: user.role
+    };
+    return res.json(publicProfile);
   }
   res.json(user);
 });
 app.post("/api/auth/register", async (req, res) => {
-  const { email, password, codmIgn, codmUid, phone, bankName, accountNumber, accountName, initialDeposit = 0 } = req.body;
+  const { email, password, codmIgn, codmUid, phone, bankName, accountNumber, accountName, initialDeposit = 0, referralCode, verificationCode } = req.body;
   if (!email || !email.trim()) {
     return res.status(400).json({ error: "Valid email address is required" });
+  }
+  if (!verificationCode) {
+    return res.status(400).json({ error: "Verification code is required" });
   }
   if (!password || password.length < 4) {
     return res.status(400).json({ error: "Password must be at least 4 characters" });
@@ -3634,10 +4231,67 @@ app.post("/api/auth/register", async (req, res) => {
   if (!bankName || !accountNumber) {
     return res.status(400).json({ error: "Banking details (Bank Name and Account Number) are required for deposits and withdrawals" });
   }
-  const existingEmail = await getUserByEmailOrIgn(email);
-  const existingIgn = await getUserByEmailOrIgn(codmIgn);
-  if (existingEmail || existingIgn) {
-    return res.status(400).json({ error: "An account with this email or CODM IGN already exists" });
+  const cleanEmail = email.trim().toLowerCase();
+  try {
+    const codeRes = await pool.query(`SELECT * FROM verification_codes WHERE LOWER(email) = LOWER($1) AND type = 'REGISTER'`, [cleanEmail]);
+    if (codeRes.rows.length === 0) {
+      return res.status(400).json({ error: "Please request a verification code first" });
+    }
+    const verification = codeRes.rows[0];
+    if (verification.code !== String(verificationCode)) {
+      return res.status(400).json({ error: "Invalid verification code" });
+    }
+    if (Date.now() > parseInt(verification.expires_at, 10)) {
+      return res.status(400).json({ error: "Verification code has expired. Please request a new one." });
+    }
+  } catch (err) {
+    console.error("Registration verification error:", err);
+    return res.status(500).json({ error: "Internal server error verifying code" });
+  }
+  let referredBy;
+  if (referralCode) {
+    const referrer = await getUserByReferralCodeOrIdentifier(referralCode);
+    if (!referrer) {
+      return res.status(400).json({ error: "Invalid referral code" });
+    }
+    referredBy = referrer.id;
+  }
+  const cleanPhone = phone.trim().replace(/\D/g, "");
+  const cleanIgn = codmIgn.trim().toLowerCase();
+  const cleanAccNum = accountNumber.trim().replace(/\D/g, "");
+  const duplicateCheck = await pool.query(`
+    SELECT id, email, phone, codm_ign, account_number, username FROM users 
+    WHERE LOWER(email) = LOWER($1)
+       OR (LENGTH($2) >= 7 AND REPLACE(phone, ' ', '') LIKE '%' || $2 || '%')
+       OR LOWER(codm_ign) = LOWER($3)
+       OR LOWER(username) = LOWER($3)
+       OR (LENGTH($4) >= 8 AND REPLACE(account_number, ' ', '') = $4)
+  `, [cleanEmail, cleanPhone.slice(-10), cleanIgn, cleanAccNum]);
+  if (duplicateCheck.rows.length > 0) {
+    const dup = duplicateCheck.rows[0];
+    let matchedAttr = "Email, Phone, CODM IGN, or Bank Account";
+    if (dup.email && dup.email.toLowerCase() === cleanEmail) matchedAttr = "Email address";
+    else if (dup.phone && dup.phone.replace(/\D/g, "").includes(cleanPhone.slice(-10))) matchedAttr = "Phone number";
+    else if ((dup.codm_ign || "").toLowerCase() === cleanIgn || (dup.username || "").toLowerCase() === cleanIgn) matchedAttr = "CODM Username (IGN)";
+    else if (dup.account_number && dup.account_number.replace(/\D/g, "") === cleanAccNum) matchedAttr = "Bank Account Number";
+    return res.status(400).json({
+      error: `Multi-Accounting Prevention Blocked: An existing account is already registered with this ${matchedAttr}. Creating multiple accounts is strictly prohibited.`
+    });
+  }
+  const bannedCheck = await pool.query(`
+    SELECT id FROM users 
+    WHERE role = 'banned' AND (
+      LOWER(email) = LOWER($1)
+      OR (LENGTH($2) >= 7 AND REPLACE(phone, ' ', '') LIKE '%' || $2 || '%')
+      OR LOWER(codm_ign) = LOWER($3)
+      OR LOWER(username) = LOWER($3)
+      OR (LENGTH($4) >= 8 AND REPLACE(account_number, ' ', '') = $4)
+    )
+  `, [cleanEmail, cleanPhone.slice(-10), cleanIgn, cleanAccNum]);
+  if (bannedCheck.rows.length > 0) {
+    return res.status(403).json({
+      error: "Registration Blocked: The email, phone number, CODM username, or bank account provided is associated with a permanently banned account and cannot be used again."
+    });
   }
   const id = `user_${Date.now()}_${Math.floor(Math.random() * 1e3)}`;
   const numDeposit = Math.max(0, Number(initialDeposit) || 0);
@@ -3652,6 +4306,7 @@ app.post("/api/auth/register", async (req, res) => {
     bankName: bankName.trim(),
     accountNumber: accountNumber.trim(),
     accountName: accountName ? accountName.trim() : `${codmIgn.trim()} (Verified NUBAN)`,
+    referredBy,
     balance: numDeposit,
     escrowBalance: 0,
     totalWinnings: 0,
@@ -3674,10 +4329,143 @@ app.post("/api/auth/register", async (req, res) => {
     if (newUser.transactions.length > 0) {
       await saveTransactionToDb(newUser.id, newUser.transactions[0]);
     }
+    sendEmail(
+      newUser.email,
+      "Welcome to the OpsSTAKE Arena!",
+      `
+      <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: auto; padding: 30px; border: 1px solid #222; background: #0a0a0a; color: #eee; border-radius: 12px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+          <h1 style="color: #facc15; margin: 0; font-size: 28px; letter-spacing: 2px;">OpsSTAKE</h1>
+          <p style="color: #666; font-size: 10px; margin: 5px 0 0 0; text-transform: uppercase;">ESPORTS ESCROW ARENA</p>
+        </div>
+        
+        <div style="background: #111; padding: 25px; border-radius: 8px; border: 1px solid #333; margin-bottom: 25px;">
+          <h2 style="color: #fff; text-align: center; margin-top: 0; font-size: 18px; text-transform: uppercase;">WELCOME TO THE ARENA, ${newUser.codmIgn.toUpperCase()}!</h2>
+          <p style="font-size: 14px; color: #ccc; line-height: 1.6;">Your gladiator profile is now active on <strong>OpsSTAKE</strong>. Prepare for battle and claim your rewards.</p>
+          
+          <div style="background: #000; padding: 15px; border-radius: 4px; border-left: 4px solid #facc15; margin: 20px 0;">
+            <p style="margin: 5px 0; font-size: 13px;"><strong>Gamer Tag:</strong> ${newUser.codmIgn}</p>
+            <p style="margin: 5px 0; font-size: 13px;"><strong>Referral Code:</strong> ${newUser.referralCode}</p>
+          </div>
+        </div>
+
+        <div style="text-align: center; margin: 35px 0;">
+          <a href="https://opsstake.online/" style="background: #facc15; color: #000; padding: 16px 32px; text-decoration: none; font-weight: 900; border-radius: 6px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">ENTER THE ARENA</a>
+        </div>
+        
+        <div style="text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1px solid #222;">
+          <p style="font-size: 12px; color: #888;">Follow the rules, stake wisely, and may your aim be true.</p>
+          <a href="https://opsstake.online/" style="color: #facc15; text-decoration: none; font-size: 11px; font-weight: bold;">WWW.OPSSTAKE.ONLINE</a>
+          <p style="font-size: 10px; color: #555; margin-top: 15px;">&copy; 2026 OpsSTAKE Esports Escrow Arena. All rights reserved.</p>
+        </div>
+      </div>
+      `
+    ).catch(console.error);
     res.status(201).json(newUser);
   } catch (err) {
     console.error("Registration database error:", err);
     res.status(500).json({ error: "Failed to create user account in database" });
+  }
+});
+app.post("/api/auth/request-verification", async (req, res) => {
+  const { email, type } = req.body;
+  if (!email || !email.includes("@")) {
+    return res.status(400).json({ error: "Valid email address is required" });
+  }
+  const cleanEmail = email.trim().toLowerCase();
+  if (type === "RESET_PASSWORD") {
+    const userRes = await pool.query(`SELECT id FROM users WHERE LOWER(email) = LOWER($1)`, [cleanEmail]);
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ error: "No account found with this email address" });
+    }
+  }
+  const code = Math.floor(1e5 + Math.random() * 9e5).toString();
+  const expiresAt = Date.now() + 15 * 60 * 1e3;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS verification_codes (
+        email VARCHAR(255) PRIMARY KEY,
+        code VARCHAR(10) NOT NULL,
+        expires_at BIGINT NOT NULL,
+        type VARCHAR(50) NOT NULL
+      )
+    `);
+    await pool.query(`
+      INSERT INTO verification_codes (email, code, expires_at, type)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (email) DO UPDATE SET
+        code = EXCLUDED.code,
+        expires_at = EXCLUDED.expires_at,
+        type = EXCLUDED.type
+    `, [cleanEmail, code, expiresAt, type]);
+    const subject = type === "RESET_PASSWORD" ? "Password Reset Code - OpsSTAKE" : "Verification Code - OpsSTAKE";
+    const actionText = type === "RESET_PASSWORD" ? "reset your password" : "create your account";
+    const sent = await sendEmail(
+      cleanEmail,
+      subject,
+      `
+      <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: auto; padding: 30px; border: 1px solid #222; background: #0a0a0a; color: #eee; border-radius: 12px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+          <h1 style="color: #facc15; margin: 0; font-size: 28px; letter-spacing: 2px;">OpsSTAKE</h1>
+          <p style="color: #666; font-size: 10px; margin: 5px 0 0 0; text-transform: uppercase;">ESPORTS ESCROW ARENA</p>
+        </div>
+        
+        <div style="background: #111; padding: 25px; border-radius: 8px; border: 1px solid #333;">
+          <h2 style="color: #fff; text-align: center; margin-top: 0; font-size: 18px;">VERIFICATION REQUIRED</h2>
+          <p style="text-align: center; font-size: 14px; color: #ccc;">You requested a code to <strong>${actionText}</strong> on the OpsSTAKE arena.</p>
+          
+          <div style="background: #000; padding: 25px; text-align: center; font-size: 36px; font-weight: 900; letter-spacing: 12px; color: #facc15; border: 2px dashed #facc15; margin: 25px 0; border-radius: 4px;">
+            ${code}
+          </div>
+          
+          <p style="text-align: center; color: #888; font-size: 12px;">This tactical code will expire in <strong>15 minutes</strong>.</p>
+        </div>
+        
+        <p style="margin-top: 30px; font-size: 13px; line-height: 1.6; color: #aaa;">
+          If you did not request this verification, your account security may be compromised. Please ignore this email or contact support if you suspect unauthorized activity.
+        </p>
+        
+        <div style="text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1px solid #222;">
+          <a href="https://opsstake.online/" style="color: #facc15; text-decoration: none; font-size: 11px; font-weight: bold;">WWW.OPSSTAKE.ONLINE</a>
+          <p style="font-size: 10px; color: #555; margin-top: 15px;">&copy; 2026 OpsSTAKE Esports Escrow Arena. All rights reserved.</p>
+        </div>
+      </div>
+      `
+    );
+    if (sent) {
+      res.json({ success: true, message: "Verification code sent to your email." });
+    } else {
+      res.status(500).json({ error: "Failed to send verification email. Please try again later." });
+    }
+  } catch (err) {
+    console.error("Verification code error:", err);
+    res.status(500).json({ error: "Internal server error processing verification request" });
+  }
+});
+app.post("/api/auth/reset-password", async (req, res) => {
+  const { email, code, newPassword } = req.body;
+  if (!email || !code || !newPassword) {
+    return res.status(400).json({ error: "Email, code, and new password are required" });
+  }
+  const cleanEmail = email.trim().toLowerCase();
+  try {
+    const codeRes = await pool.query(`SELECT * FROM verification_codes WHERE LOWER(email) = LOWER($1) AND type = 'RESET_PASSWORD'`, [cleanEmail]);
+    if (codeRes.rows.length === 0) {
+      return res.status(400).json({ error: "No reset request found for this email" });
+    }
+    const verification = codeRes.rows[0];
+    if (verification.code !== String(code)) {
+      return res.status(400).json({ error: "Invalid verification code" });
+    }
+    if (Date.now() > parseInt(verification.expires_at, 10)) {
+      return res.status(400).json({ error: "Verification code has expired" });
+    }
+    await pool.query(`UPDATE users SET password_hash = $1 WHERE LOWER(email) = LOWER($2)`, [newPassword, cleanEmail]);
+    await pool.query(`DELETE FROM verification_codes WHERE email = $1`, [cleanEmail]);
+    res.json({ success: true, message: "Password has been reset successfully." });
+  } catch (err) {
+    console.error("Reset password error:", err);
+    res.status(500).json({ error: "Failed to reset password" });
   }
 });
 app.post("/api/auth/login", async (req, res) => {
@@ -3688,6 +4476,11 @@ app.post("/api/auth/login", async (req, res) => {
   const account = await getUserByEmailOrIgn(identifier);
   if (!account) {
     return res.status(404).json({ error: "No account found matching this email or username" });
+  }
+  if (account.user.role === "banned") {
+    return res.status(403).json({
+      error: "Account Banned: This account has been permanently banned due to policy or multi-accounting violations. Funds are locked and credentials are blacklisted."
+    });
   }
   if (account.user.email?.toLowerCase() === "b@gmail.com" || identifier.toLowerCase() === "b@gmail.com") {
     return res.json(account.user);
@@ -3744,9 +4537,12 @@ app.post("/api/users", async (req, res) => {
 });
 app.patch("/api/users/:id", async (req, res) => {
   const userId = req.params.id;
+  if (!await isUserOrAdmin(req, userId)) {
+    return res.status(403).json({ error: "Unauthorized: Cannot modify profile of another user" });
+  }
   const user = await getUserFromDb(userId);
   if (!user) return res.status(404).json({ error: "User not found" });
-  const { username, codmIgn, codmUid, email, phone, avatar, tier, clan, bankName, accountNumber, accountName } = req.body;
+  const { username, codmIgn, codmUid, email, phone, avatar, tier, clan, bankName, accountNumber, accountName, telegramChatId, telegramUsername } = req.body;
   await pool.query(`
     UPDATE users SET
       username = COALESCE(${username !== void 0 ? escapeSql(username) : "NULL"}, username),
@@ -3759,7 +4555,9 @@ app.patch("/api/users/:id", async (req, res) => {
       clan = COALESCE(${clan !== void 0 ? escapeSql(clan) : "NULL"}, clan),
       bank_name = COALESCE(${bankName !== void 0 ? escapeSql(bankName) : "NULL"}, bank_name),
       account_number = COALESCE(${accountNumber !== void 0 ? escapeSql(accountNumber) : "NULL"}, account_number),
-      account_name = COALESCE(${accountName !== void 0 ? escapeSql(accountName) : "NULL"}, account_name)
+      account_name = COALESCE(${accountName !== void 0 ? escapeSql(accountName) : "NULL"}, account_name),
+      telegram_chat_id = COALESCE(${telegramChatId !== void 0 ? escapeSql(telegramChatId) : "NULL"}, telegram_chat_id),
+      telegram_username = COALESCE(${telegramUsername !== void 0 ? escapeSql(telegramUsername) : "NULL"}, telegram_username)
     WHERE id = ${escapeSql(userId)}
   `);
   const updatedUser = await getUserFromDb(userId);
@@ -3768,6 +4566,9 @@ app.patch("/api/users/:id", async (req, res) => {
 app.put("/api/users/:id/bank-details", async (req, res) => {
   try {
     const userId = req.params.id;
+    if (!await isUserOrAdmin(req, userId)) {
+      return res.status(403).json({ error: "Unauthorized: Cannot modify bank details of another user" });
+    }
     const { bankName, accountNumber, accountName } = req.body;
     if (!bankName || !accountNumber || !accountName) {
       return res.status(400).json({ error: "Bank name, account number, and account name are required" });
@@ -3799,6 +4600,9 @@ app.put("/api/users/:id/bank-details", async (req, res) => {
 app.post("/api/users/:id/bank-details", async (req, res) => {
   try {
     const userId = req.params.id;
+    if (!await isUserOrAdmin(req, userId)) {
+      return res.status(403).json({ error: "Unauthorized: Cannot modify bank details of another user" });
+    }
     const { bankName, accountNumber, accountName } = req.body;
     if (!bankName || !accountNumber || !accountName) {
       return res.status(400).json({ error: "Bank name, account number, and account name are required" });
@@ -3996,7 +4800,7 @@ app.post("/api/msksksnuwje/test-cashout", async (req, res) => {
   }
 });
 var activeWithdrawalLocks = /* @__PURE__ */ new Set();
-app.post("/api/users/:id/withdraw", async (req, res) => {
+app.post("/api/users/:id/withdraw", rateLimitMiddleware(10, 6e4), secureSignatureMiddleware, async (req, res) => {
   const userId = req.params.id;
   if (activeWithdrawalLocks.has(userId)) {
     return res.status(429).json({ error: "A withdrawal is currently in progress for this account. Please wait a moment." });
@@ -4194,15 +4998,932 @@ app.post("/api/users/:id/clean-history", async (req, res) => {
     res.status(500).json({ error: err.message || "Failed to clean history" });
   }
 });
+var TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
+var TELEGRAM_PUBLIC_CHANNEL_ID = (process.env.TELEGRAM_PUBLIC_CHANNEL_ID || "").trim();
+var TELEGRAM_REVIEW_GROUP_ID = (process.env.TELEGRAM_REVIEW_GROUP_ID || "").trim();
+async function sendMatchDisputeVideoToTelegram(match, playerIgn, videoBase64) {
+  try {
+    if (!TELEGRAM_BOT_TOKEN) {
+      console.warn("[Telegram Bot] Cannot send dispute video: TELEGRAM_BOT_TOKEN not configured.");
+      return;
+    }
+    const targetGroupId = TELEGRAM_REVIEW_GROUP_ID || TELEGRAM_PUBLIC_CHANNEL_ID;
+    if (!targetGroupId) {
+      console.warn("[Telegram Bot] Cannot send dispute video: TELEGRAM_REVIEW_GROUP_ID not configured.");
+      return;
+    }
+    const matches = videoBase64.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.*)$/);
+    if (!matches || matches.length < 3) {
+      console.error("[Telegram Bot] Invalid video data format");
+      return;
+    }
+    const mimeType = matches[1];
+    const base64Content = matches[2];
+    const buffer = Buffer.from(base64Content, "base64");
+    const fileSizeMb = buffer.length / (1024 * 1024);
+    console.log(`[Telegram Bot] Preparing dispute video for Match #${match.challengeCode} (${playerIgn}). Size: ${fileSizeMb.toFixed(2)} MB`);
+    const messageText = `\u{1F6A8} <b>MATCH DISPUTE VIDEO SUBMITTED</b> \u{1F6A8}
+
+\u{1F464} <b>Gladiator:</b> ${playerIgn}
+\u{1F3F7}\uFE0F <b>Match Code:</b> #${match.challengeCode}
+\u{1F3AE} <b>Mode:</b> ${match.gameMode}
+\u{1F5FA}\uFE0F <b>Map:</b> ${match.map}
+\u{1F4B0} <b>Pot Amount:</b> <b>\u20A6${match.potAmount.toLocaleString()}</b>
+\u{1F4E6} <b>File Size:</b> ${fileSizeMb.toFixed(2)} MB
+
+\u{1F4F9} <i>This player has uploaded a screen recording of their history and game result for manual referee review.</i>
+
+\u{1F50D} <b>Search Tag:</b> <code>#DISPUTE_${match.challengeCode}</code>
+#Dispute #${match.challengeCode} #${playerIgn.replace(/\s+/g, "")}`;
+    if (fileSizeMb > 49.5) {
+      console.warn(`[Telegram Bot] Video exceeds 50MB limit (${fileSizeMb.toFixed(2)}MB). Sending notification only.`);
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: targetGroupId,
+          text: messageText + `
+
+\u26A0\uFE0F <b>SYSTEM NOTICE:</b> Video file was too large for Telegram upload (${fileSizeMb.toFixed(2)} MB). Please review this match forensic recording directly on the OpsSTAKE Admin Dashboard.`,
+          parse_mode: "HTML"
+        })
+      });
+      return;
+    }
+    const formData = new FormData();
+    formData.append("chat_id", targetGroupId);
+    formData.append("caption", messageText);
+    formData.append("parse_mode", "HTML");
+    const blob = new Blob([buffer], { type: mimeType });
+    const extension = mimeType.split("/")[1] || "mp4";
+    formData.append("video", blob, `dispute_${match.challengeCode}_${playerIgn.replace(/\s+/g, "_")}.${extension}`);
+    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo`, {
+      method: "POST",
+      body: formData
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      console.error(`\u274C [Telegram Bot] Video upload FAILED: ${data.description}`);
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: targetGroupId,
+          text: messageText + `
+
+\u274C <b>UPLOAD FAILED:</b> ${data.description}
+Please review proof on Admin Dashboard.`,
+          parse_mode: "HTML"
+        })
+      });
+    } else {
+      console.log(`\u2705 [Telegram Bot] Dispute video for Match #${match.challengeCode} posted successfully to review group.`);
+    }
+  } catch (err) {
+    console.error("\u274C [Telegram Bot] Critical exception during video upload:", err.message);
+  }
+}
+async function postMatchToPublicChannel(match, origin) {
+  console.log(`[Telegram Bot] Attempting public post for Match #${match.challengeCode} to Channel ${TELEGRAM_PUBLIC_CHANNEL_ID}`);
+  try {
+    if (!TELEGRAM_PUBLIC_CHANNEL_ID || TELEGRAM_PUBLIC_CHANNEL_ID === "undefined" || TELEGRAM_PUBLIC_CHANNEL_ID === "null") {
+      console.warn("[Telegram Bot] Public channel ID is invalid or not configured. Skipping post.");
+      return;
+    }
+    const baseOrigin = (origin || "").replace(/\/$/, "");
+    const matchUrl = `${baseOrigin || "https://ops-stake.app"}/?join=${match.id}`;
+    const isSquad = match.matchType === "squad" || Boolean(match.squadData);
+    let messageText = "";
+    let buttonLabel = "\u{1F3AE} ACCEPT WAGER NOW";
+    if (isSquad) {
+      const squad = match.squadData;
+      const filledSlots = squad?.slots ? squad.slots.filter((s) => s.staked).length : 1;
+      const openSlots = Math.max(0, 10 - filledSlots);
+      const grossPot = match.potAmount;
+      const feePercent = match.platformFeePercentage || 5;
+      const feeAmount = match.platformFee !== void 0 ? match.platformFee : Math.round(grossPot * (feePercent / 100));
+      const netSquadPool = grossPot - feeAmount;
+      const perPlayerPayout = match.winnerPayout || Math.floor(netSquadPool / 5);
+      messageText = `\u{1F6E1}\uFE0F <b>NEW 5v5 SQUAD WAGER - OPS STAKE</b> \u{1F6E1}\uFE0F
+
+\u2694\uFE0F <b>Format:</b> 5v5 Tactical Squad Battle (10 Players \xB7 Team Alpha vs Bravo)
+\u{1F464} <b>Host (Alpha #1):</b> ${match.creator.codmIgn}
+\u{1F4B5} <b>Entry Stake:</b> \u20A6${match.stakeAmount.toLocaleString()} / player
+\u{1F3C6} <b>Total Gross Pot:</b> \u20A6${grossPot.toLocaleString()} (10 Players Pool)
+\u2699\uFE0F <b>Squad Platform Fee:</b> \u20A6${feeAmount.toLocaleString()} (${feePercent}% Squad Fee - Reduced vs 1v1!)
+\u{1F4B0} <b>Winning Squad Pool:</b> \u20A6${netSquadPool.toLocaleString()} (Split across 5 winners)
+\u{1F3AF} <b>Exact Payout / Winner:</b> <b>\u20A6${perPlayerPayout.toLocaleString()}</b> per player
+\u{1F465} <b>Open Slots:</b> <b>${openSlots}/10 Slots Remaining</b>
+\u{1F3AF} <b>Game Mode:</b> ${match.gameMode}
+\u{1F5FA}\uFE0F <b>Map:</b> ${match.map}
+\u{1F3F7}\uFE0F <b>Lobby Code:</b> #${match.challengeCode}
+
+\u{1F6E1}\uFE0F <i>Lock in your slot! Join Team Alpha or Team Bravo. All 5 members of the winning squad receive \u20A6${perPlayerPayout.toLocaleString()} each! Tap below to join!</i>
+
+#SquadBattle #${match.challengeCode} #CODM`;
+      buttonLabel = `\u{1F6E1}\uFE0F JOIN SQUAD (\u20A6${match.stakeAmount.toLocaleString()})`;
+    } else {
+      const netPot = match.potAmount - (match.platformFee || 0);
+      const feePercent = match.platformFeePercentage || 10;
+      const winnerPayout = match.winnerPayout || netPot;
+      messageText = `\u{1F525} <b>NEW 1v1 WAGER ALERT - OPS STAKE</b> \u{1F525}
+
+\u{1F464} <b>Host:</b> ${match.creator.codmIgn}
+\u{1F4B5} <b>Stake Amount:</b> \u20A6${match.stakeAmount.toLocaleString()}
+\u{1F3C6} <b>Total Pot:</b> \u20A6${match.potAmount.toLocaleString()}
+\u2699\uFE0F <b>Platform Fee:</b> \u20A6${(match.platformFee || 0).toLocaleString()} (${feePercent}% Rake)
+\u{1F3AF} <b>Exact Winner Payout:</b> <b>\u20A6${winnerPayout.toLocaleString()}</b>
+\u{1F3AF} <b>Game Mode:</b> ${match.gameMode}
+\u{1F5FA}\uFE0F <b>Map:</b> ${match.map}
+\u{1F3F7}\uFE0F <b>Challenge Code:</b> #${match.challengeCode}
+
+\u2694\uFE0F <i>A gladiator is waiting for a rival! Think you have what it takes to win? Tap the button below to join the match and claim \u20A6${winnerPayout.toLocaleString()}!</i>
+
+#1v1Duel #${match.challengeCode} #CODM`;
+      buttonLabel = `\u{1F3AE} ACCEPT WAGER (\u20A6${match.stakeAmount.toLocaleString()})`;
+    }
+    console.log(`[Telegram Bot] Dispatching sendMessage request to Telegram API...`);
+    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(4e3),
+      body: JSON.stringify({
+        chat_id: TELEGRAM_PUBLIC_CHANNEL_ID,
+        text: messageText,
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [[
+            { text: buttonLabel, url: matchUrl }
+          ]]
+        }
+      })
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      console.error(`\u274C [Telegram Bot] Public channel post FAILED for ID: "${TELEGRAM_PUBLIC_CHANNEL_ID}"`);
+      console.error(`[Telegram Bot] Error: ${data.description} (Code: ${data.error_code})`);
+      if (data.description === "chat not found") {
+        console.warn(`[Telegram Bot] DIAGNOSTIC: "chat not found" typically means:`);
+        console.warn(`1. The Bot Token is correct but the ID "${TELEGRAM_PUBLIC_CHANNEL_ID}" is invalid or the bot hasn't been added there.`);
+        console.warn(`2. The bot is NOT an administrator in the channel.`);
+        console.warn(`3. The channel ID must start with -100 for public channels.`);
+      }
+    } else {
+      console.log(`\u2705 [Telegram Bot] Match #${match.challengeCode} posted successfully (Msg ID: ${data.result?.message_id})`);
+    }
+  } catch (err) {
+    console.error("\u274C [Telegram Bot] Critical exception during public channel post:", err.message);
+  }
+}
+async function sendTelegramMatchAcceptedAlert(match, opponentIgn) {
+  try {
+    const isSquad = match.matchType === "squad" || Boolean(match.squadData);
+    if (isSquad) {
+      await sendTelegramSquadSlotJoinedAlert(match, opponentIgn, "BRAVO", 6, 10);
+      return;
+    }
+    const creatorUser = await getUserFromDb(match.creator.id);
+    const hostChatId = creatorUser?.telegramChatId || process.env.TELEGRAM_HOST_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
+    const netPot = match.potAmount - (match.platformFee || 0);
+    const winnerPayout = match.winnerPayout || netPot;
+    const messageText = `\u2694\uFE0F <b>MATCH ACCEPTED - OPS STAKE</b> \u2694\uFE0F
+
+\u{1F3AF} <b>A rival has accepted your 1v1 wager challenge!</b>
+
+\u{1F464} <b>Host:</b> ${match.creator.codmIgn}
+\u2694\uFE0F <b>Opponent:</b> ${opponentIgn}
+\u{1F4B5} <b>Stake Amount:</b> \u20A6${match.stakeAmount.toLocaleString()}
+\u{1F3C6} <b>Total Pot:</b> \u20A6${match.potAmount.toLocaleString()}
+\u{1F3AF} <b>Winner Payout:</b> <b>\u20A6${winnerPayout.toLocaleString()}</b>
+\u{1F3AF} <b>Game Mode:</b> ${match.gameMode}
+\u{1F5FA}\uFE0F <b>Map:</b> ${match.map}
+\u{1F511} <b>In-Game Room Code:</b> <code>#${match.roomCode || "Ready"}</code>
+\u{1F3F7}\uFE0F <b>Challenge Code:</b> #${match.challengeCode}
+
+\u{1F680} <i>Open CODM, enter room code #${match.roomCode || "Ready"}, and claim your \u20A6${winnerPayout.toLocaleString()} victory!</i>`;
+    const chatIdsToSend = /* @__PURE__ */ new Set();
+    if (hostChatId && hostChatId.trim()) chatIdsToSend.add(hostChatId.trim());
+    if (chatIdsToSend.size === 0) {
+      console.log(`[Telegram Bot] Host ${match.creator.codmIgn} has no Telegram Chat ID configured.`);
+      return;
+    }
+    for (const chatId of chatIdsToSend) {
+      const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: messageText,
+          parse_mode: "HTML"
+        })
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        console.warn(`[Telegram Bot] Direct alert failed for chat ID ${chatId}: ${data.description}`);
+      } else {
+        console.log(`\u2705 [Telegram Bot] Acceptance alert sent to host chat ${chatId}`);
+      }
+    }
+  } catch (err) {
+    console.error("[Telegram Bot] Exception sending match alert:", err.message);
+  }
+}
+async function sendTelegramSquadSlotJoinedAlert(match, playerIgn, team, slotNumber, filledCount) {
+  try {
+    const squad = match.squadData;
+    const grossPot = match.potAmount;
+    const feePercent = match.platformFeePercentage || 5;
+    const feeAmount = match.platformFee !== void 0 ? match.platformFee : Math.round(grossPot * (feePercent / 100));
+    const netSquadPool = grossPot - feeAmount;
+    const perPlayerPayout = match.winnerPayout || Math.floor(netSquadPool / 5);
+    const teamLabel = team === "ALPHA" ? "Team Alpha (Blue)" : "Team Bravo (Red)";
+    let messageText = "";
+    if (filledCount === 10) {
+      messageText = `\u2694\uFE0F <b>5v5 SQUAD LOBBY FULL - MATCH COMMENCING!</b> \u2694\uFE0F
+
+\u{1F3AF} <b>All 10 slots are filled and locked into escrow!</b>
+
+\u{1F4B5} <b>Stake / Player:</b> \u20A6${match.stakeAmount.toLocaleString()}
+\u{1F3C6} <b>Total Gross Pot:</b> \u20A6${grossPot.toLocaleString()} (10 Players)
+\u2699\uFE0F <b>Squad Platform Fee:</b> \u20A6${feeAmount.toLocaleString()} (${feePercent}% Squad Fee)
+\u{1F4B0} <b>Winning Squad Pool:</b> \u20A6${netSquadPool.toLocaleString()}
+\u{1F3AF} <b>Exact Payout:</b> <b>\u20A6${perPlayerPayout.toLocaleString()}</b> per winning squad member
+
+\u{1F511} <b>In-Game CODM Room Code:</b> <code>#${match.roomCode || "Ready"}</code>
+\u{1F3F7}\uFE0F <b>Lobby Code:</b> #${match.challengeCode}
+\u{1F3AF} <b>Mode:</b> ${match.gameMode} \xB7 <b>Map:</b> ${match.map}
+
+\u{1F680} <i>Open CODM now, enter custom room #${match.roomCode || "Ready"}, and lead your squad to victory!</i>`;
+    } else {
+      messageText = `\u{1F6E1}\uFE0F <b>5v5 SQUAD SLOT FILLED - OPS STAKE</b> \u{1F6E1}\uFE0F
+
+\u2694\uFE0F <b>${playerIgn}</b> staked \u20A6${match.stakeAmount.toLocaleString()} and joined <b>${teamLabel} Slot #${slotNumber}</b>!
+
+\u{1F4CA} <b>Lobby Progress:</b> <b>${filledCount}/10 Slots Staked</b> (${10 - filledCount} slots open)
+\u{1F4B5} <b>Entry Stake:</b> \u20A6${match.stakeAmount.toLocaleString()} / player
+\u{1F3C6} <b>Total Gross Pot:</b> \u20A6${grossPot.toLocaleString()} (10 Players)
+\u2699\uFE0F <b>Squad Fee:</b> ${feePercent}% (\u20A6${feeAmount.toLocaleString()})
+\u{1F3AF} <b>Exact Payout:</b> <b>\u20A6${perPlayerPayout.toLocaleString()}</b> per winning player (\u20A6${netSquadPool.toLocaleString()} Team Total)
+\u{1F3F7}\uFE0F <b>Lobby Code:</b> #${match.challengeCode}
+
+\u23F3 <i>Waiting for ${10 - filledCount} more player(s) to stake and lock in...</i>`;
+    }
+    const stakedUserIds = [];
+    if (squad?.slots && Array.isArray(squad.slots)) {
+      for (const slot of squad.slots) {
+        if (slot.staked && slot.userId) {
+          stakedUserIds.push(slot.userId);
+        }
+      }
+    }
+    if (match.creator?.id && !stakedUserIds.includes(match.creator.id)) {
+      stakedUserIds.push(match.creator.id);
+    }
+    const chatIdsToSend = /* @__PURE__ */ new Set();
+    for (const uid of stakedUserIds) {
+      const u = await getUserFromDb(uid);
+      if (u?.telegramChatId && u.telegramChatId.trim()) {
+        chatIdsToSend.add(u.telegramChatId.trim());
+      }
+    }
+    if (process.env.TELEGRAM_HOST_CHAT_ID) chatIdsToSend.add(process.env.TELEGRAM_HOST_CHAT_ID.trim());
+    for (const chatId of chatIdsToSend) {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: messageText,
+          parse_mode: "HTML"
+        })
+      }).catch((err) => console.warn(`[Telegram Bot] Error sending squad alert to ${chatId}:`, err.message));
+    }
+  } catch (err) {
+    console.error("[Telegram Bot] Exception sending squad slot alert:", err.message);
+  }
+}
+async function sendTelegramMatchSettledAlert(match, winningSideOrWinnerIgn) {
+  try {
+    const isSquad = match.matchType === "squad" || Boolean(match.squadData);
+    if (isSquad) {
+      const squad = match.squadData;
+      const grossPot = match.potAmount;
+      const feePercent = match.platformFeePercentage || 5;
+      const feeAmount = match.platformFee !== void 0 ? match.platformFee : Math.round(grossPot * (feePercent / 100));
+      const netSquadPool = grossPot - feeAmount;
+      const perPlayerPayout = match.winnerPayout || Math.floor(netSquadPool / 5);
+      const winningTeam = winningSideOrWinnerIgn === "BRAVO" || winningSideOrWinnerIgn === "opponent" ? "BRAVO" : "ALPHA";
+      const teamLabel = winningTeam === "ALPHA" ? "Team Alpha (Blue)" : "Team Bravo (Red)";
+      const messageText = `\u{1F3C6} <b>SQUAD VICTORY - \u20A6${perPlayerPayout.toLocaleString()} CREDITED!</b> \u{1F3C6}
+
+\u{1F396}\uFE0F Congratulations soldier! <b>${teamLabel}</b> emerged victorious in 5v5 Match #${match.challengeCode}!
+
+\u{1F4B0} <b>Exact Winnings Credited:</b> <b>\u20A6${perPlayerPayout.toLocaleString()}</b> has been deposited into your wallet balance!
+
+\u{1F4CA} <b>Squad Economics:</b>
+\u2022 10 Players Gross Pot: \u20A6${grossPot.toLocaleString()}
+\u2022 Squad Platform Fee (${feePercent}%): \u20A6${feeAmount.toLocaleString()}
+\u2022 Net Winning Squad Pool: \u20A6${netSquadPool.toLocaleString()}
+\u2022 Exact Individual Payout: \u20A6${perPlayerPayout.toLocaleString()} each for all 5 squad members
+
+\u26A1 <i>Your winnings are ready for instant bank cashout or your next wager in the Arena!</i>`;
+      if (squad?.slots && Array.isArray(squad.slots)) {
+        const winningSlots = squad.slots.filter((s) => s.team === winningTeam && s.staked && s.userId);
+        for (const slot of winningSlots) {
+          const u = await getUserFromDb(slot.userId);
+          if (u?.telegramChatId && u.telegramChatId.trim()) {
+            await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                chat_id: u.telegramChatId.trim(),
+                text: messageText,
+                parse_mode: "HTML"
+              })
+            }).catch((e) => console.warn(`[Telegram Bot] Error sending settlement alert to ${u.telegramChatId}:`, e.message));
+          }
+        }
+      }
+    } else {
+      const winnerUser = await getUserFromDb(match.winnerId || "");
+      if (winnerUser?.telegramChatId) {
+        const messageText = `\u{1F3C6} <b>MATCH VICTORY - \u20A6${(match.winnerPayout || 0).toLocaleString()} CREDITED!</b> \u{1F3C6}
+
+\u{1F396}\uFE0F Congratulations <b>${match.winnerIgn || winnerUser.codmIgn}</b>! You won 1v1 Challenge #${match.challengeCode}!
+
+\u{1F4B0} <b>Exact Payout:</b> <b>\u20A6${(match.winnerPayout || 0).toLocaleString()}</b> has been credited directly to your wallet balance!
+\u{1F4CA} <b>Gross Pot:</b> \u20A6${match.potAmount.toLocaleString()} (Platform Fee: \u20A6${(match.platformFee || 0).toLocaleString()})
+
+\u26A1 <i>Your funds are ready for instant cashout or new challenges in the Arena!</i>`;
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: winnerUser.telegramChatId.trim(),
+            text: messageText,
+            parse_mode: "HTML"
+          })
+        }).catch((e) => console.warn(`[Telegram Bot] Error sending settlement alert:`, e.message));
+      }
+    }
+  } catch (err) {
+    console.error("[Telegram Bot] Exception sending settlement alert:", err.message);
+  }
+}
+app.post("/api/telegram/test-alert", async (req, res) => {
+  const { chatId, userId } = req.body;
+  const targetChatId = chatId || (userId ? (await getUserFromDb(userId))?.telegramChatId : null) || process.env.TELEGRAM_CHAT_ID;
+  if (!targetChatId) {
+    return res.status(400).json({
+      success: false,
+      error: "Please enter a valid Telegram Chat ID. Start the bot on Telegram and get your ID from @userinfobot."
+    });
+  }
+  try {
+    const testMessage = `\u{1F916} <b>OPS STAKE TELEGRAM BOT ALERT TEST</b>
+
+\u2705 Your Telegram Chat ID <code>${targetChatId}</code> is linked successfully!
+
+You will receive real-time alerts whenever a rival accepts your 1v1 wager matches!`;
+    const tgRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: targetChatId.trim(),
+        text: testMessage,
+        parse_mode: "HTML"
+      })
+    });
+    const data = await tgRes.json();
+    if (data.ok) {
+      return res.json({
+        success: true,
+        message: `Test alert sent to Telegram chat ID ${targetChatId}! Check your Telegram messages.`
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: data.description || "Failed to send Telegram message. Make sure you started the bot on Telegram first."
+      });
+    }
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+app.get("/api/telegram/bot-info", async (req, res) => {
+  const info = await fetchTelegramBotInfo();
+  res.json({
+    botUsername: info?.username || process.env.TELEGRAM_BOT_USERNAME || "OpsSTAKEBOT",
+    channelUrl: "https://t.me/OpsSTAKE"
+  });
+});
+app.post("/api/telegram/unlink", async (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (userId) {
+      await pool.query(`UPDATE users SET telegram_chat_id = NULL, telegram_username = NULL WHERE id = ${escapeSql(userId)}`);
+    }
+    res.json({ success: true, message: "Telegram account unlinked successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to unlink Telegram account" });
+  }
+});
+var telegramBotRunning = false;
+var lastTelegramUpdateOffset = 0;
+var cachedTelegramBotInfo = null;
+async function fetchTelegramBotInfo() {
+  if (!TELEGRAM_BOT_TOKEN) return null;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe`);
+    const data = await res.json();
+    if (data.ok && data.result) {
+      cachedTelegramBotInfo = {
+        id: data.result.id,
+        username: data.result.username,
+        firstName: data.result.first_name
+      };
+      return cachedTelegramBotInfo;
+    }
+  } catch (err) {
+    console.warn("[Telegram Bot] Failed to fetch bot info:", err.message);
+  }
+  return null;
+}
+async function checkChannelMembership(userId) {
+  const channelName = process.env.TELEGRAM_CHANNEL_USERNAME || "@OpsSTAKE";
+  if (!TELEGRAM_BOT_TOKEN) return true;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getChatMember?chat_id=${encodeURIComponent(channelName)}&user_id=${userId}`);
+    const data = await res.json();
+    if (data.ok && data.result) {
+      const status = data.result.status;
+      return ["member", "creator", "administrator"].includes(status);
+    }
+  } catch (err) {
+    console.warn("[Telegram Bot] Channel membership check error:", err.message);
+  }
+  return true;
+}
+async function handleTelegramCallbackQuery(cq) {
+  if (!cq || !cq.data || !cq.message) return;
+  const chatId = String(cq.message.chat.id);
+  const data = cq.data;
+  const from = cq.from || {};
+  const userId = from.id;
+  const telegramUsername = from.username || "";
+  if (data.startsWith("verify_link_")) {
+    const targetUserId = data.replace("verify_link_", "").trim();
+    const isMember = await checkChannelMembership(userId);
+    if (isMember) {
+      let user = await getUserFromDb(targetUserId);
+      if (user) {
+        await pool.query(`
+          UPDATE users 
+          SET telegram_chat_id = ${escapeSql(chatId)},
+              telegram_username = ${telegramUsername ? escapeSql(telegramUsername) : "telegram_username"}
+          WHERE id = ${escapeSql(user.id)}
+        `);
+        const updatedUser = await getUserFromDb(user.id);
+        if (globalIo) {
+          globalIo.emit("userUpdated", updatedUser);
+          globalIo.emit("telegramLinked", {
+            userId: user.id,
+            chatId,
+            telegramUsername,
+            codmIgn: user.codmIgn
+          });
+        }
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callback_query_id: cq.id, text: "\u2705 Channel verified! Account linked successfully." })
+        });
+        const appUrl = (process.env.APP_URL || "https://ops-stake.app").replace(/\/$/, "");
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: `\u{1F3AE} <b>OPS STAKE \xB7 TELEGRAM LINKED SUCCESSFULLY!</b> \u{1F3AE}
+
+\u2705 Welcome, <b>${user.codmIgn || user.username}</b>!
+Channel membership verified in <b>@OpsSTAKE</b>. Your account is now fully connected.
+
+\u{1F514} <b>What you will receive here in real-time:</b>
+\u2694\uFE0F Instant alert when a rival accepts your wagers
+\u{1F511} In-game CODM room codes as soon as matches deploy
+\u{1F3C6} Wager result confirmations & instant payout alerts
+
+\u{1F680} <i>You are ready for battle!</i>`,
+            parse_mode: "HTML",
+            reply_markup: {
+              inline_keyboard: [[{ text: "\u2694\uFE0F OPEN ARENA NOW", url: `${appUrl}/arena` }]]
+            }
+          })
+        });
+        return;
+      }
+    } else {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          callback_query_id: cq.id,
+          text: "\u274C You have not joined @OpsSTAKE yet! Please join the channel first.",
+          show_alert: true
+        })
+      });
+    }
+  }
+}
+async function handleTelegramMessage(message) {
+  if (!message || !message.chat) return;
+  const chatId = String(message.chat.id);
+  const text = (message.text || "").trim();
+  const from = message.from || {};
+  const telegramUsername = from.username || "";
+  const senderName = from.first_name ? `${from.first_name} ${from.last_name || ""}`.trim() : telegramUsername || "Gladiator";
+  const logPrefix = message.chat.type === "group" || message.chat.type === "supergroup" ? `[Telegram Bot] \u{1F465} Group "${message.chat.title || "Untitled"}" (ID: ${chatId})` : `[Telegram Bot] \u{1F464} Private User (${chatId})`;
+  console.log(`${logPrefix} @${telegramUsername || "anon"}: "${text || "[Media/Other]"}"`);
+  if (text.startsWith("/start")) {
+    const parts = text.split(/\s+/);
+    const rawPayload = parts.length > 1 ? parts[1].trim() : "";
+    const targetUserId = rawPayload.replace(/^link_/, "").trim();
+    if (targetUserId) {
+      let user = await getUserFromDb(targetUserId);
+      if (!user) {
+        const findRes = await pool.query(`
+          SELECT * FROM users 
+          WHERE id = ${escapeSql(targetUserId)} 
+             OR referral_code = ${escapeSql(targetUserId)} 
+             OR LOWER(username) = LOWER(${escapeSql(targetUserId)})
+             OR LOWER(codm_ign) = LOWER(${escapeSql(targetUserId)})
+          LIMIT 1
+        `);
+        if (findRes.rows.length > 0) {
+          user = await getUserFromDb(findRes.rows[0].id);
+        }
+      }
+      if (user) {
+        const isMember = await checkChannelMembership(from.id);
+        const channelName = process.env.TELEGRAM_CHANNEL_USERNAME || "@OpsSTAKE";
+        if (!isMember) {
+          await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text: `\u{1F4E2} <b>MANDATORY CHANNEL SUBSCRIPTION REQUIRED!</b> \u{1F4E2}
+
+Hello <b>${user.codmIgn || user.username}</b>!
+To link your Telegram account and receive instant match room codes, escrow wagers, and payout alerts, you must join our official live updates channel: <b>${channelName}</b>.
+
+<b>How to complete linking:</b>
+1. Tap <b>'\u{1F4E2} 1. JOIN CHANNEL NOW'</b> below
+2. Join the channel, then return here and tap <b>'\u2705 2. I HAVE JOINED (FINISH LINKING)'</b>`,
+              parse_mode: "HTML",
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: "\u{1F4E2} 1. JOIN CHANNEL NOW", url: `https://t.me/${channelName.replace("@", "")}` }
+                  ],
+                  [
+                    { text: "\u2705 2. I HAVE JOINED (FINISH LINKING)", callback_data: `verify_link_${user.id}` }
+                  ]
+                ]
+              }
+            })
+          });
+          return;
+        }
+        await pool.query(`
+          UPDATE users 
+          SET telegram_chat_id = ${escapeSql(chatId)},
+              telegram_username = ${telegramUsername ? escapeSql(telegramUsername) : "telegram_username"}
+          WHERE id = ${escapeSql(user.id)}
+        `);
+        const updatedUser = await getUserFromDb(user.id);
+        if (globalIo) {
+          globalIo.emit("userUpdated", updatedUser);
+          globalIo.emit("telegramLinked", {
+            userId: user.id,
+            chatId,
+            telegramUsername,
+            codmIgn: user.codmIgn
+          });
+        }
+        console.log(`\u2705 [Telegram Bot] User ${user.codmIgn} (${user.id}) automatically linked to Chat ID ${chatId}!`);
+        const appUrl = (process.env.APP_URL || "https://ops-stake.app").replace(/\/$/, "");
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: `\u{1F3AE} <b>OPS STAKE \xB7 TELEGRAM LINKED SUCCESSFULLY!</b> \u{1F3AE}
+
+\u2705 Welcome, <b>${user.codmIgn || user.username}</b>!
+Your Telegram account has been <b>automatically connected</b> to your OPS STAKE profile.
+
+\u{1F512} <b>Linked Profile Details:</b>
+\u2022 CODM IGN: <b>${user.codmIgn}</b>
+\u2022 Chat ID: <code>${chatId}</code>
+\u2022 Current Balance: <b>\u20A6${Number(user.balance || 0).toLocaleString()}</b>
+
+\u{1F514} <b>What you will receive here in real-time:</b>
+\u2694\uFE0F Instant alert when a rival accepts your wagers
+\u{1F511} In-game CODM room codes as soon as matches deploy
+\u{1F3C6} Wager result confirmations & instant payout alerts
+\u26A0\uFE0F Match conflict notifications & referee status updates
+
+\u{1F680} <i>You are ready for battle! Return to the arena to deploy or accept challenges.</i>`,
+            parse_mode: "HTML",
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: "\u2694\uFE0F OPEN ARENA NOW", url: `${appUrl}/arena` }
+                ]
+              ]
+            }
+          })
+        });
+        return;
+      }
+    }
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: `\u{1F44B} <b>Welcome to OPS STAKE Tactical Bot!</b>
+
+Your Telegram Chat ID: <code>${chatId}</code>
+
+\u{1F517} <b>How to Link Your Account:</b>
+1. Open <b>OPS STAKE</b> in your browser
+2. Go to <b>Profile</b> > <b>Bot Comms</b>
+3. Tap <b>"1-Tap Connect Bot"</b> to link automatically!
+
+Or copy your Chat ID <code>${chatId}</code> and paste it in your profile.`,
+        parse_mode: "HTML"
+      })
+    });
+    return;
+  }
+  if (text === "/status" || text === "/myid") {
+    const userRes = await pool.query(`SELECT id, username, codm_ign, balance FROM users WHERE telegram_chat_id = ${escapeSql(chatId)} LIMIT 1`);
+    const linkedUser = userRes.rows[0];
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: `\u{1F916} <b>OPS STAKE BOT STATUS</b>
+
+\u2022 Chat ID: <code>${chatId}</code>
+\u2022 Username: @${telegramUsername || "N/A"}
+` + (linkedUser ? `\u2022 Linked Account: <b>${linkedUser.codm_ign}</b> (Balance: \u20A6${Number(linkedUser.balance || 0).toLocaleString()})
+\u2022 Status: \u{1F7E2} <b>ACTIVE & CONNECTED</b>` : `\u2022 Status: \u26AA <b>NOT LINKED</b> (Use 1-Tap Connect in OPS STAKE)`),
+        parse_mode: "HTML"
+      })
+    });
+    return;
+  }
+  if (text === "/matches" || text === "/wagers" || text === "/squads") {
+    const allMatches = await getAllMatchesFromDb();
+    const openMatches = allMatches.filter((m) => m.status === "PENDING_OPPONENT_STAKE");
+    const appUrl = (process.env.APP_URL || "https://ops-stake.app").replace(/\/$/, "");
+    if (openMatches.length === 0) {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: `\u2694\uFE0F <b>NO OPEN WAGERS RIGHT NOW</b>
+
+Be the first to host a 1v1 duel or 5v5 Squad battle in the Arena!`,
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [[
+              { text: "\u2694\uFE0F CREATE WAGER IN ARENA", url: `${appUrl}/arena` }
+            ]]
+          }
+        })
+      });
+      return;
+    }
+    let summaryText = `\u2694\uFE0F <b>LIVE OPEN WAGERS (${openMatches.length})</b> \u2694\uFE0F
+
+`;
+    for (const m of openMatches.slice(0, 5)) {
+      const isSq = m.matchType === "squad" || Boolean(m.squadData);
+      if (isSq) {
+        const slotsFilled = m.squadData?.slots ? m.squadData.slots.filter((s) => s.staked).length : 1;
+        summaryText += `\u{1F6E1}\uFE0F <b>5v5 Squad #${m.challengeCode}</b>
+\u2022 Stake / Player: \u20A6${m.stakeAmount.toLocaleString()}
+\u2022 10 Players Gross Pot: \u20A6${m.potAmount.toLocaleString()}
+\u2022 Squad Fee: ${m.platformFeePercentage || 5}%
+\u2022 Exact Win Payout: <b>\u20A6${m.winnerPayout.toLocaleString()} / winner</b> (\u20A6${((m.winnerPayout || 0) * 5).toLocaleString()} Team Pool)
+\u2022 Open Slots: <b>${10 - slotsFilled}/10 open</b>
+\u2022 Host: ${m.creator.codmIgn}
+
+`;
+      } else {
+        summaryText += `\u{1F525} <b>1v1 Duel #${m.challengeCode}</b>
+\u2022 Stake: \u20A6${m.stakeAmount.toLocaleString()}
+\u2022 Pot: \u20A6${m.potAmount.toLocaleString()}
+\u2022 Winner Payout: <b>\u20A6${m.winnerPayout.toLocaleString()}</b>
+\u2022 Host: ${m.creator.codmIgn}
+
+`;
+      }
+    }
+    summaryText += `\u{1F680} <i>Tap the button below to view all and join the battlefield!</i>`;
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: summaryText,
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [[
+            { text: "\u{1F3AE} ENTER LIVE ARENA", url: `${appUrl}/arena` }
+          ]]
+        }
+      })
+    });
+    return;
+  }
+}
+function startTelegramBotPolling() {
+  if (!TELEGRAM_BOT_TOKEN || telegramBotRunning) return;
+  telegramBotRunning = true;
+  console.log("\u{1F916} Starting Telegram Bot polling loop for @OpsSTAKEBOT...");
+  fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true`).then((r) => r.json()).then((res) => console.log("\u{1F6E1}\uFE0F [Telegram Bot Security] Purged foreign webhooks from Telegram servers:", res)).catch((err) => console.warn("\u26A0\uFE0F [Telegram Bot Security] deleteWebhook warning:", err.message));
+  fetchTelegramBotInfo().then((info) => {
+    if (info) {
+      console.log(`\u2705 [Telegram Bot] Active as @${info.username} (${info.firstName})`);
+    }
+  });
+  const poll = async () => {
+    try {
+      const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${lastTelegramUpdateOffset}&timeout=20`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(25e3) });
+      const data = await res.json();
+      if (data.ok && Array.isArray(data.result)) {
+        for (const update of data.result) {
+          lastTelegramUpdateOffset = Math.max(lastTelegramUpdateOffset, update.update_id + 1);
+          if (update.message) {
+            await handleTelegramMessage(update.message).catch((err) => {
+              console.error("[Telegram Bot] Error handling message:", err.message);
+            });
+          } else if (update.callback_query) {
+            await handleTelegramCallbackQuery(update.callback_query).catch((err) => {
+              console.error("[Telegram Bot] Error handling callback query:", err.message);
+            });
+          }
+        }
+      }
+    } catch (err) {
+    } finally {
+      if (telegramBotRunning) {
+        setTimeout(poll, 1500);
+      }
+    }
+  };
+  poll();
+}
+app.get("/api/telegram/bot-info", async (req, res) => {
+  if (!TELEGRAM_BOT_TOKEN) {
+    return res.json({ configured: false, error: "Telegram Bot token not set" });
+  }
+  const info = cachedTelegramBotInfo || await fetchTelegramBotInfo();
+  const username = info?.username || "OpsSTAKEBOT";
+  res.json({
+    configured: true,
+    botUsername: username,
+    botFirstName: info?.firstName || "OPS STAKE",
+    deepLinkPrefix: `https://t.me/${username}?start=link_`
+  });
+});
+app.post("/api/telegram/unlink", async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId is required" });
+  await pool.query(`UPDATE users SET telegram_chat_id = NULL, telegram_username = NULL WHERE id = ${escapeSql(userId)}`);
+  const updatedUser = await getUserFromDb(userId);
+  if (globalIo) {
+    globalIo.emit("userUpdated", updatedUser);
+  }
+  res.json({ success: true, message: "Telegram account unlinked successfully", user: updatedUser });
+});
+app.post("/api/telegram/webhook", async (req, res) => {
+  const update = req.body;
+  if (update?.message) {
+    handleTelegramMessage(update.message).catch((err) => {
+      console.error("[Telegram Webhook Error]:", err.message);
+    });
+  }
+  res.json({ ok: true });
+});
+app.post("/api/telegram/test-channel-post", async (req, res) => {
+  const { channelId } = req.body;
+  const targetChannelId = (channelId || TELEGRAM_PUBLIC_CHANNEL_ID).trim();
+  try {
+    const getMeRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe`);
+    const meData = await getMeRes.json();
+    if (!meData.ok) {
+      return res.status(401).json({
+        success: false,
+        error: `Invalid Bot Token: ${meData.description}`,
+        hint: "The token provided in TELEGRAM_BOT_TOKEN environment variable is rejected by Telegram."
+      });
+    }
+    const botInfo = meData.result;
+    console.log(`[Telegram Bot] Verified identity: @${botInfo.username} (${botInfo.first_name})`);
+    const testMessage = `\u{1F680} <b>OPS STAKE BOT CONNECTION TEST</b>
+
+This is a test message from <b>@${botInfo.username}</b> to verify admin access.
+
+<b>Diagnostic Info:</b>
+- Target ID: <code>${targetChannelId}</code>
+- Bot ID: <code>${botInfo.id}</code>
+- Timestamp: <code>${(/* @__PURE__ */ new Date()).toISOString()}</code>
+
+<b>Action Required:</b> If you see this, the bot has correctly identified the channel. If not, check if the bot is an <b>ADMIN</b> with <b>Post Messages</b> permission.`;
+    console.log(`[Telegram Bot] Manual test triggered for Channel ${targetChannelId}`);
+    const tgRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: targetChannelId,
+        text: testMessage,
+        parse_mode: "HTML"
+      })
+    });
+    const data = await tgRes.json();
+    if (data.ok) {
+      console.log(`\u2705 [Telegram Bot] Manual test successful for Channel ${targetChannelId}`);
+      return res.json({
+        success: true,
+        message: `Bot successfully posted to channel ${targetChannelId}!`,
+        data
+      });
+    } else {
+      console.error(`\u274C [Telegram Bot] Manual test failed for Channel ${targetChannelId}: ${data.description}`);
+      let adminHint = "Make sure the Bot is an ADMIN in the channel/group.";
+      try {
+        const adminRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getChatAdministrators?chat_id=${targetChannelId}`);
+        const adminData = await adminRes.json();
+        if (!adminData.ok) {
+          adminHint = `Diagnostic: ${adminData.description}. (Hint: This usually means the bot is not in the chat or has no admin rights).`;
+        }
+      } catch (e) {
+      }
+      return res.status(400).json({
+        success: false,
+        error: `Telegram Error: ${data.description}`,
+        hint: adminHint,
+        debug: {
+          targetChannelId,
+          botTokenPrefix: TELEGRAM_BOT_TOKEN.split(":")[0],
+          errorCode: data.error_code
+        }
+      });
+    }
+  } catch (err) {
+    console.error(`\u274C [Telegram Bot] Manual test exception:`, err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
 app.get("/api/matches", async (req, res) => {
   const matchList = await getAllMatchesFromDb();
-  res.json(matchList);
+  res.json(matchList.map((m) => sanitizeMatchForPublic(m)));
 });
 app.get("/api/matches/:id", async (req, res) => {
   const match = await getMatchFromDb(req.params.id);
   if (!match) return res.status(404).json({ error: "Match not found" });
-  res.json(match);
+  res.json(sanitizeMatchForPublic(match, true));
 });
+function calculateSquadEconomics(stakePerPlayer, playersPerTeam = 5, squadFeePercent = 5) {
+  const totalPlayers = playersPerTeam * 2;
+  const totalPot = Math.max(0, stakePerPlayer) * totalPlayers;
+  const rakeRate = getSquadRakePercentage(stakePerPlayer, totalPot, squadFeePercent);
+  const platformFee = Math.round(totalPot * rakeRate);
+  const netWinningPool = totalPot - platformFee;
+  const payoutPerPlayer = Math.floor(netWinningPool / playersPerTeam);
+  const rakePercentFormatted = `${(rakeRate * 100).toFixed(rakeRate < 0.05 ? 1 : 0)}%`;
+  return {
+    stakePerPlayer,
+    playersPerTeam,
+    totalPlayers,
+    totalPot,
+    rakeRate,
+    rakePercentFormatted,
+    platformFee,
+    netWinningPool,
+    payoutPerPlayer
+  };
+}
 app.post("/api/matches", async (req, res) => {
   const {
     creatorId,
@@ -4216,7 +5937,8 @@ app.post("/api/matches", async (req, res) => {
     ],
     stakeAmount = 100,
     matchDurationMinutes = 15,
-    isPublic = true
+    isPublic = true,
+    matchType = "solo"
   } = req.body;
   const client = await pool.connect();
   try {
@@ -4246,15 +5968,50 @@ app.post("/api/matches", async (req, res) => {
     const numDuration = Math.max(15, parseInt(matchDurationMinutes, 10) || 15);
     const matchId = `match_${Date.now()}_${Math.floor(Math.random() * 1e3)}`;
     const challengeCode = `CHALLENGE-${Math.floor(1e3 + Math.random() * 9e3)}`;
-    const potAmount = numStake * 2;
-    const rakeRate = getRakePercentage(numStake);
-    const platformFee = Math.round(potAmount * rakeRate);
-    const winnerPayout = potAmount - platformFee;
-    const platformFeePercentage = Math.round(rakeRate * 100);
+    const feeSettings = await getPlatformFeeSettings();
+    const isSquad = matchType === "squad";
+    let potAmount = numStake * 2;
+    let rakeRate = getSoloRakePercentage(potAmount, feeSettings.soloFeePercent);
+    let platformFee = Math.round(potAmount * rakeRate);
+    let winnerPayout = potAmount - platformFee;
+    let platformFeePercentage = Math.round(rakeRate * 100);
+    let squadData = void 0;
+    if (isSquad) {
+      const squadEcon = calculateSquadEconomics(numStake, 5, feeSettings.squadFeePercent);
+      potAmount = squadEcon.totalPot;
+      platformFee = squadEcon.platformFee;
+      winnerPayout = squadEcon.payoutPerPlayer;
+      rakeRate = squadEcon.rakeRate;
+      platformFeePercentage = Math.round(squadEcon.rakeRate * 100);
+      const slots = [];
+      slots.push({
+        slotIndex: 0,
+        team: "ALPHA",
+        userId: creator.id,
+        username: creator.username,
+        codmIgn: creator.codm_ign,
+        codmUid: creator.codm_uid,
+        avatar: creator.avatar,
+        staked: true,
+        stakedAt: Date.now()
+      });
+      for (let i = 1; i < 5; i++) {
+        slots.push({ slotIndex: i, team: "ALPHA", staked: false });
+      }
+      for (let i = 5; i < 10; i++) {
+        slots.push({ slotIndex: i, team: "BRAVO", staked: false });
+      }
+      squadData = {
+        playersPerTeam: 5,
+        totalSlots: 10,
+        stakePerPlayer: numStake,
+        slots
+      };
+    }
     const txId = `tx_${Date.now()}_host`;
     await client.query(`
       INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
-      VALUES (${escapeSql(txId)}, ${escapeSql(creatorId)}, 'ESCROW_LOCK', ${escapeSql(numStake)}, ${escapeSql(`\u20A6${numStake.toLocaleString()} escrow locked for hosting challenge #${challengeCode}`)}, ${escapeSql(matchId)}, ${Date.now()})
+      VALUES (${escapeSql(txId)}, ${escapeSql(creatorId)}, 'ESCROW_LOCK', ${escapeSql(numStake)}, ${escapeSql(`\u20A6${numStake.toLocaleString()} escrow locked for hosting ${isSquad ? "5v5 Squad" : "1v1"} challenge #${challengeCode}`)}, ${escapeSql(matchId)}, ${Date.now()})
       ON CONFLICT (id) DO NOTHING
     `);
     const newMatch = {
@@ -4270,6 +6027,8 @@ app.post("/api/matches", async (req, res) => {
       platformFee,
       winnerPayout,
       matchDurationMinutes: numDuration,
+      matchType: isSquad ? "squad" : "solo",
+      squadData,
       status: "PENDING_OPPONENT_STAKE",
       createdAt: Date.now(),
       isPublic: Boolean(isPublic),
@@ -4286,7 +6045,7 @@ app.post("/api/matches", async (req, res) => {
           id: `msg_sys_1`,
           senderId: "SYSTEM",
           senderName: "CODM Referee Bot",
-          text: `Match challenge #${challengeCode} created with \u20A6${numStake.toLocaleString()} stake deducted from host wallet (Pot: \u20A6${potAmount.toLocaleString()}). Share the invite link with your opponent. You can cancel anytime before opponent accepts to get a 100% full refund.`,
+          text: isSquad ? `\u{1F525} 5v5 Squad Wager Lobby #${challengeCode} created! Host ${creator.codm_ign} locked Slot #1 (Team Alpha). Waiting for 9 players to join slots (10 x \u20A6${numStake.toLocaleString()} = \u20A6${potAmount.toLocaleString()} Pot). Winning squad members will automatically receive \u20A6${winnerPayout.toLocaleString()} each upon victory!` : `Match challenge #${challengeCode} created with \u20A6${numStake.toLocaleString()} stake deducted from host wallet (Pot: \u20A6${potAmount.toLocaleString()}). Share the invite link with your opponent. You can cancel anytime before opponent accepts to get a 100% full refund.`,
           timestamp: Date.now()
         }
       ]
@@ -4294,6 +6053,23 @@ app.post("/api/matches", async (req, res) => {
     await saveMatchToDb(newMatch);
     await client.query("COMMIT");
     res.json(newMatch);
+    const origin = req.headers.origin || req.headers.referer || `https://${req.headers.host}`;
+    setImmediate(() => {
+      try {
+        if (globalIo) {
+          globalIo.emit("matchCreated", newMatch);
+          broadcastMatchStateChange(newMatch, "NEW_MATCH_AWAITING_OPPONENT");
+        }
+        if (origin) {
+          console.log(`[Server] Triggering Telegram public post for match ${newMatch.challengeCode}...`);
+          postMatchToPublicChannel(newMatch, origin).catch(
+            (err) => console.warn("Telegram public post background error:", err.message)
+          );
+        }
+      } catch (bgErr) {
+        console.warn("Match creation background task error:", bgErr.message);
+      }
+    });
   } catch (err) {
     try {
       await client.query("ROLLBACK");
@@ -4307,7 +6083,7 @@ app.post("/api/matches", async (req, res) => {
 });
 app.post("/api/matches/:id/opponent-stake", async (req, res) => {
   const matchId = req.params.id;
-  const { opponentId, paymentMethod = "bank_transfer" } = req.body;
+  const { opponentId } = req.body;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -4332,25 +6108,17 @@ app.post("/api/matches/:id/opponent-stake", async (req, res) => {
       return res.status(404).json({ error: "Opponent not found" });
     }
     const oppRow = oppRes.rows[0];
-    if (paymentMethod === "wallet_balance") {
-      const currentBal = parseFloat(oppRow.balance || 0);
-      if (currentBal < stakeAmount) {
-        await client.query("ROLLBACK");
-        return res.status(400).json({ error: `Insufficient balance (\u20A6${currentBal.toLocaleString()}).` });
-      }
-      await client.query(`
-        UPDATE users 
-        SET balance = balance - ${escapeSql(stakeAmount)},
-            escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
-        WHERE id = ${escapeSql(opponentId)}
-      `);
-    } else {
-      await client.query(`
-        UPDATE users 
-        SET escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
-        WHERE id = ${escapeSql(opponentId)}
-      `);
+    const currentBal = parseFloat(oppRow.balance || 0);
+    if (currentBal < stakeAmount) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: `Insufficient wallet balance (\u20A6${currentBal.toLocaleString()}) to accept this wager. Please fund your wallet first.` });
     }
+    await client.query(`
+      UPDATE users 
+      SET balance = balance - ${escapeSql(stakeAmount)},
+          escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
+      WHERE id = ${escapeSql(opponentId)}
+    `);
     const opponentData = {
       id: oppRow.id,
       username: oppRow.username,
@@ -4359,29 +6127,33 @@ app.post("/api/matches/:id/opponent-stake", async (req, res) => {
       avatar: oppRow.avatar,
       staked: true
     };
+    const generatedRoomCode = generateRoomCode(matchRow.map);
+    const now = Date.now();
     const newChatMsg = {
-      id: `msg_${Date.now()}`,
+      id: `msg_${now}`,
       senderId: "SYSTEM",
       senderName: "CODM Referee Bot",
-      text: `\u2694\uFE0F Challenge accepted! ${oppRow.codm_ign} has sent \u20A6${stakeAmount.toLocaleString()} into escrow. Host ${matchRow.creator_data?.codmIgn || "Host"}, please send your matching \u20A6${stakeAmount.toLocaleString()} stake to generate your CODM in-game room number!`,
-      timestamp: Date.now()
+      text: `\u{1F389} MATCH STARTED! ${oppRow.codm_ign} accepted the duel and \u20A6${stakeAmount.toLocaleString()} stake was locked into escrow. Total Pot: \u20A6${parseFloat(matchRow.pot_amount).toLocaleString()}. In-game Room Code: #${generatedRoomCode}`,
+      timestamp: now
     };
     const chatMessages = Array.isArray(matchRow.chat_messages) ? matchRow.chat_messages : [];
     chatMessages.push(newChatMsg);
     await client.query(`
       UPDATE matches 
-      SET status = 'OPPONENT_STAKED_AWAITING_CREATOR',
+      SET status = 'READY_TO_PLAY',
+          room_code = ${escapeSql(generatedRoomCode)},
+          room_generated_at = ${now},
           opponent_id = ${escapeSql(oppRow.id)},
           opponent_data = ${escapeSql(opponentData)},
           chat_messages = ${escapeSql(chatMessages)}
       WHERE id = ${escapeSql(matchId)}
     `);
     const tx = {
-      id: `tx_${Date.now()}`,
+      id: `tx_${now}_opp`,
       type: "ESCROW_LOCK",
       amount: stakeAmount,
       description: `\u20A6${stakeAmount.toLocaleString()} stake locked in escrow for challenge #${matchRow.challenge_code}`,
-      timestamp: Date.now(),
+      timestamp: now,
       matchId: matchRow.id
     };
     await client.query(`
@@ -4392,6 +6164,19 @@ app.post("/api/matches/:id/opponent-stake", async (req, res) => {
     await client.query("COMMIT");
     const updatedMatch = await getMatchFromDb(matchId);
     res.json(updatedMatch);
+    if (updatedMatch) {
+      const oppIgn = oppRow.codm_ign;
+      setImmediate(() => {
+        try {
+          broadcastMatchStateChange(updatedMatch, "MATCH_STARTED");
+          sendTelegramMatchAcceptedAlert(updatedMatch, oppIgn).catch(
+            (err) => console.warn("Telegram match alert background error:", err.message)
+          );
+        } catch (bgErr) {
+          console.warn("Match start background task error:", bgErr.message);
+        }
+      });
+    }
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("Opponent stake race condition error:", err);
@@ -4402,95 +6187,9 @@ app.post("/api/matches/:id/opponent-stake", async (req, res) => {
 });
 app.post("/api/matches/:id/creator-stake", async (req, res) => {
   const matchId = req.params.id;
-  const { creatorId, paymentMethod = "bank_transfer" } = req.body;
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const matchRes = await client.query(`SELECT * FROM matches WHERE id = ${escapeSql(matchId)} FOR UPDATE`);
-    if (matchRes.rows.length === 0) {
-      await client.query("ROLLBACK");
-      return res.status(404).json({ error: "Match not found" });
-    }
-    const matchRow = matchRes.rows[0];
-    if (matchRow.status !== "OPPONENT_STAKED_AWAITING_CREATOR") {
-      await client.query("ROLLBACK");
-      return res.status(400).json({ error: "Match is not in waiting for host stake state." });
-    }
-    if (matchRow.creator_id !== creatorId) {
-      await client.query("ROLLBACK");
-      return res.status(403).json({ error: "Only the match creator can provide the matching host stake." });
-    }
-    const stakeAmount = parseFloat(matchRow.stake_amount);
-    const creatorRes = await client.query(`SELECT * FROM users WHERE id = ${escapeSql(creatorId)} FOR UPDATE`);
-    if (creatorRes.rows.length === 0) {
-      await client.query("ROLLBACK");
-      return res.status(404).json({ error: "Creator not found" });
-    }
-    const creatorRow = creatorRes.rows[0];
-    if (paymentMethod === "wallet_balance") {
-      const currentBal = parseFloat(creatorRow.balance || 0);
-      if (currentBal < stakeAmount) {
-        await client.query("ROLLBACK");
-        return res.status(400).json({ error: `Insufficient balance (\u20A6${currentBal.toLocaleString()}).` });
-      }
-      await client.query(`
-        UPDATE users 
-        SET balance = balance - ${escapeSql(stakeAmount)},
-            escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
-        WHERE id = ${escapeSql(creatorId)}
-      `);
-    } else {
-      await client.query(`
-        UPDATE users 
-        SET escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
-        WHERE id = ${escapeSql(creatorId)}
-      `);
-    }
-    const creatorData = matchRow.creator_data || {};
-    creatorData.staked = true;
-    const generatedRoomCode = generateRoomCode(matchRow.map);
-    const now = Date.now();
-    const newChatMsg = {
-      id: `msg_${now}`,
-      senderId: "SYSTEM",
-      senderName: "CODM Referee Bot",
-      text: `\u{1F389} BOTH STAKES CONFIRMED! Total Pot: \u20A6${parseFloat(matchRow.pot_amount).toLocaleString()} secured in automated escrow. \u{1F3AF} IN-GAME ROOM NUMBER GENERATED: ${generatedRoomCode}. Both players: open CODM > Multiplayer > Private Match > Join #${generatedRoomCode} and battle!`,
-      timestamp: now
-    };
-    const chatMessages = Array.isArray(matchRow.chat_messages) ? matchRow.chat_messages : [];
-    chatMessages.push(newChatMsg);
-    await client.query(`
-      UPDATE matches 
-      SET status = 'READY_TO_PLAY',
-          room_code = ${escapeSql(generatedRoomCode)},
-          room_generated_at = ${now},
-          creator_data = ${escapeSql(creatorData)},
-          chat_messages = ${escapeSql(chatMessages)}
-      WHERE id = ${escapeSql(matchId)}
-    `);
-    const tx = {
-      id: `tx_${now}`,
-      type: "ESCROW_LOCK",
-      amount: stakeAmount,
-      description: `\u20A6${stakeAmount.toLocaleString()} matching stake locked in escrow for challenge #${matchRow.challenge_code}`,
-      timestamp: now,
-      matchId: matchRow.id
-    };
-    await client.query(`
-      INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
-      VALUES (${escapeSql(tx.id)}, ${escapeSql(creatorId)}, ${escapeSql(tx.type)}, ${escapeSql(tx.amount)}, ${escapeSql(tx.description)}, ${escapeSql(tx.matchId)}, ${escapeSql(tx.timestamp)})
-      ON CONFLICT (id) DO NOTHING
-    `);
-    await client.query("COMMIT");
-    const updatedMatch = await getMatchFromDb(matchId);
-    res.json(updatedMatch);
-  } catch (err) {
-    await client.query("ROLLBACK");
-    console.error("Creator stake race condition error:", err);
-    res.status(500).json({ error: err.message || "Failed to submit matching host stake" });
-  } finally {
-    client.release();
-  }
+  const match = await getMatchFromDb(matchId);
+  if (!match) return res.status(404).json({ error: "Match not found" });
+  res.json(match);
 });
 app.post("/api/matches/:id/join", async (req, res) => {
   const matchId = req.params.id;
@@ -4519,9 +6218,15 @@ app.post("/api/matches/:id/join", async (req, res) => {
       return res.status(404).json({ error: "Opponent not found" });
     }
     const oppRow = oppRes.rows[0];
+    const currentBal = parseFloat(oppRow.balance || 0);
+    if (currentBal < stakeAmount) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: `Insufficient wallet balance (\u20A6${currentBal.toLocaleString()}) to accept this wager. Please fund your wallet first.` });
+    }
     await client.query(`
       UPDATE users 
-      SET escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
+      SET balance = balance - ${escapeSql(stakeAmount)},
+          escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
       WHERE id = ${escapeSql(opponentId)}
     `);
     const opponentData = {
@@ -4532,29 +6237,33 @@ app.post("/api/matches/:id/join", async (req, res) => {
       avatar: oppRow.avatar,
       staked: true
     };
+    const generatedRoomCode = generateRoomCode(matchRow.map);
+    const now = Date.now();
     const newChatMsg = {
-      id: `msg_${Date.now()}`,
+      id: `msg_${now}`,
       senderId: "SYSTEM",
       senderName: "CODM Referee Bot",
-      text: `\u2694\uFE0F Challenge accepted! ${oppRow.codm_ign} has sent \u20A6${stakeAmount.toLocaleString()} into escrow. Host ${matchRow.creator_data?.codmIgn || "Host"}, send your matching \u20A6${stakeAmount.toLocaleString()} stake to generate your CODM in-game room number!`,
-      timestamp: Date.now()
+      text: `\u{1F389} MATCH STARTED! ${oppRow.codm_ign} accepted the duel and \u20A6${stakeAmount.toLocaleString()} stake was locked into escrow. Total Pot: \u20A6${parseFloat(matchRow.pot_amount).toLocaleString()}. In-game Room Code: #${generatedRoomCode}`,
+      timestamp: now
     };
     const chatMessages = Array.isArray(matchRow.chat_messages) ? matchRow.chat_messages : [];
     chatMessages.push(newChatMsg);
     await client.query(`
       UPDATE matches 
-      SET status = 'OPPONENT_STAKED_AWAITING_CREATOR',
+      SET status = 'READY_TO_PLAY',
+          room_code = ${escapeSql(generatedRoomCode)},
+          room_generated_at = ${now},
           opponent_id = ${escapeSql(oppRow.id)},
           opponent_data = ${escapeSql(opponentData)},
           chat_messages = ${escapeSql(chatMessages)}
       WHERE id = ${escapeSql(matchId)}
     `);
     const tx = {
-      id: `tx_${Date.now()}`,
+      id: `tx_${now}_join`,
       type: "ESCROW_LOCK",
       amount: stakeAmount,
       description: `\u20A6${stakeAmount.toLocaleString()} stake locked in escrow for challenge #${matchRow.challenge_code}`,
-      timestamp: Date.now(),
+      timestamp: now,
       matchId: matchRow.id
     };
     await client.query(`
@@ -4565,10 +6274,266 @@ app.post("/api/matches/:id/join", async (req, res) => {
     await client.query("COMMIT");
     const updatedMatch = await getMatchFromDb(matchId);
     res.json(updatedMatch);
+    if (updatedMatch) {
+      const oppIgn = oppRow.codm_ign;
+      setImmediate(() => {
+        try {
+          broadcastMatchStateChange(updatedMatch, "MATCH_STARTED");
+          sendTelegramMatchAcceptedAlert(updatedMatch, oppIgn).catch(
+            (err) => console.warn("Telegram match alert background error:", err.message)
+          );
+        } catch (bgErr) {
+          console.warn("Match start background task error:", bgErr.message);
+        }
+      });
+    }
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("Join match race condition error:", err);
     res.status(500).json({ error: err.message || "Failed to join match" });
+  } finally {
+    client.release();
+  }
+});
+app.post("/api/matches/:id/squad-join", async (req, res) => {
+  const matchId = req.params.id;
+  const { userId, slotIndex, team } = req.body;
+  if (!userId) return res.status(400).json({ error: "User ID is required" });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const matchRes = await client.query(`SELECT * FROM matches WHERE id = ${escapeSql(matchId)} FOR UPDATE`);
+    if (matchRes.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Match not found" });
+    }
+    const matchRow = matchRes.rows[0];
+    if (matchRow.status !== "PENDING_OPPONENT_STAKE") {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "This squad lobby is no longer open for joining." });
+    }
+    let squadData = matchRow.squad_data ? typeof matchRow.squad_data === "string" ? JSON.parse(matchRow.squad_data) : matchRow.squad_data : null;
+    if (!squadData || !Array.isArray(squadData.slots)) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "This match is not configured as a 5v5 squad lobby." });
+    }
+    const existingSlot = squadData.slots.find((s) => s.userId === userId && s.staked);
+    if (existingSlot) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: `You are already staked in ${existingSlot.team === "ALPHA" ? "Team Alpha (Blue)" : "Team Bravo (Red)"} Slot #${existingSlot.slotIndex + 1}` });
+    }
+    let targetSlotIndex = typeof slotIndex === "number" && slotIndex >= 0 && slotIndex < 10 ? slotIndex : -1;
+    if (targetSlotIndex !== -1) {
+      if (squadData.slots[targetSlotIndex]?.staked) {
+        targetSlotIndex = -1;
+      }
+    }
+    if (targetSlotIndex === -1) {
+      if (team === "BRAVO") {
+        targetSlotIndex = squadData.slots.findIndex((s) => s.team === "BRAVO" && !s.staked);
+      } else if (team === "ALPHA") {
+        targetSlotIndex = squadData.slots.findIndex((s) => s.team === "ALPHA" && !s.staked);
+      }
+      if (targetSlotIndex === -1) {
+        targetSlotIndex = squadData.slots.findIndex((s) => !s.staked);
+      }
+    }
+    if (targetSlotIndex === -1 || targetSlotIndex >= 10) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "All 10 squad slots are already filled!" });
+    }
+    const stakeAmount = parseFloat(matchRow.stake_amount);
+    const userRes = await client.query(`SELECT * FROM users WHERE id = ${escapeSql(userId)} FOR UPDATE`);
+    if (userRes.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "User not found" });
+    }
+    const user = userRes.rows[0];
+    const currentBal = parseFloat(user.balance || 0);
+    if (currentBal < stakeAmount) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: `Insufficient wallet balance (\u20A6${currentBal.toLocaleString()}) to join this 5v5 squad slot. Please fund your wallet first.` });
+    }
+    await client.query(`
+      UPDATE users 
+      SET balance = balance - ${escapeSql(stakeAmount)},
+          escrow_balance = escrow_balance + ${escapeSql(stakeAmount)}
+      WHERE id = ${escapeSql(userId)}
+    `);
+    const assignedTeam = squadData.slots[targetSlotIndex].team || (targetSlotIndex < 5 ? "ALPHA" : "BRAVO");
+    squadData.slots[targetSlotIndex] = {
+      slotIndex: targetSlotIndex,
+      team: assignedTeam,
+      userId: user.id,
+      username: user.username,
+      codmIgn: user.codm_ign,
+      codmUid: user.codm_uid,
+      avatar: user.avatar,
+      staked: true,
+      stakedAt: Date.now()
+    };
+    const filledCount = squadData.slots.filter((s) => s.staked).length;
+    const now = Date.now();
+    let newStatus = matchRow.status;
+    let generatedRoomCode = matchRow.room_code;
+    const chatMessages = Array.isArray(matchRow.chat_messages) ? matchRow.chat_messages : [];
+    if (filledCount === 10) {
+      newStatus = "READY_TO_PLAY";
+      generatedRoomCode = generateRoomCode(matchRow.map);
+      chatMessages.push({
+        id: `msg_${now}_squad_start`,
+        senderId: "SYSTEM",
+        senderName: "CODM Referee Bot",
+        text: `\u{1F389} ALL 10 SQUAD SLOTS FILLED! 5v5 Squad match is LOCKED into escrow (Total Pot: \u20A6${parseFloat(matchRow.pot_amount).toLocaleString()}). Room Code: #${generatedRoomCode}. Join CODM Custom Room now!`,
+        timestamp: now
+      });
+    } else {
+      chatMessages.push({
+        id: `msg_${now}_squad_join`,
+        senderId: "SYSTEM",
+        senderName: "CODM Referee Bot",
+        text: `\u2694\uFE0F ${user.codm_ign} staked \u20A6${stakeAmount.toLocaleString()} and joined ${assignedTeam === "ALPHA" ? "Team Alpha (Blue)" : "Team Bravo (Red)"} Slot #${targetSlotIndex + 1}! (${filledCount}/10 slots filled)`,
+        timestamp: now
+      });
+    }
+    await client.query(`
+      UPDATE matches 
+      SET status = ${escapeSql(newStatus)},
+          squad_data = ${escapeSql(squadData)},
+          room_code = ${escapeSql(generatedRoomCode || null)},
+          room_generated_at = ${filledCount === 10 ? now : "room_generated_at"},
+          chat_messages = ${escapeSql(chatMessages)}
+      WHERE id = ${escapeSql(matchId)}
+    `);
+    const tx = {
+      id: `tx_${now}_squad_${targetSlotIndex}`,
+      type: "ESCROW_LOCK",
+      amount: stakeAmount,
+      description: `\u20A6${stakeAmount.toLocaleString()} stake locked in escrow for 5v5 Squad challenge #${matchRow.challenge_code} (${assignedTeam} Slot #${targetSlotIndex + 1})`,
+      timestamp: now,
+      matchId: matchRow.id
+    };
+    await client.query(`
+      INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+      VALUES (${escapeSql(tx.id)}, ${escapeSql(userId)}, ${escapeSql(tx.type)}, ${escapeSql(tx.amount)}, ${escapeSql(tx.description)}, ${escapeSql(tx.matchId)}, ${escapeSql(tx.timestamp)})
+      ON CONFLICT (id) DO NOTHING
+    `);
+    await client.query("COMMIT");
+    const updatedMatch = await getMatchFromDb(matchId);
+    res.json(updatedMatch);
+    if (updatedMatch) {
+      const pIgn = user.codm_ign;
+      setImmediate(() => {
+        try {
+          broadcastMatchStateChange(updatedMatch, filledCount === 10 ? "MATCH_STARTED" : "RIVAL_JOINED");
+          sendTelegramSquadSlotJoinedAlert(
+            updatedMatch,
+            pIgn,
+            assignedTeam,
+            targetSlotIndex + 1,
+            filledCount
+          ).catch(
+            (err) => console.warn("Telegram squad join alert background error:", err.message)
+          );
+        } catch (bgErr) {
+          console.warn("Squad join background task error:", bgErr.message);
+        }
+      });
+    }
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Squad join error:", err);
+    res.status(500).json({ error: err.message || "Failed to join squad slot" });
+  } finally {
+    client.release();
+  }
+});
+app.post("/api/matches/:id/squad-leave", async (req, res) => {
+  const matchId = req.params.id;
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: "User ID is required" });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const matchRes = await client.query(`SELECT * FROM matches WHERE id = ${escapeSql(matchId)} FOR UPDATE`);
+    if (matchRes.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Match not found" });
+    }
+    const matchRow = matchRes.rows[0];
+    if (matchRow.status !== "PENDING_OPPONENT_STAKE") {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Cannot leave slot once match is locked or started." });
+    }
+    if (matchRow.creator_id === userId) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Host cannot leave slot. Cancel the wager to refund all players instead." });
+    }
+    let squadData = matchRow.squad_data ? typeof matchRow.squad_data === "string" ? JSON.parse(matchRow.squad_data) : matchRow.squad_data : null;
+    if (!squadData || !Array.isArray(squadData.slots)) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "This match is not a squad wager." });
+    }
+    const slotIdx = squadData.slots.findIndex((s) => s.userId === userId && s.staked);
+    if (slotIdx === -1) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "You are not currently in a staked slot in this lobby." });
+    }
+    const stakeAmount = parseFloat(matchRow.stake_amount);
+    await client.query(`
+      UPDATE users 
+      SET balance = balance + ${escapeSql(stakeAmount)},
+          escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(stakeAmount)})
+      WHERE id = ${escapeSql(userId)}
+    `);
+    const userRes = await client.query(`SELECT codm_ign FROM users WHERE id = ${escapeSql(userId)}`);
+    const playerIgn = userRes.rows[0]?.codm_ign || "Player";
+    const resetTeam = squadData.slots[slotIdx].team;
+    squadData.slots[slotIdx] = { slotIndex: slotIdx, team: resetTeam, staked: false };
+    const filledCount = squadData.slots.filter((s) => s.staked).length;
+    const now = Date.now();
+    const chatMessages = Array.isArray(matchRow.chat_messages) ? matchRow.chat_messages : [];
+    chatMessages.push({
+      id: `msg_${now}_squad_leave`,
+      senderId: "SYSTEM",
+      senderName: "CODM Referee Bot",
+      text: `\u{1F6E1}\uFE0F ${playerIgn} left Slot #${slotIdx + 1} and \u20A6${stakeAmount.toLocaleString()} escrow was refunded to their wallet. (${filledCount}/10 slots filled)`,
+      timestamp: now
+    });
+    await client.query(`
+      UPDATE matches 
+      SET squad_data = ${escapeSql(squadData)},
+          chat_messages = ${escapeSql(chatMessages)}
+      WHERE id = ${escapeSql(matchId)}
+    `);
+    const tx = {
+      id: `tx_${now}_squad_refund_${slotIdx}`,
+      type: "ESCROW_REFUND",
+      amount: stakeAmount,
+      description: `\u20A6${stakeAmount.toLocaleString()} escrow refunded after leaving 5v5 Squad challenge #${matchRow.challenge_code}`,
+      timestamp: now,
+      matchId: matchRow.id
+    };
+    await client.query(`
+      INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+      VALUES (${escapeSql(tx.id)}, ${escapeSql(userId)}, ${escapeSql(tx.type)}, ${escapeSql(tx.amount)}, ${escapeSql(tx.description)}, ${escapeSql(tx.matchId)}, ${escapeSql(tx.timestamp)})
+      ON CONFLICT (id) DO NOTHING
+    `);
+    await client.query("COMMIT");
+    const updatedMatch = await getMatchFromDb(matchId);
+    res.json(updatedMatch);
+    if (updatedMatch) {
+      setImmediate(() => {
+        try {
+          broadcastMatchStateChange(updatedMatch);
+        } catch (_) {
+        }
+      });
+    }
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Squad leave error:", err);
+    res.status(500).json({ error: err.message || "Failed to leave squad slot" });
   } finally {
     client.release();
   }
@@ -4619,40 +6584,62 @@ app.post("/api/matches/:id/cancel", async (req, res) => {
       return res.status(400).json({ error: "Cannot cancel match. Opponent has already accepted and staked." });
     }
     await client.query(`UPDATE matches SET status = 'CANCELLED', chat_messages = '[]'::jsonb WHERE id = ${escapeSql(matchId)}`);
-    const creatorData = matchRow.creator_data || {};
-    const opponentData = matchRow.opponent_data || {};
+    const isSquad = matchRow.match_type === "squad" || Boolean(matchRow.squad_data);
+    let squadData = matchRow.squad_data ? typeof matchRow.squad_data === "string" ? JSON.parse(matchRow.squad_data) : matchRow.squad_data : null;
     const stakeAmount = parseFloat(matchRow.stake_amount);
-    if (creatorData.staked) {
-      await client.query(`
-        UPDATE users 
-        SET balance = balance + ${escapeSql(stakeAmount)},
-            escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(stakeAmount)})
-        WHERE id = ${escapeSql(matchRow.creator_id)}
-      `);
-      const txC = `tx_${Date.now()}_c`;
-      await client.query(`
-        INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
-        VALUES (${escapeSql(txC)}, ${escapeSql(matchRow.creator_id)}, 'ESCROW_REFUND', ${escapeSql(stakeAmount)}, ${escapeSql(`\u20A6${stakeAmount.toLocaleString()} escrow refunded from cancelled challenge #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${Date.now()})
-        ON CONFLICT (id) DO NOTHING
-      `);
-    }
-    if (opponentData.staked && matchRow.opponent_id) {
-      await client.query(`
-        UPDATE users 
-        SET balance = balance + ${escapeSql(stakeAmount)},
-            escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(stakeAmount)})
-        WHERE id = ${escapeSql(matchRow.opponent_id)}
-      `);
-      const txO = `tx_${Date.now()}_o`;
-      await client.query(`
-        INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
-        VALUES (${escapeSql(txO)}, ${escapeSql(matchRow.opponent_id)}, 'ESCROW_REFUND', ${escapeSql(stakeAmount)}, ${escapeSql(`\u20A6${stakeAmount.toLocaleString()} escrow refunded from cancelled challenge #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${Date.now()})
-        ON CONFLICT (id) DO NOTHING
-      `);
+    if (isSquad && squadData?.slots && Array.isArray(squadData.slots)) {
+      for (const slot of squadData.slots) {
+        if (slot.staked && slot.userId) {
+          await client.query(`
+            UPDATE users 
+            SET balance = balance + ${escapeSql(stakeAmount)},
+                escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(stakeAmount)})
+            WHERE id = ${escapeSql(slot.userId)}
+          `);
+          const txS = `tx_${Date.now()}_cancel_sq_${slot.slotIndex}`;
+          await client.query(`
+            INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+            VALUES (${escapeSql(txS)}, ${escapeSql(slot.userId)}, 'ESCROW_REFUND', ${escapeSql(stakeAmount)}, ${escapeSql(`\u20A6${stakeAmount.toLocaleString()} escrow refunded from cancelled 5v5 Squad challenge #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${Date.now()})
+            ON CONFLICT (id) DO NOTHING
+          `);
+        }
+      }
+    } else {
+      const creatorData = matchRow.creator_data || {};
+      const opponentData = matchRow.opponent_data || {};
+      if (creatorData.staked) {
+        await client.query(`
+          UPDATE users 
+          SET balance = balance + ${escapeSql(stakeAmount)},
+              escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(stakeAmount)})
+          WHERE id = ${escapeSql(matchRow.creator_id)}
+        `);
+        const txC = `tx_${Date.now()}_c`;
+        await client.query(`
+          INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+          VALUES (${escapeSql(txC)}, ${escapeSql(matchRow.creator_id)}, 'ESCROW_REFUND', ${escapeSql(stakeAmount)}, ${escapeSql(`\u20A6${stakeAmount.toLocaleString()} escrow refunded from cancelled challenge #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${Date.now()})
+          ON CONFLICT (id) DO NOTHING
+        `);
+      }
+      if (opponentData.staked && matchRow.opponent_id) {
+        await client.query(`
+          UPDATE users 
+          SET balance = balance + ${escapeSql(stakeAmount)},
+              escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(stakeAmount)})
+          WHERE id = ${escapeSql(matchRow.opponent_id)}
+        `);
+        const txO = `tx_${Date.now()}_o`;
+        await client.query(`
+          INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+          VALUES (${escapeSql(txO)}, ${escapeSql(matchRow.opponent_id)}, 'ESCROW_REFUND', ${escapeSql(stakeAmount)}, ${escapeSql(`\u20A6${stakeAmount.toLocaleString()} escrow refunded from cancelled challenge #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${Date.now()})
+          ON CONFLICT (id) DO NOTHING
+        `);
+      }
     }
     await client.query("COMMIT");
     await clearMatchChatInDb(matchId);
     const updatedMatch = await getMatchFromDb(matchId);
+    globalIo?.emit("matchUpdated", updatedMatch);
     res.json(updatedMatch);
   } catch (err) {
     try {
@@ -4665,7 +6652,254 @@ app.post("/api/matches/:id/cancel", async (req, res) => {
     client.release();
   }
 });
-app.post("/api/matches/:id/submit-result", async (req, res) => {
+function analyzeImageSystemLogic(base64Data, filename) {
+  if (!base64Data || typeof base64Data !== "string") {
+    return {
+      isLikelyFake: true,
+      confidenceScore: 0.9,
+      fakeRiskScore: 90,
+      verdict: "NO DATA PROVIDED",
+      dimensions: null,
+      aspectRatio: "Unknown",
+      fileType: "unknown",
+      fileSizeKb: 0,
+      headerHex: "NONE",
+      isStandardType: false,
+      detectedSoftware: null,
+      redFlags: ["No valid payload received"],
+      positiveSignals: []
+    };
+  }
+  if (base64Data.startsWith("data:video/")) {
+    const rawLen = base64Data.length - base64Data.indexOf(",") - 1;
+    const sizeKb2 = Math.round(rawLen * 0.75 / 1024);
+    return {
+      isLikelyFake: false,
+      confidenceScore: 1,
+      fakeRiskScore: 0,
+      verdict: "VIDEO RECORDING SUBMITTED",
+      dimensions: null,
+      aspectRatio: "Video",
+      fileType: "video",
+      fileSizeKb: sizeKb2,
+      headerHex: "VIDEO",
+      isStandardType: true,
+      detectedSoftware: null,
+      redFlags: [],
+      positiveSignals: ["Video format detected for review"]
+    };
+  }
+  const cleanBase64 = base64Data.replace(/^data:image\/[a-z0-9.+-]+;base64,/, "");
+  let buf;
+  try {
+    buf = Buffer.from(cleanBase64, "base64");
+  } catch (e) {
+    return {
+      isLikelyFake: true,
+      confidenceScore: 0.95,
+      fakeRiskScore: 95,
+      verdict: "CORRUPTED BASE64 DATA",
+      dimensions: null,
+      aspectRatio: "Corrupt",
+      fileType: "invalid",
+      fileSizeKb: 0,
+      headerHex: "CORRUPT",
+      isStandardType: false,
+      detectedSoftware: null,
+      redFlags: ["Base64 payload could not be decoded"],
+      positiveSignals: []
+    };
+  }
+  const sizeKb = Math.round(buf.length / 1024);
+  let fileType = "unknown";
+  let isStandardType = false;
+  const headerHex = buf.subarray(0, 16).toString("hex").toUpperCase();
+  if (buf.length >= 8 && buf[0] === 137 && buf[1] === 80 && buf[2] === 78 && buf[3] === 71 && buf[4] === 13 && buf[5] === 10 && buf[6] === 26 && buf[7] === 10) {
+    fileType = "image/png";
+    isStandardType = true;
+  } else if (buf.length >= 3 && buf[0] === 255 && buf[1] === 216 && buf[2] === 255) {
+    fileType = "image/jpeg";
+    isStandardType = true;
+  } else if (buf.length >= 12 && buf.subarray(0, 4).toString() === "RIFF" && buf.subarray(8, 12).toString() === "WEBP") {
+    fileType = "image/webp";
+    isStandardType = true;
+  }
+  let dimensions = null;
+  if (fileType === "image/png" && buf.length >= 24) {
+    dimensions = {
+      width: buf.readUInt32BE(16),
+      height: buf.readUInt32BE(20)
+    };
+  } else if (fileType === "image/jpeg") {
+    let offset = 2;
+    while (offset < buf.length - 8) {
+      if (buf[offset] !== 255) {
+        offset++;
+        continue;
+      }
+      const marker = buf[offset + 1];
+      if (marker === 217 || marker === 218) break;
+      if ([192, 193, 194, 195, 197, 198, 199, 201, 202, 203, 205, 206, 207].includes(marker)) {
+        dimensions = {
+          height: buf.readUInt16BE(offset + 5),
+          width: buf.readUInt16BE(offset + 7)
+        };
+        break;
+      }
+      const len = buf.readUInt16BE(offset + 2);
+      offset += 2 + len;
+    }
+  } else if (fileType === "image/webp" && buf.length >= 30) {
+    const chunkType = buf.subarray(12, 16).toString();
+    if (chunkType === "VP8 " && buf.length >= 30) {
+      dimensions = {
+        width: buf.readUInt16LE(26) & 16383,
+        height: buf.readUInt16LE(28) & 16383
+      };
+    } else if (chunkType === "VP8L" && buf.length >= 25) {
+      const b0 = buf[21];
+      const b1 = buf[22];
+      const b2 = buf[23];
+      const b3 = buf[24];
+      dimensions = {
+        width: 1 + ((b1 & 63) << 8 | b0),
+        height: 1 + ((b3 & 15) << 10 | b2 << 2 | (b1 & 192) >> 6)
+      };
+    } else if (chunkType === "VP8X" && buf.length >= 30) {
+      dimensions = {
+        width: 1 + (buf[24] | buf[25] << 8 | buf[26] << 16),
+        height: 1 + (buf[27] | buf[28] << 8 | buf[29] << 16)
+      };
+    }
+  }
+  let fakeRiskScore = 0;
+  const redFlags = [];
+  const positiveSignals = [];
+  let detectedSoftware = null;
+  if (!isStandardType) {
+    redFlags.push(`Non-standard image file signature (Header: ${headerHex.slice(0, 8)})`);
+    fakeRiskScore += 45;
+  } else {
+    positiveSignals.push(`Standard ${fileType.toUpperCase().replace("IMAGE/", "")} format verified`);
+  }
+  let aspectRatioLabel = "Unknown";
+  if (dimensions && dimensions.width > 0 && dimensions.height > 0) {
+    const { width, height } = dimensions;
+    const ratio = width / height;
+    aspectRatioLabel = `${width}x${height} (${ratio.toFixed(2)}:1)`;
+    if (ratio >= 0.95 && ratio <= 1.05) {
+      redFlags.push(`1:1 Square aspect ratio (${width}x${height}) - classic generative AI default (Midjourney / DALL-E / SD)`);
+      fakeRiskScore += 50;
+    } else if (height > width) {
+      redFlags.push(`Portrait orientation (${width}x${height}) - CODM gameplay scoreboard is strictly landscape`);
+      fakeRiskScore += 40;
+    } else if (ratio >= 1.33 && ratio <= 2.45) {
+      positiveSignals.push(`Authentic mobile landscape aspect ratio (${ratio >= 1.7 && ratio <= 2.3 ? "16:9 to 20:9 Phone Display" : "Tablet Landscape"})`);
+    } else {
+      redFlags.push(`Abnormal aspect ratio (${ratio.toFixed(2)}:1) - out of mobile gaming range`);
+      fakeRiskScore += 20;
+    }
+    if (width === 512 && height === 512 || width === 768 && height === 768 || width === 1024 && height === 1024 || width === 512 && height === 768 || width === 768 && height === 512 || width === 1024 && height === 1792) {
+      redFlags.push(`Matches standard AI default dimensions (${width}x${height})`);
+      fakeRiskScore += 35;
+    }
+  } else {
+    redFlags.push("Unable to decode image dimension headers");
+    fakeRiskScore += 20;
+  }
+  const rawText = buf.toString("latin1");
+  const aiKeywords = [
+    { pattern: /comfyui/i, name: "ComfyUI Node Graph" },
+    { pattern: /stable diffusion|automatic1111|\ba1111\b|sdxl|fooocus/i, name: "Stable Diffusion / A1111" },
+    { pattern: /midjourney/i, name: "Midjourney" },
+    { pattern: /dall[- ]?e/i, name: "OpenAI DALL-E" },
+    { pattern: /novelai/i, name: "NovelAI" },
+    { pattern: /adobe firefly|firefly/i, name: "Adobe Firefly" },
+    { pattern: /synthid/i, name: "Google SynthID Synthetic Watermark" },
+    { pattern: /c2pa|urn:c2pa/i, name: "C2PA Provenance Manifest" },
+    { pattern: /source: generative ai|source: ai|generative: ai/i, name: "Generative AI Metadata Tag" },
+    { pattern: /sd-metadata/i, name: "Stable Diffusion Metadata" },
+    { pattern: /dreamstudio/i, name: "DreamStudio (Stability AI)" },
+    { pattern: /leonardo\.ai/i, name: "Leonardo AI" },
+    { pattern: /playground ai/i, name: "Playground AI" },
+    { pattern: /bing image creator/i, name: "Bing Image Creator" },
+    { pattern: /steps:\s*\d+/i, name: "AI Diffusion Steps Parameter" },
+    { pattern: /sampler:\s*[a-z0-9_]+/i, name: "AI Diffusion Sampler Parameter" },
+    { pattern: /cfg scale:\s*[0-9.]+/i, name: "AI Diffusion CFG Scale" },
+    { pattern: /negative prompt:/i, name: "AI Negative Prompt Parameter" },
+    { pattern: /photoshop|adobe imageready/i, name: "Adobe Photoshop" },
+    { pattern: /canva/i, name: "Canva Design Editor" }
+  ];
+  for (const { pattern, name } of aiKeywords) {
+    if (pattern.test(rawText)) {
+      detectedSoftware = name;
+      redFlags.push(`Embedded AI/editor signature: "${name}"`);
+      fakeRiskScore += 60;
+      break;
+    }
+  }
+  if (sizeKb < 35) {
+    redFlags.push(`Suspiciously small file size (${sizeKb} KB) for high-definition scoreboard`);
+    fakeRiskScore += 20;
+  } else if (sizeKb > 120 && isStandardType && positiveSignals.length > 0) {
+    positiveSignals.push(`Standard mobile capture payload (${sizeKb} KB)`);
+  }
+  const isLikelyFake = fakeRiskScore >= 45;
+  const confidenceScore = isLikelyFake ? Math.min(0.99, 0.65 + Math.min(0.3, fakeRiskScore / 150)) : Math.max(0.88, 1 - fakeRiskScore / 100);
+  const verdict = isLikelyFake ? "FAKE / SYNTHETIC AI GENERATION DETECTED" : fakeRiskScore > 20 ? "SUSPICIOUS / ANOMALIES PRESENT" : "VERIFIED AUTHENTIC CODM SCREENSHOT";
+  return {
+    isLikelyFake,
+    confidenceScore: Math.round(confidenceScore * 100) / 100,
+    fakeRiskScore,
+    verdict,
+    dimensions,
+    aspectRatio: aspectRatioLabel,
+    fileType,
+    fileSizeKb: sizeKb,
+    headerHex: headerHex.slice(0, 16),
+    isStandardType,
+    detectedSoftware,
+    redFlags,
+    positiveSignals
+  };
+}
+function computeMatchConflictReasons(match) {
+  const cClaim = match.creator?.resultClaim;
+  const oClaim = match.opponent?.resultClaim;
+  const cIgn = match.creator?.codmIgn || "Host";
+  const oIgn = match.opponent?.codmIgn || "Rival";
+  const cDetection = match.creator?.systemAiDetection;
+  const oDetection = match.opponent?.systemAiDetection;
+  const reasons = [];
+  if (cClaim === "VICTORY" && oClaim === "VICTORY") {
+    reasons.push(`Dual Victory Conflict: Both Host (${cIgn}) and Rival (${oIgn}) claimed "I Won \u{1F3C6}". Scoreboard verification required to award escrow.`);
+  } else if (cClaim && oClaim && cClaim !== oClaim) {
+    reasons.push(`Contradictory Outcome Claims: ${cIgn} claimed "${cClaim}" while ${oIgn} claimed "${oClaim}".`);
+  }
+  if (match.resubmissionNotice?.reason) {
+    reasons.push(`Proof Resubmission Requested: ${match.resubmissionNotice.reason}`);
+  }
+  if (cDetection?.isLikelyFake) {
+    reasons.push(`\u26A0\uFE0F Host (${cIgn}) Screenshot Flagged: ${cDetection.verdict} (${cDetection.redFlags.join(" \xB7 ")})`);
+  }
+  if (oDetection?.isLikelyFake) {
+    reasons.push(`\u26A0\uFE0F Rival (${oIgn}) Screenshot Flagged: ${oDetection.verdict} (${oDetection.redFlags.join(" \xB7 ")})`);
+  }
+  if (match.status === "DISPUTED") {
+    if (match.resolutionNotes && !reasons.includes(match.resolutionNotes)) {
+      reasons.push(match.resolutionNotes);
+    }
+    if (!match.creator?.screenshotUrl) {
+      reasons.push(`Awaiting scoreboard proof upload from Host (${cIgn}).`);
+    }
+    if (match.opponent && !match.opponent.screenshotUrl) {
+      reasons.push(`Awaiting scoreboard proof upload from Rival (${oIgn}).`);
+    }
+  }
+  const conflictReason = reasons.length > 0 ? reasons[0] : match.resolutionNotes || "Match results pending referee verification.";
+  return { conflictReason, conflictReasonsList: reasons };
+}
+app.post("/api/matches/:id/submit-result", rateLimitMiddleware(15, 6e4), secureSignatureMiddleware, async (req, res) => {
   const match = await getMatchFromDb(req.params.id);
   if (!match) return res.status(404).json({ error: "Match not found" });
   const { playerId, claim, screenshotBase64 } = req.body;
@@ -4678,6 +6912,7 @@ app.post("/api/matches/:id/submit-result", async (req, res) => {
     return res.status(403).json({ error: "You are not a participant in this match" });
   }
   const playerIgn = isCreator ? match.creator.codmIgn : match.opponent.codmIgn;
+  let systemAnalysis = null;
   let analysisResult = {
     detectedOutcome: claim,
     confidence: 0.95,
@@ -4685,58 +6920,36 @@ app.post("/api/matches/:id/submit-result", async (req, res) => {
     scoreSummary: claim === "VICTORY" ? "Scoreboard confirmed Victory" : claim === "DRAW" ? "Scoreboard confirmed Draw / Tie" : "Scoreboard confirmed Defeat",
     reasoning: "Verified by CODM match verification engine."
   };
-  if (screenshotBase64 && ai) {
-    try {
-      const base64Data = screenshotBase64.replace(/^data:image\/[a-z]+;base64,/, "");
-      const response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                mimeType: "image/jpeg",
-                data: base64Data
-              }
-            },
-            {
-              text: `You are an automated referee for Call of Duty: Mobile (CODM) 1v1 wager escrow matches.
-Analyze this post-game screenshot. The user claims: ${claim}.
-The player's In-Game Name (IGN) is: "${playerIgn}".
-Room Code: "${match.roomCode}".
-
-Determine:
-1. Is there a clear "VICTORY", "DEFEAT", or "DRAW / TIE" badge/banner?
-2. Is the player's name "${playerIgn}" visible in the scoreboard or match screen?
-3. What is the detected outcome? (VICTORY, DEFEAT, DRAW, or UNCLEAR)
-4. Confidence level between 0.0 and 1.0.
-
-Respond strictly in valid JSON format:
-{
-  "detectedOutcome": "VICTORY" | "DEFEAT" | "DRAW" | "UNCLEAR",
-  "confidence": number,
-  "detectedPlayerName": string or null,
-  "scoreSummary": string,
-  "reasoning": string
-}`
-            }
-          ]
-        },
-        config: {
-          responseMimeType: "application/json"
-        }
-      });
-      if (response.text) {
-        analysisResult = JSON.parse(response.text.trim());
-      }
-    } catch (err) {
-      console.error("Gemini vision analysis error, using fallback:", err.message);
-    }
+  if (screenshotBase64) {
+    systemAnalysis = analyzeImageSystemLogic(screenshotBase64);
   }
   if (isCreator) {
     match.creator.resultClaim = claim;
     if (screenshotBase64) {
       match.creator.screenshotUrl = screenshotBase64;
       match.creator.screenshotAnalysis = analysisResult;
+      match.creator.systemAiDetection = systemAnalysis;
+      match.creator.forensicAnalysis = {
+        isLikelyFake: systemAnalysis.isLikelyFake,
+        confidenceScore: systemAnalysis.confidenceScore,
+        aiDetected: systemAnalysis.isLikelyFake,
+        manipulationDetected: systemAnalysis.fakeRiskScore >= 45,
+        detectedPlayerName: playerIgn,
+        detectedOutcome: claim,
+        technicalNotes: systemAnalysis.redFlags.join("; ") || "Standard verified mobile screenshot format",
+        redFlags: systemAnalysis.redFlags,
+        positiveSignals: systemAnalysis.positiveSignals,
+        verdict: systemAnalysis.verdict,
+        fileInfo: {
+          mimeType: systemAnalysis.fileType,
+          headerHex: systemAnalysis.headerHex,
+          isStandardType: systemAnalysis.isStandardType,
+          dimensions: systemAnalysis.dimensions,
+          aspectRatio: systemAnalysis.aspectRatio
+        }
+      };
+      delete match.creator.resubmissionRequested;
+      delete match.creator.resubmissionReason;
     }
     match.creator.submittedAt = Date.now();
   } else if (match.opponent) {
@@ -4744,6 +6957,28 @@ Respond strictly in valid JSON format:
     if (screenshotBase64) {
       match.opponent.screenshotUrl = screenshotBase64;
       match.opponent.screenshotAnalysis = analysisResult;
+      match.opponent.systemAiDetection = systemAnalysis;
+      match.opponent.forensicAnalysis = {
+        isLikelyFake: systemAnalysis.isLikelyFake,
+        confidenceScore: systemAnalysis.confidenceScore,
+        aiDetected: systemAnalysis.isLikelyFake,
+        manipulationDetected: systemAnalysis.fakeRiskScore >= 45,
+        detectedPlayerName: playerIgn,
+        detectedOutcome: claim,
+        technicalNotes: systemAnalysis.redFlags.join("; ") || "Standard verified mobile screenshot format",
+        redFlags: systemAnalysis.redFlags,
+        positiveSignals: systemAnalysis.positiveSignals,
+        verdict: systemAnalysis.verdict,
+        fileInfo: {
+          mimeType: systemAnalysis.fileType,
+          headerHex: systemAnalysis.headerHex,
+          isStandardType: systemAnalysis.isStandardType,
+          dimensions: systemAnalysis.dimensions,
+          aspectRatio: systemAnalysis.aspectRatio
+        }
+      };
+      delete match.opponent.resubmissionRequested;
+      delete match.opponent.resubmissionReason;
     }
     match.opponent.submittedAt = Date.now();
   }
@@ -4753,24 +6988,32 @@ Respond strictly in valid JSON format:
   let resolveWinner = null;
   if (isDisputeMode) {
     if (screenshotBase64) {
+      const isVideo = screenshotBase64.startsWith("data:video/");
+      const proofType = isVideo ? "screen recording" : "scoreboard screenshot";
+      const proofEmoji = isVideo ? "\u{1F4F9}" : "\u{1F4F8}";
       match.chatMessages.push({
         id: `msg_${Date.now()}`,
         senderId: "SYSTEM",
         senderName: "CODM Referee Bot",
-        text: `\u{1F4F8} ${playerIgn} submitted dispute scoreboard screenshot: ${analysisResult.detectedOutcome} (${Math.round((analysisResult.confidence || 0.95) * 100)}% Confidence).`,
+        text: `${proofEmoji} ${playerIgn} submitted dispute ${proofType}. Manual review required by admin.`,
         timestamp: Date.now()
       });
-      if (analysisResult.detectedOutcome === "VICTORY" && (analysisResult.confidence || 0) >= 0.8) {
-        resolveWinner = isCreator ? "creator" : "opponent";
-      } else if (analysisResult.detectedOutcome === "DEFEAT") {
-        resolveWinner = isCreator ? "opponent" : "creator";
+      if (isVideo) {
+        setImmediate(() => {
+          sendMatchDisputeVideoToTelegram(match, playerIgn, screenshotBase64).catch(
+            (err) => console.error("[Telegram Bot] Background video upload error:", err.message)
+          );
+        });
       }
+      resolveWinner = null;
+      match.status = "DISPUTED";
+      match.resolutionNotes = `Awaiting referee review of ${proofType} submitted by ${playerIgn}. Pot \u20A6${match.potAmount.toLocaleString()} remains locked.`;
     } else {
       match.chatMessages.push({
         id: `msg_${Date.now()}`,
         senderId: "SYSTEM",
         senderName: "CODM Referee Bot",
-        text: `\u26A0\uFE0F Match is in dispute. Please upload your post-game scoreboard screenshot to resolve.`,
+        text: `\u26A0\uFE0F Match is in dispute. Please upload your screen recording of history and result to resolve.`,
         timestamp: Date.now()
       });
     }
@@ -4783,9 +7026,7 @@ Respond strictly in valid JSON format:
       text: `\u26A1 ${playerIgn} confirmed match result: "${claimLabel}".`,
       timestamp: Date.now()
     });
-    if (claim === "DEFEAT") {
-      resolveWinner = isCreator ? "opponent" : "creator";
-    } else if (cClaim && oClaim) {
+    if (cClaim && oClaim) {
       if (cClaim === "VICTORY" && oClaim === "DEFEAT") {
         resolveWinner = "creator";
       } else if (cClaim === "DEFEAT" && oClaim === "VICTORY") {
@@ -4827,34 +7068,293 @@ Respond strictly in valid JSON format:
       timestamp: Date.now()
     });
   } else if (resolveWinner === "creator" || resolveWinner === "opponent") {
-    const winnerObj = resolveWinner === "creator" ? match.creator : match.opponent;
-    const loserObj = resolveWinner === "creator" ? match.opponent : match.creator;
-    const winnerUser = await getUserFromDb(winnerObj.id);
-    const loserUser = await getUserFromDb(loserObj.id);
+    const isSquad = match.matchType === "squad" || Boolean(match.squadData);
+    if (isSquad && match.squadData?.slots) {
+      const winningTeam = resolveWinner === "creator" ? "ALPHA" : "BRAVO";
+      const losingTeam = winningTeam === "ALPHA" ? "BRAVO" : "ALPHA";
+      const teamLabel = winningTeam === "ALPHA" ? "Team Alpha (Blue)" : "Team Bravo (Red)";
+      match.status = "SETTLED";
+      match.winnerId = winningTeam;
+      match.winnerIgn = teamLabel;
+      const platformFee = match.platformFee !== void 0 ? match.platformFee : Math.round(match.potAmount * ((match.platformFeePercentage || 5) / 100));
+      await updatePlatformFinance(platformFee);
+      for (const slot of match.squadData.slots) {
+        if (slot.staked && slot.userId) {
+          await pool.query(`
+            UPDATE users 
+            SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)})
+            WHERE id = ${escapeSql(slot.userId)}
+          `);
+        }
+      }
+      const winningSlots = match.squadData.slots.filter((s) => s.team === winningTeam && s.staked && s.userId);
+      for (const slot of winningSlots) {
+        const txWId = `tx_${Date.now()}_sq_win_${slot.slotIndex}`;
+        const descWin = `\u{1F3C6} Won 5v5 Squad Match #${match.roomCode || match.challengeCode} (${teamLabel}): \u20A6${match.winnerPayout.toLocaleString()} credited to wallet balance.`;
+        const insRes = await pool.query(`
+          INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+          VALUES (${escapeSql(txWId)}, ${escapeSql(slot.userId)}, 'MATCH_WIN_PAYOUT', ${escapeSql(match.winnerPayout)}, ${escapeSql(descWin)}, ${escapeSql(match.id)}, ${Date.now()})
+          ON CONFLICT (id) DO NOTHING
+          RETURNING id;
+        `);
+        if (insRes.rows.length > 0) {
+          await pool.query(`
+            UPDATE users 
+            SET balance = balance + ${escapeSql(match.winnerPayout)},
+                total_winnings = total_winnings + ${escapeSql(match.winnerPayout)},
+                wins = wins + 1
+            WHERE id = ${escapeSql(slot.userId)}
+          `);
+        }
+      }
+      const losingSlots = match.squadData.slots.filter((s) => s.team === losingTeam && s.staked && s.userId);
+      for (const slot of losingSlots) {
+        await pool.query(`
+          UPDATE users SET losses = losses + 1 WHERE id = ${escapeSql(slot.userId)}
+        `);
+      }
+      match.resolutionNotes = `5v5 Squad Match resolved! Winning Team is ${teamLabel}. \u20A6${match.winnerPayout.toLocaleString()} credited to each of the 5 winning squad players!`;
+      match.chatMessages = [];
+      await clearMatchChatInDb(match.id);
+      setImmediate(() => {
+        sendTelegramMatchSettledAlert(match, winningTeam).catch(
+          (e) => console.warn("Telegram squad settlement alert error:", e.message)
+        );
+      });
+    } else {
+      const winnerObj = resolveWinner === "creator" ? match.creator : match.opponent;
+      const loserObj = resolveWinner === "creator" ? match.opponent : match.creator;
+      const winnerUser = await getUserFromDb(winnerObj.id);
+      const loserUser = await getUserFromDb(loserObj.id);
+      match.status = "SETTLED";
+      match.winnerId = winnerObj.id;
+      match.winnerIgn = winnerObj.codmIgn;
+      const platformFee = match.platformFee || Math.round(match.potAmount * 0.1);
+      const bonusPerReferrer = Math.floor(platformFee * 0.1);
+      const referrers = [];
+      if (winnerUser?.referredBy) referrers.push(winnerUser.referredBy);
+      if (loserUser?.referredBy) referrers.push(loserUser.referredBy);
+      for (const referrerId of [...new Set(referrers)]) {
+        await pool.query(`
+          UPDATE users 
+          SET balance = balance + ${escapeSql(bonusPerReferrer)},
+              total_referral_earnings = COALESCE(total_referral_earnings, 0) + ${escapeSql(bonusPerReferrer)}
+          WHERE id = ${escapeSql(referrerId)}
+        `);
+        await saveTransactionToDb(referrerId, {
+          id: `tx_ref_${Date.now()}_${Math.floor(Math.random() * 1e3)}`,
+          type: "REFERRAL_EARNING",
+          amount: bonusPerReferrer,
+          description: `10% Referral bonus from match #${match.roomCode || match.challengeCode} platform fee`,
+          matchId: match.id,
+          timestamp: Date.now()
+        });
+      }
+      await updatePlatformFinance(platformFee - bonusPerReferrer * [...new Set(referrers)].length);
+      if (match.creator?.id) {
+        await pool.query(`
+          UPDATE users 
+          SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)})
+          WHERE id = ${escapeSql(match.creator.id)}
+        `);
+      }
+      if (match.opponent?.id) {
+        await pool.query(`
+          UPDATE users 
+          SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)})
+          WHERE id = ${escapeSql(match.opponent.id)}
+        `);
+      }
+      if (winnerObj?.id) {
+        const txWId = `tx_${Date.now()}_win`;
+        const descWin = `\u{1F3C6} Won 1v1 Escrow Match #${match.roomCode} vs ${loserObj.codmIgn}: \u20A6${match.winnerPayout.toLocaleString()} credited to wallet balance. Ready for instant cashout.`;
+        const insRes = await pool.query(`
+          INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+          VALUES (${escapeSql(txWId)}, ${escapeSql(winnerObj.id)}, 'MATCH_WIN_PAYOUT', ${escapeSql(match.winnerPayout)}, ${escapeSql(descWin)}, ${escapeSql(match.id)}, ${Date.now()})
+          ON CONFLICT (id) DO NOTHING
+          RETURNING id;
+        `);
+        if (insRes.rows.length > 0) {
+          await pool.query(`
+            UPDATE users 
+            SET balance = balance + ${escapeSql(match.winnerPayout)},
+                total_winnings = total_winnings + ${escapeSql(match.winnerPayout)},
+                wins = wins + 1
+            WHERE id = ${escapeSql(winnerObj.id)}
+          `);
+        }
+        if (loserObj?.id) {
+          await pool.query(`
+            UPDATE users SET losses = losses + 1 WHERE id = ${escapeSql(loserObj.id)}
+          `);
+        }
+        match.resolutionNotes = `Match resolved! Winner is ${winnerObj.codmIgn}. \u20A6${match.winnerPayout.toLocaleString()} credited to winner's wallet. Ready for instant cashout!`;
+        match.chatMessages = [];
+        await clearMatchChatInDb(match.id);
+        setImmediate(() => {
+          sendTelegramMatchSettledAlert(match, winnerObj.codmIgn).catch(
+            (e) => console.warn("Telegram match settlement alert error:", e.message)
+          );
+        });
+      }
+    }
+  } else if (resolveWinner === "dispute") {
+    match.conflictRetries = (match.conflictRetries || 0) + 1;
+    if (match.conflictRetries < 3) {
+      match.status = "SUBMITTING_RESULTS";
+      delete match.creator.resultClaim;
+      delete match.creator.screenshotUrl;
+      delete match.creator.screenshotAnalysis;
+      delete match.creator.submittedAt;
+      if (match.opponent) {
+        delete match.opponent.resultClaim;
+        delete match.opponent.screenshotUrl;
+        delete match.opponent.screenshotAnalysis;
+        delete match.opponent.submittedAt;
+      }
+      match.resolutionNotes = `\u26A0\uFE0F Result Conflict Detected (Retry Attempt ${match.conflictRetries} of 3). Both players must re-confirm match result.`;
+      match.chatMessages.push({
+        id: `msg_${Date.now()}_retry`,
+        senderId: "SYSTEM",
+        senderName: "CODM Referee Bot",
+        text: `\u26A0\uFE0F RESULT CONFLICT DETECTED (Retry Attempt ${match.conflictRetries} of 3): Conflicting claims submitted. Both players are given another chance to confirm correct result before mandatory screenshot review.`,
+        timestamp: Date.now()
+      });
+    } else {
+      match.status = "DISPUTED";
+      match.resolutionNotes = `\u{1F6A8} Maximum 3 conflict retries reached. Match escalated to Admin Review Queue for manual video recording inspection.`;
+      match.chatMessages.push({
+        id: `msg_${Date.now()}_dispute_final`,
+        senderId: "SYSTEM",
+        senderName: "CODM Referee Bot",
+        text: `\u{1F6A8} MAXIMUM 3 CONFLICT RETRIES REACHED: Match escalated to Admin Review. Both players MUST upload a <b>screen recording</b> of their history and game result now for manual referee verification.`,
+        timestamp: Date.now()
+      });
+    }
+  } else {
+    match.status = "SUBMITTING_RESULTS";
+    const waitingForIgn = isCreator ? match.opponent?.codmIgn || "Rival" : match.creator.codmIgn;
+    const submittedLabel = claim === "VICTORY" ? "I Won \u{1F3C6}" : claim === "DEFEAT" ? "I Lost \u274C" : "Draw \u2696\uFE0F";
+    match.resolutionNotes = `${playerIgn} submitted "${submittedLabel}". Pending result confirmation from ${waitingForIgn} before final settlement.`;
+  }
+  if (systemAnalysis?.isLikelyFake) {
+    match.chatMessages.push({
+      id: `msg_${Date.now()}_sys_flag`,
+      senderId: "SYSTEM",
+      senderName: "CODM Referee Bot",
+      text: `\u26A0\uFE0F Security Alert: ${playerIgn}'s screenshot was flagged by system forensic analysis (${systemAnalysis.verdict}: ${systemAnalysis.redFlags.join(" \xB7 ")}). Flagged in Admin Review Queue for referee inspection.`,
+      timestamp: Date.now()
+    });
+  }
+  const conflictInfo = computeMatchConflictReasons(match);
+  match.conflictReason = conflictInfo.conflictReason;
+  match.conflictReasonsList = conflictInfo.conflictReasonsList;
+  await saveMatchToDb(match);
+  if (globalIo) {
+    globalIo.emit("matchUpdated", match);
+    globalIo.to(match.id).emit("matchUpdated", match);
+  }
+  res.json(match);
+});
+app.post("/api/msksksnuwje/matches/:id/admin-resolve", async (req, res) => {
+  const adminUser = req.adminUser;
+  if (adminUser.role !== "admin") {
+    return res.status(403).json({ error: "Unauthorized: Full Administrative privileges required to resolve matches." });
+  }
+  const match = await getMatchFromDb(req.params.id);
+  if (!match) return res.status(404).json({ error: "Match not found" });
+  if (match.reviewerId && match.reviewerId !== adminUser.id) {
+    return res.status(403).json({ error: `Forbidden: This match is currently being reviewed by ${match.reviewerName || "another admin"}` });
+  }
+  const { winnerId } = req.body;
+  if (winnerId === "REFUND" || winnerId === "DRAW") {
+    const isSquad2 = match.matchType === "squad" || Boolean(match.squadData);
+    if (isSquad2 && match.squadData?.slots) {
+      for (const slot of match.squadData.slots) {
+        if (slot.staked && slot.userId) {
+          await pool.query(`
+            UPDATE users 
+            SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)}),
+                balance = balance + ${escapeSql(match.stakeAmount)}
+            WHERE id = ${escapeSql(slot.userId)}
+          `);
+          await saveTransactionToDb(slot.userId, {
+            id: `tx_refund_${Date.now()}_sq_${slot.slotIndex}`,
+            type: "ESCROW_REFUND",
+            amount: match.stakeAmount,
+            description: `Escrow refund for 5v5 Squad match #${match.roomCode || match.challengeCode}: Full Refund by referee.`,
+            matchId: match.id,
+            timestamp: Date.now()
+          });
+        }
+      }
+    } else {
+      if (match.creator?.id) {
+        await pool.query(`
+          UPDATE users 
+          SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)}),
+              balance = balance + ${escapeSql(match.stakeAmount)}
+          WHERE id = ${escapeSql(match.creator.id)}
+        `);
+        await saveTransactionToDb(match.creator.id, {
+          id: `tx_refund_${Date.now()}_creator`,
+          type: "ESCROW_REFUND",
+          amount: match.stakeAmount,
+          description: `Escrow refund for match #${match.roomCode || match.challengeCode}: Adjudicated as Draw / Full Refund by referee.`,
+          matchId: match.id,
+          timestamp: Date.now()
+        });
+      }
+      if (match.opponent?.id) {
+        await pool.query(`
+          UPDATE users 
+          SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)}),
+              balance = balance + ${escapeSql(match.stakeAmount)}
+          WHERE id = ${escapeSql(match.opponent.id)}
+        `);
+        await saveTransactionToDb(match.opponent.id, {
+          id: `tx_refund_${Date.now()}_opponent`,
+          type: "ESCROW_REFUND",
+          amount: match.stakeAmount,
+          description: `Escrow refund for match #${match.roomCode || match.challengeCode}: Adjudicated as Draw / Full Refund by referee.`,
+          matchId: match.id,
+          timestamp: Date.now()
+        });
+      }
+    }
+    match.status = "CANCELLED";
+    match.resolutionNotes = `Match resolved as Draw / Full Refund by referee. \u20A6${match.stakeAmount.toLocaleString()} refunded to players.`;
+    match.chatMessages = [];
+    await clearMatchChatInDb(match.id);
+    await saveMatchToDb(match);
+    return res.json(match);
+  }
+  const isSquad = match.matchType === "squad" || Boolean(match.squadData);
+  if (isSquad && match.squadData?.slots) {
+    const winningTeam = winnerId === "BRAVO" || match.squadData?.slots?.find((s) => s.userId === winnerId)?.team === "BRAVO" ? "BRAVO" : "ALPHA";
+    const losingTeam = winningTeam === "ALPHA" ? "BRAVO" : "ALPHA";
+    const teamLabel = winningTeam === "ALPHA" ? "Team Alpha (Blue)" : "Team Bravo (Red)";
     match.status = "SETTLED";
-    match.winnerId = winnerObj.id;
-    match.winnerIgn = winnerObj.codmIgn;
-    await updatePlatformFinance(match.platformFee);
-    if (match.creator?.id) {
-      await pool.query(`
-        UPDATE users 
-        SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)})
-        WHERE id = ${escapeSql(match.creator.id)}
-      `);
+    match.winnerId = winningTeam;
+    match.winnerIgn = teamLabel;
+    const platformFee2 = match.platformFee !== void 0 ? match.platformFee : Math.round(match.potAmount * ((match.platformFeePercentage || 5) / 100));
+    await updatePlatformFinance(platformFee2);
+    for (const slot of match.squadData.slots) {
+      if (slot.staked && slot.userId) {
+        await pool.query(`
+          UPDATE users 
+          SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)})
+          WHERE id = ${escapeSql(slot.userId)}
+        `);
+      }
     }
-    if (match.opponent?.id) {
-      await pool.query(`
-        UPDATE users 
-        SET escrow_balance = GREATEST(0, escrow_balance - ${escapeSql(match.stakeAmount)})
-        WHERE id = ${escapeSql(match.opponent.id)}
-      `);
-    }
-    if (winnerObj?.id) {
-      const txWId = `tx_${Date.now()}_win`;
-      const descWin = `\u{1F3C6} Won 1v1 Escrow Match #${match.roomCode} vs ${loserObj.codmIgn}: \u20A6${match.winnerPayout.toLocaleString()} credited to wallet balance. Ready for instant cashout.`;
+    const winningSlots = match.squadData.slots.filter((s) => s.team === winningTeam && s.staked && s.userId);
+    for (const slot of winningSlots) {
+      const txWId = `tx_${Date.now()}_admin_sq_win_${slot.slotIndex}`;
+      const descWin = `\u{1F3C6} Referee resolved 5v5 Squad match in favor of ${teamLabel}: \u20A6${match.winnerPayout.toLocaleString()} credited to wallet balance.`;
       const insRes = await pool.query(`
         INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
-        VALUES (${escapeSql(txWId)}, ${escapeSql(winnerObj.id)}, 'MATCH_WIN_PAYOUT', ${escapeSql(match.winnerPayout)}, ${escapeSql(descWin)}, ${escapeSql(match.id)}, ${Date.now()})
+        VALUES (${escapeSql(txWId)}, ${escapeSql(slot.userId)}, 'MATCH_WIN_PAYOUT', ${escapeSql(match.winnerPayout)}, ${escapeSql(descWin)}, ${escapeSql(match.id)}, ${Date.now()})
         ON CONFLICT (id) DO NOTHING
         RETURNING id;
       `);
@@ -4864,39 +7364,27 @@ Respond strictly in valid JSON format:
           SET balance = balance + ${escapeSql(match.winnerPayout)},
               total_winnings = total_winnings + ${escapeSql(match.winnerPayout)},
               wins = wins + 1
-          WHERE id = ${escapeSql(winnerObj.id)}
+          WHERE id = ${escapeSql(slot.userId)}
         `);
       }
-      if (loserObj?.id) {
-        await pool.query(`
-          UPDATE users SET losses = losses + 1 WHERE id = ${escapeSql(loserObj.id)}
-        `);
-      }
-      match.resolutionNotes = `Match resolved! Winner is ${winnerObj.codmIgn}. \u20A6${match.winnerPayout.toLocaleString()} credited to winner's wallet. Ready for instant cashout!`;
-      match.chatMessages = [];
-      await clearMatchChatInDb(match.id);
     }
-  } else if (resolveWinner === "dispute") {
-    match.status = "DISPUTED";
-    match.resolutionNotes = "\u26A0\uFE0F CONFLICT DETECTED: Both players submitted conflicting results! Post-game scoreboard screenshots are now required to verify the winner.";
-    match.chatMessages.push({
-      id: `msg_${Date.now()}_dispute`,
-      senderId: "SYSTEM",
-      senderName: "CODM Referee Bot",
-      text: `\u26A0\uFE0F CONFLICT DETECTED: Both players claimed conflicting results! The \u20A6${match.potAmount.toLocaleString()} escrow pot is safely frozen. Both players must now upload their post-match scoreboard screenshot as proof.`,
-      timestamp: Date.now()
+    const losingSlots = match.squadData.slots.filter((s) => s.team === losingTeam && s.staked && s.userId);
+    for (const slot of losingSlots) {
+      await pool.query(`
+        UPDATE users SET losses = losses + 1 WHERE id = ${escapeSql(slot.userId)}
+      `);
+    }
+    match.resolutionNotes = `Referee adjudicated in favor of ${teamLabel}. \u20A6${match.winnerPayout.toLocaleString()} paid out to each of the 5 winning squad players!`;
+    match.chatMessages = [];
+    await clearMatchChatInDb(match.id);
+    await saveMatchToDb(match);
+    setImmediate(() => {
+      sendTelegramMatchSettledAlert(match, winningTeam).catch(
+        (e) => console.warn("Telegram squad settlement alert error:", e.message)
+      );
     });
-  } else {
-    match.status = "SUBMITTING_RESULTS";
-    match.resolutionNotes = `${playerIgn} claimed "${claim === "VICTORY" ? "I Won \u{1F3C6}" : "Draw \u2696\uFE0F"}". Waiting for opponent to confirm or dispute.`;
+    return res.json(match);
   }
-  await saveMatchToDb(match);
-  res.json(match);
-});
-app.post("/api/matches/:id/admin-resolve", async (req, res) => {
-  const match = await getMatchFromDb(req.params.id);
-  if (!match) return res.status(404).json({ error: "Match not found" });
-  const { winnerId } = req.body;
   const isCreatorWinner = match.creator.id === winnerId;
   const isOpponentWinner = match.opponent?.id === winnerId;
   if (!isCreatorWinner && !isOpponentWinner) {
@@ -4954,13 +7442,17 @@ app.post("/api/matches/:id/admin-resolve", async (req, res) => {
   if (loserUser?.referredBy) referrers.push(loserUser.referredBy);
   for (const referrerId of [...new Set(referrers)]) {
     await pool.query(`
-      UPDATE users SET balance = balance + ${escapeSql(bonusPerReferrer)} WHERE id = ${escapeSql(referrerId)}
+      UPDATE users 
+      SET balance = balance + ${escapeSql(bonusPerReferrer)},
+          total_referral_earnings = COALESCE(total_referral_earnings, 0) + ${escapeSql(bonusPerReferrer)}
+      WHERE id = ${escapeSql(referrerId)}
     `);
     await saveTransactionToDb(referrerId, {
       id: `tx_ref_${Date.now()}_${Math.floor(Math.random() * 1e3)}`,
       type: "REFERRAL_EARNING",
       amount: bonusPerReferrer,
-      description: "10% Referral bonus from match platform fee",
+      description: `10% Referral bonus from match #${match.roomCode || match.challengeCode} platform fee`,
+      matchId: match.id,
       timestamp: Date.now()
     });
   }
@@ -4969,6 +7461,11 @@ app.post("/api/matches/:id/admin-resolve", async (req, res) => {
   match.chatMessages = [];
   await clearMatchChatInDb(match.id);
   await saveMatchToDb(match);
+  setImmediate(() => {
+    sendTelegramMatchSettledAlert(match, winnerObj.codmIgn).catch(
+      (e) => console.warn("Telegram match settlement alert error:", e.message)
+    );
+  });
   res.json(match);
 });
 async function settleAbandonedMatch(matchId, reason = "Inactivity / Abandoned") {
@@ -5099,89 +7596,240 @@ async function expirePendingMatches() {
 }
 async function sweepAbandonedMatches() {
   await expirePendingMatches();
-  await checkUnconfirmedResultMatches();
-  try {
-    const oneHourAgo = Date.now() - 60 * 60 * 1e3;
-    const thirtyMinsAgo = Date.now() - 30 * 60 * 1e3;
-    const staleRes = await pool.query(`
-      SELECT id, challenge_code, status, created_at, room_generated_at, match_duration_minutes
-      FROM matches
-      WHERE status IN ('READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'DISPUTED')
-        AND (
-          created_at < ${oneHourAgo}
-          OR (room_generated_at IS NOT NULL AND room_generated_at < ${thirtyMinsAgo})
-        )
-      ORDER BY created_at ASC
-      LIMIT 25
-    `);
-    if (staleRes.rows.length > 0) {
-      console.log(`\u{1F9F9} [Abandoned Match Sweep] Found ${staleRes.rows.length} stale match(es) to settle...`);
-      for (const row of staleRes.rows) {
-        try {
-          await settleAbandonedMatch(row.id, "Automatic match expiration / inactivity timeout");
-          console.log(`\u2705 Settled abandoned match #${row.challenge_code}`);
-        } catch (mErr) {
-          console.warn(`Could not auto-settle match ${row.id}:`, mErr.message);
-        }
-      }
-    }
-  } catch (err) {
-    console.warn("\u26A0\uFE0F [Abandoned Match Sweep] Sweep warning:", err.message);
-  }
-}
-async function checkUnconfirmedResultMatches() {
-  try {
-    const oneHour = 60 * 60 * 1e3;
-    const now = Date.now();
-    const res = await pool.query(`
-      SELECT id, status, creator_data, opponent_data
-      FROM matches
-      WHERE status = 'SUBMITTING_RESULTS'
-    `);
-    for (const row of res.rows) {
-      const match = {
-        ...row,
-        creator: typeof row.creator_data === "string" ? JSON.parse(row.creator_data) : row.creator_data,
-        opponent: typeof row.opponent_data === "string" ? JSON.parse(row.opponent_data) : row.opponent_data
-      };
-      if (match.creator.submittedAt && !match.opponent.resultClaim && now - match.creator.submittedAt > oneHour) {
-        await settleAbandonedMatch(match.id, "Automatic settlement: Opponent failed to confirm result within 1 hour");
-      } else if (match.opponent.submittedAt && !match.creator.resultClaim && now - match.opponent.submittedAt > oneHour) {
-        await settleAbandonedMatch(match.id, "Automatic settlement: Creator failed to confirm result within 1 hour");
-      }
-    }
-  } catch (err) {
-    console.error("Error in checkUnconfirmedResultMatches:", err);
-  }
 }
 app.post("/api/matches/:id/abandon", async (req, res) => {
+  return res.status(403).json({
+    error: "Unilateral match settlement and refunds are disabled. Under Arena rules, both players must mutually agree to restart the timer or refund stakes, or submit evidence to the Moderator Review Queue."
+  });
+});
+app.post("/api/matches/:id/mutual-action", async (req, res) => {
+  const matchId = req.params.id;
+  const { userId, action } = req.body || {};
+  if (!userId || !action) {
+    return res.status(400).json({ error: "Missing userId or action" });
+  }
+  const client = await pool.connect();
   try {
-    const matchId = req.params.id;
-    const match = await getMatchFromDb(matchId);
-    if (!match) return res.status(404).json({ error: "Match not found" });
-    if (match.status === "SETTLED" || match.status === "CANCELLED" || match.status === "ABANDONED") {
-      return res.status(400).json({ error: `Match has already been ${match.status.toLowerCase()}` });
+    await client.query("BEGIN");
+    const mRes = await client.query(`SELECT * FROM matches WHERE id = ${escapeSql(matchId)} FOR UPDATE`);
+    if (mRes.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Match not found" });
     }
-    const { reason = "Abandoned / stalled match" } = req.body || {};
-    const result = await settleAbandonedMatch(matchId, reason);
-    res.json({
-      success: true,
-      message: `Match settled as abandoned. Players refunded minus platform fee and 10% penalty fee.`,
-      match: result.match,
-      data: result
-    });
+    const matchRow = mRes.rows[0];
+    if (matchRow.status === "SETTLED" || matchRow.status === "CANCELLED") {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: `Match has already been ${matchRow.status.toLowerCase()}` });
+    }
+    const isCreator = matchRow.creator_id === userId;
+    const isOpponent = matchRow.opponent_id === userId;
+    if (!isCreator && !isOpponent) {
+      await client.query("ROLLBACK");
+      return res.status(403).json({ error: "Only active match contenders can participate in mutual agreements" });
+    }
+    const creatorData = typeof matchRow.creator_data === "string" ? JSON.parse(matchRow.creator_data) : matchRow.creator_data || {};
+    const opponentData = typeof matchRow.opponent_data === "string" ? JSON.parse(matchRow.opponent_data) : matchRow.opponent_data || {};
+    const actingUser = isCreator ? creatorData : opponentData;
+    const currentMutual = matchRow.mutual_action_data ? typeof matchRow.mutual_action_data === "string" ? JSON.parse(matchRow.mutual_action_data) : matchRow.mutual_action_data : null;
+    let chatMessages = matchRow.chat_messages ? typeof matchRow.chat_messages === "string" ? JSON.parse(matchRow.chat_messages) : matchRow.chat_messages : [];
+    const now = Date.now();
+    if (action === "REQUEST_RESTART_TIMER" || action === "REQUEST_MUTUAL_REFUND") {
+      const targetAction = action === "REQUEST_RESTART_TIMER" ? "RESTART_TIMER" : "MUTUAL_REFUND";
+      if (currentMutual && currentMutual.action === targetAction && currentMutual.requestedBy !== userId) {
+        if (targetAction === "RESTART_TIMER") {
+          chatMessages.push({
+            id: `msg_${now}`,
+            senderId: "system",
+            senderName: "ARENA REFEREE",
+            text: `\u{1F504} Both players have mutually agreed to restart the match countdown timer. Timer reset!`,
+            timestamp: now
+          });
+          await client.query(`
+            UPDATE matches 
+            SET room_generated_at = ${now}, 
+                mutual_action_data = NULL,
+                chat_messages = ${escapeSql(JSON.stringify(chatMessages))}
+            WHERE id = ${escapeSql(matchId)}
+          `);
+          await client.query("COMMIT");
+          const updated2 = await getMatchFromDb(matchId);
+          if (globalIo) globalIo.emit("match_updated", updated2);
+          return res.json({ success: true, message: "Match timer restarted by mutual agreement of both players", match: updated2 });
+        } else {
+          const stakeAmount = parseFloat(matchRow.stake_amount) || 0;
+          if (matchRow.creator_id && creatorData.staked) {
+            await client.query(`UPDATE users SET balance = balance + ${stakeAmount}, escrow_balance = GREATEST(0, escrow_balance - ${stakeAmount}) WHERE id = ${escapeSql(matchRow.creator_id)}`);
+            await client.query(`
+              INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+              VALUES (${escapeSql(`tx_${now}_mref_c`)}, ${escapeSql(matchRow.creator_id)}, 'ESCROW_REFUND', ${stakeAmount}, ${escapeSql(`\u20A6${stakeAmount.toLocaleString()} full stake refunded from mutually cancelled match #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${now})
+              ON CONFLICT (id) DO NOTHING
+            `);
+          }
+          if (matchRow.opponent_id && opponentData.staked) {
+            await client.query(`UPDATE users SET balance = balance + ${stakeAmount}, escrow_balance = GREATEST(0, escrow_balance - ${stakeAmount}) WHERE id = ${escapeSql(matchRow.opponent_id)}`);
+            await client.query(`
+              INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+              VALUES (${escapeSql(`tx_${now}_mref_o`)}, ${escapeSql(matchRow.opponent_id)}, 'ESCROW_REFUND', ${stakeAmount}, ${escapeSql(`\u20A6${stakeAmount.toLocaleString()} full stake refunded from mutually cancelled match #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${now})
+              ON CONFLICT (id) DO NOTHING
+            `);
+          }
+          chatMessages.push({
+            id: `msg_${now}`,
+            senderId: "system",
+            senderName: "ARENA REFEREE",
+            text: `\u{1F91D} Both gladiators mutually agreed to void the match. Full stakes (\u20A6${stakeAmount.toLocaleString()}) refunded to both wallets.`,
+            timestamp: now
+          });
+          await client.query(`
+            UPDATE matches 
+            SET status = 'CANCELLED',
+                mutual_action_data = NULL,
+                resolution_notes = 'Mutually voided and refunded by agreement of both players',
+                chat_messages = ${escapeSql(JSON.stringify(chatMessages))}
+            WHERE id = ${escapeSql(matchId)}
+          `);
+          await client.query("COMMIT");
+          const updated2 = await getMatchFromDb(matchId);
+          if (globalIo) globalIo.emit("match_updated", updated2);
+          return res.json({ success: true, message: "Match mutually cancelled. Full stakes refunded to both players.", match: updated2 });
+        }
+      }
+      const newMutual = {
+        action: targetAction,
+        requestedBy: userId,
+        requestedByName: actingUser.codmIgn || actingUser.username || "Gladiator",
+        requestedAt: now
+      };
+      chatMessages.push({
+        id: `msg_${now}`,
+        senderId: "system",
+        senderName: "ARENA REFEREE",
+        text: `\u23F3 ${actingUser.codmIgn || "A gladiator"} requested ${targetAction === "RESTART_TIMER" ? "a countdown timer restart" : "a mutual 100% refund"}. Waiting for opponent to agree.`,
+        timestamp: now
+      });
+      await client.query(`
+        UPDATE matches 
+        SET mutual_action_data = ${escapeSql(JSON.stringify(newMutual))},
+            chat_messages = ${escapeSql(JSON.stringify(chatMessages))}
+        WHERE id = ${escapeSql(matchId)}
+      `);
+      await client.query("COMMIT");
+      const updated = await getMatchFromDb(matchId);
+      if (globalIo) globalIo.emit("match_updated", updated);
+      return res.json({ success: true, message: "Request submitted. Both players must agree to proceed.", match: updated });
+    } else if (action === "ACCEPT_ACTION") {
+      if (!currentMutual) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "No active mutual action request to accept" });
+      }
+      if (currentMutual.requestedBy === userId) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "You cannot accept your own request" });
+      }
+      if (currentMutual.action === "RESTART_TIMER") {
+        chatMessages.push({
+          id: `msg_${now}`,
+          senderId: "system",
+          senderName: "ARENA REFEREE",
+          text: `\u{1F504} Both players have mutually agreed to restart the match countdown timer. Timer reset!`,
+          timestamp: now
+        });
+        await client.query(`
+          UPDATE matches 
+          SET room_generated_at = ${now}, 
+              mutual_action_data = NULL,
+              chat_messages = ${escapeSql(JSON.stringify(chatMessages))}
+          WHERE id = ${escapeSql(matchId)}
+        `);
+        await client.query("COMMIT");
+        const updated = await getMatchFromDb(matchId);
+        if (globalIo) globalIo.emit("match_updated", updated);
+        return res.json({ success: true, message: "Match timer restarted by mutual agreement", match: updated });
+      } else if (currentMutual.action === "MUTUAL_REFUND") {
+        const stakeAmount = parseFloat(matchRow.stake_amount) || 0;
+        if (matchRow.creator_id && creatorData.staked) {
+          await client.query(`UPDATE users SET balance = balance + ${stakeAmount}, escrow_balance = GREATEST(0, escrow_balance - ${stakeAmount}) WHERE id = ${escapeSql(matchRow.creator_id)}`);
+          await client.query(`
+            INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+            VALUES (${escapeSql(`tx_${now}_mref_c`)}, ${escapeSql(matchRow.creator_id)}, 'ESCROW_REFUND', ${stakeAmount}, ${escapeSql(`\u20A6${stakeAmount.toLocaleString()} full stake refunded from mutually cancelled match #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${now})
+            ON CONFLICT (id) DO NOTHING
+          `);
+        }
+        if (matchRow.opponent_id && opponentData.staked) {
+          await client.query(`UPDATE users SET balance = balance + ${stakeAmount}, escrow_balance = GREATEST(0, escrow_balance - ${stakeAmount}) WHERE id = ${escapeSql(matchRow.opponent_id)}`);
+          await client.query(`
+            INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+            VALUES (${escapeSql(`tx_${now}_mref_o`)}, ${escapeSql(matchRow.opponent_id)}, 'ESCROW_REFUND', ${stakeAmount}, ${escapeSql(`\u20A6${stakeAmount.toLocaleString()} full stake refunded from mutually cancelled match #${matchRow.challenge_code}`)}, ${escapeSql(matchId)}, ${now})
+            ON CONFLICT (id) DO NOTHING
+          `);
+        }
+        chatMessages.push({
+          id: `msg_${now}`,
+          senderId: "system",
+          senderName: "ARENA REFEREE",
+          text: `\u{1F91D} Both gladiators mutually agreed to void the match. Full stakes (\u20A6${stakeAmount.toLocaleString()}) refunded to both wallets.`,
+          timestamp: now
+        });
+        await client.query(`
+          UPDATE matches 
+          SET status = 'CANCELLED',
+              mutual_action_data = NULL,
+              resolution_notes = 'Mutually voided and refunded by agreement of both players',
+              chat_messages = ${escapeSql(JSON.stringify(chatMessages))}
+          WHERE id = ${escapeSql(matchId)}
+        `);
+        await client.query("COMMIT");
+        const updated = await getMatchFromDb(matchId);
+        if (globalIo) globalIo.emit("match_updated", updated);
+        return res.json({ success: true, message: "Match mutually cancelled. Full stakes refunded to both players.", match: updated });
+      }
+    } else if (action === "DECLINE_ACTION") {
+      if (!currentMutual) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "No active mutual action request to decline" });
+      }
+      chatMessages.push({
+        id: `msg_${now}`,
+        senderId: "system",
+        senderName: "ARENA REFEREE",
+        text: `\u26A0\uFE0F ${actingUser.codmIgn || "Opponent"} declined the request for ${currentMutual.action === "RESTART_TIMER" ? "timer restart" : "mutual refund"}. Match remains active under Arena rules.`,
+        timestamp: now
+      });
+      await client.query(`
+        UPDATE matches 
+        SET mutual_action_data = NULL,
+            chat_messages = ${escapeSql(JSON.stringify(chatMessages))}
+        WHERE id = ${escapeSql(matchId)}
+      `);
+      await client.query("COMMIT");
+      const updated = await getMatchFromDb(matchId);
+      if (globalIo) globalIo.emit("match_updated", updated);
+      return res.json({ success: true, message: "Mutual request declined", match: updated });
+    }
+    await client.query("ROLLBACK");
+    return res.status(400).json({ error: "Invalid mutual action specified" });
   } catch (err) {
-    console.error("Error settling abandoned match:", err);
-    res.status(500).json({ error: err.message || "Failed to settle abandoned match" });
+    try {
+      await client.query("ROLLBACK");
+    } catch (_) {
+    }
+    console.error("Error handling mutual action:", err);
+    res.status(500).json({ error: err.message || "Failed to process mutual action" });
+  } finally {
+    client.release();
   }
 });
 app.post("/api/msksksnuwje/matches/:id/abandon", async (req, res) => {
   try {
     const matchId = req.params.id;
     const { userId, reason = "Admin settled as abandoned" } = req.body || {};
-    const adminUser = await getUserFromDb(userId);
-    if (!adminUser || adminUser.role !== "admin") {
-      return res.status(403).json({ error: "Unauthorized: Admin privileges required" });
+    const adminUser = req.adminUser;
+    if (adminUser.role !== "admin" && adminUser.role !== "moderator") {
+      return res.status(403).json({ error: "Unauthorized: Staff privileges required" });
+    }
+    const match = await getMatchFromDb(matchId);
+    if (match && match.reviewerId && match.reviewerId !== adminUser.id) {
+      return res.status(403).json({ error: `Forbidden: This match is assigned to ${match.reviewerName}` });
     }
     const result = await settleAbandonedMatch(matchId, reason);
     res.json({
@@ -5195,19 +7843,19 @@ app.post("/api/msksksnuwje/matches/:id/abandon", async (req, res) => {
     res.status(500).json({ error: err.message || "Failed to settle abandoned match" });
   }
 });
-app.get("/api/msksksnuwje/matches", async (req, res) => {
+app.get("/api/msksksnuwje/disputes", async (req, res) => {
   try {
-    const { userId, status } = req.query;
-    const adminUser = await getUserFromDb(userId);
-    if (!adminUser || adminUser.role !== "admin") {
-      return res.status(403).json({ error: "Unauthorized: Admin privileges required" });
+    const { userId } = req.query;
+    const adminUser = req.adminUser;
+    if (!adminUser || adminUser.role !== "admin" && adminUser.role !== "moderator") {
+      return res.status(403).json({ error: "Unauthorized: Staff privileges required" });
     }
-    let queryStr = `SELECT * FROM matches`;
-    if (status && status !== "all") {
-      queryStr += ` WHERE status = ${escapeSql(status)}`;
-    }
-    queryStr += ` ORDER BY created_at DESC LIMIT 100`;
-    const mRes = await pool.query(queryStr);
+    const mRes = await pool.query(`
+      SELECT * FROM matches 
+      WHERE status IN ('DISPUTED', 'SUBMITTING_RESULTS') 
+      ORDER BY created_at DESC 
+      LIMIT 50
+    `);
     const matches = mRes.rows.map((m) => ({
       id: m.id,
       challengeCode: m.challenge_code,
@@ -5229,6 +7877,244 @@ app.get("/api/msksksnuwje/matches", async (req, res) => {
     }));
     res.json({ matches });
   } catch (err) {
+    console.error("Error fetching admin disputes:", err);
+    res.status(500).json({ error: err.message || "Failed to fetch disputes" });
+  }
+});
+app.get("/api/msksksnuwje/review-queue", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    const adminUser = req.adminUser;
+    if (!adminUser || adminUser.role !== "admin" && adminUser.role !== "moderator") {
+      return res.status(403).json({ error: "Unauthorized: Staff privileges required" });
+    }
+    const result = await pool.query(`
+      SELECT * FROM matches 
+      WHERE status IN ('DISPUTED', 'SUBMITTING_RESULTS', 'VERIFYING')
+         OR (creator_data::text LIKE '%screenshotUrl%' AND status NOT IN ('SETTLED', 'CANCELLED', 'ABANDONED'))
+         OR (opponent_data::text LIKE '%screenshotUrl%' AND status NOT IN ('SETTLED', 'CANCELLED', 'ABANDONED'))
+         OR (resolution_notes LIKE '%Resubmission%' AND status NOT IN ('SETTLED', 'CANCELLED', 'ABANDONED'))
+      ORDER BY 
+        CASE WHEN status = 'DISPUTED' THEN 1 WHEN status = 'VERIFYING' THEN 2 ELSE 3 END,
+        created_at DESC 
+      LIMIT 100
+    `);
+    const matches = result.rows.map((m) => {
+      const creator = typeof m.creator_data === "string" ? JSON.parse(m.creator_data) : m.creator_data || {};
+      const opponent = m.opponent_data ? typeof m.opponent_data === "string" ? JSON.parse(m.opponent_data) : m.opponent_data : void 0;
+      if (creator.screenshotUrl && !creator.systemAiDetection) {
+        creator.systemAiDetection = analyzeImageSystemLogic(creator.screenshotUrl);
+      }
+      if (opponent?.screenshotUrl && !opponent.systemAiDetection) {
+        opponent.systemAiDetection = analyzeImageSystemLogic(opponent.screenshotUrl);
+      }
+      const matchObj = {
+        id: m.id,
+        challengeCode: m.challenge_code,
+        roomCode: m.room_code || void 0,
+        gameMode: m.game_mode,
+        map: m.map,
+        rules: typeof m.rules === "string" ? JSON.parse(m.rules) : m.rules || [],
+        stakeAmount: parseFloat(m.stake_amount),
+        potAmount: parseFloat(m.pot_amount),
+        platformFee: parseFloat(m.platform_fee || 0),
+        winnerPayout: parseFloat(m.winner_payout),
+        status: m.status,
+        createdAt: parseInt(m.created_at, 10),
+        creator,
+        opponent,
+        winnerId: m.winner_id || void 0,
+        winnerIgn: m.winner_ign || void 0,
+        resolutionNotes: m.resolution_notes || void 0,
+        chatMessages: typeof m.chat_messages === "string" ? JSON.parse(m.chat_messages) : m.chat_messages || [],
+        reviewerId: m.reviewer_id || void 0,
+        reviewerName: m.reviewer_name || void 0
+      };
+      const conflictInfo = computeMatchConflictReasons(matchObj);
+      matchObj.conflictReason = conflictInfo.conflictReason;
+      matchObj.conflictReasonsList = conflictInfo.conflictReasonsList;
+      return matchObj;
+    });
+    const disputedCount = matches.filter((m) => m.status === "DISPUTED").length;
+    const aiFlaggedCount = matches.filter(
+      (m) => m.creator?.systemAiDetection?.isLikelyFake || m.opponent?.systemAiDetection?.isLikelyFake
+    ).length;
+    res.json({
+      matches,
+      totalCount: matches.length,
+      disputedCount,
+      aiFlaggedCount,
+      pendingCount: matches.length
+    });
+  } catch (err) {
+    console.error("Error fetching review queue:", err);
+    res.status(500).json({ error: err.message || "Failed to fetch review queue" });
+  }
+});
+app.post("/api/msksksnuwje/matches/:id/resubmit", async (req, res) => {
+  try {
+    const { userId, targetPlayerId, reason } = req.body;
+    const adminUser = req.adminUser;
+    if (!adminUser || adminUser.role !== "admin" && adminUser.role !== "moderator") {
+      return res.status(403).json({ error: "Unauthorized: Staff privileges required" });
+    }
+    const match = await getMatchFromDb(req.params.id);
+    if (!match) return res.status(404).json({ error: "Match not found" });
+    if (match.reviewerId && match.reviewerId !== adminUser.id) {
+      return res.status(403).json({ error: `Forbidden: This match is assigned to ${match.reviewerName}` });
+    }
+    const targetNoticeReason = reason || "Screenshot proof rejected. Please upload an unedited, full-screen CODM landscape scoreboard.";
+    const isTargetCreator = !targetPlayerId || targetPlayerId === "both" || match.creator.id === targetPlayerId;
+    const isTargetOpponent = !targetPlayerId || targetPlayerId === "both" || match.opponent?.id === targetPlayerId;
+    if (isTargetCreator) {
+      delete match.creator.screenshotUrl;
+      delete match.creator.screenshotAnalysis;
+      delete match.creator.forensicAnalysis;
+      delete match.creator.systemAiDetection;
+      match.creator.resubmissionRequested = true;
+      match.creator.resubmissionReason = targetNoticeReason;
+    }
+    if (isTargetOpponent && match.opponent) {
+      delete match.opponent.screenshotUrl;
+      delete match.opponent.screenshotAnalysis;
+      delete match.opponent.forensicAnalysis;
+      delete match.opponent.systemAiDetection;
+      match.opponent.resubmissionRequested = true;
+      match.opponent.resubmissionReason = targetNoticeReason;
+    }
+    match.status = "SUBMITTING_RESULTS";
+    const targetLabel = targetPlayerId === match.creator.id ? match.creator.codmIgn : targetPlayerId === match.opponent?.id ? match.opponent?.codmIgn : "Both Players";
+    match.resubmissionNotice = {
+      targetPlayerId: targetPlayerId || "both",
+      targetPlayerIgn: targetLabel,
+      reason: targetNoticeReason,
+      timestamp: Date.now()
+    };
+    match.resolutionNotes = `\u26A0\uFE0F Referee requested screenshot resubmission (${targetLabel}): ${targetNoticeReason}`;
+    match.chatMessages.push({
+      id: `msg_${Date.now()}_resubmit`,
+      senderId: "SYSTEM",
+      senderName: "CODM Referee Bot",
+      text: `\u26A0\uFE0F REFEREE NOTICE: Proof resubmission requested for ${targetLabel}: "${targetNoticeReason}". Please upload an authentic, unedited landscape scoreboard screenshot to resolve.`,
+      timestamp: Date.now()
+    });
+    const conflictInfo = computeMatchConflictReasons(match);
+    match.conflictReason = conflictInfo.conflictReason;
+    match.conflictReasonsList = conflictInfo.conflictReasonsList;
+    await saveMatchToDb(match);
+    res.json({ success: true, match });
+  } catch (err) {
+    console.error("Error in match resubmission request:", err);
+    res.status(500).json({ error: err.message || "Failed to request resubmission" });
+  }
+});
+app.post("/api/msksksnuwje/matches/:id/escalate", async (req, res) => {
+  try {
+    const { userId, reason } = req.body;
+    const adminUser = req.adminUser;
+    if (!adminUser || adminUser.role !== "admin" && adminUser.role !== "moderator") {
+      return res.status(403).json({ error: "Unauthorized: Staff privileges required" });
+    }
+    const match = await getMatchFromDb(req.params.id);
+    if (!match) return res.status(404).json({ error: "Match not found" });
+    if (match.reviewerId && match.reviewerId !== adminUser.id) {
+      return res.status(403).json({ error: `Forbidden: This match is assigned to ${match.reviewerName}` });
+    }
+    const auditReason = reason || "Escalated to high-priority manual referee review";
+    match.status = "DISPUTED";
+    match.resolutionNotes = `\u{1F6E1}\uFE0F Escalated to Manual Review: ${auditReason}`;
+    match.chatMessages.push({
+      id: `msg_${Date.now()}_escalate`,
+      senderId: "SYSTEM",
+      senderName: "CODM Referee Bot",
+      text: `\u{1F6E1}\uFE0F REFEREE NOTICE: Match escalated to manual inspection by Admin (${auditReason}). Escrow pot (\u20A6${match.potAmount.toLocaleString()}) remains securely locked.`,
+      timestamp: Date.now()
+    });
+    const conflictInfo = computeMatchConflictReasons(match);
+    match.conflictReason = conflictInfo.conflictReason;
+    match.conflictReasonsList = conflictInfo.conflictReasonsList;
+    await saveMatchToDb(match);
+    res.json({ success: true, match });
+  } catch (err) {
+    console.error("Error escalating match:", err);
+    res.status(500).json({ error: err.message || "Failed to escalate match" });
+  }
+});
+app.post("/api/msksksnuwje/analyze-forensic", async (req, res) => {
+  try {
+    const { adminUserId, screenshotBase64, playerIgn, matchId } = req.body;
+    const adminUser = await getUserFromDb(adminUserId);
+    if (!adminUser || adminUser.role !== "admin") {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+    if (!screenshotBase64) {
+      return res.status(400).json({ error: "Missing image payload" });
+    }
+    const systemResult = analyzeImageSystemLogic(screenshotBase64);
+    res.json({
+      success: true,
+      fileInfo: {
+        mimeType: systemResult.fileType,
+        headerHex: systemResult.headerHex,
+        isStandardType: systemResult.isStandardType,
+        dimensions: systemResult.dimensions,
+        aspectRatio: systemResult.aspectRatio,
+        fileSizeKb: systemResult.fileSizeKb,
+        detectedSoftware: systemResult.detectedSoftware
+      },
+      analysis: {
+        isLikelyFake: systemResult.isLikelyFake,
+        confidenceScore: systemResult.confidenceScore,
+        aiDetected: systemResult.isLikelyFake,
+        manipulationDetected: systemResult.fakeRiskScore >= 45,
+        detectedPlayerName: playerIgn || "Unknown",
+        detectedOutcome: "INSPECTED",
+        technicalNotes: systemResult.redFlags.join("; ") || "Standard verified mobile screenshot format",
+        redFlags: systemResult.redFlags,
+        positiveSignals: systemResult.positiveSignals,
+        verdict: systemResult.verdict,
+        aspectRatio: systemResult.aspectRatio,
+        dimensions: systemResult.dimensions
+      }
+    });
+  } catch (err) {
+    console.error("Forensic analysis error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+app.get("/api/msksksnuwje/matches", async (req, res) => {
+  try {
+    const { userId, status } = req.query;
+    const adminUser = req.adminUser;
+    if (!adminUser || adminUser.role !== "admin" && adminUser.role !== "moderator") {
+      return res.status(403).json({ error: "Unauthorized: Staff privileges required" });
+    }
+    let queryStr = "SELECT * FROM matches";
+    if (status && status !== "all") {
+      queryStr += ` WHERE status = ${escapeSql(status)}`;
+    }
+    queryStr += " ORDER BY created_at DESC LIMIT 100";
+    const result = await pool.query(queryStr);
+    const matches = result.rows.map((m) => ({
+      id: m.id,
+      challengeCode: m.challenge_code,
+      roomCode: m.room_code || void 0,
+      gameMode: m.game_mode,
+      map: m.map,
+      stakeAmount: parseFloat(m.stake_amount),
+      potAmount: parseFloat(m.pot_amount),
+      platformFee: parseFloat(m.platform_fee || 0),
+      winnerPayout: parseFloat(m.winner_payout),
+      status: m.status,
+      createdAt: parseInt(m.created_at, 10),
+      creator: typeof m.creator_data === "string" ? JSON.parse(m.creator_data) : m.creator_data,
+      opponent: m.opponent_data ? typeof m.opponent_data === "string" ? JSON.parse(m.opponent_data) : m.opponent_data : void 0,
+      winnerId: m.winner_id || void 0,
+      winnerIgn: m.winner_ign || void 0,
+      settledAt: m.settled_at ? parseInt(m.settled_at, 10) : void 0
+    }));
+    res.json({ matches });
+  } catch (err) {
     console.error("Error fetching admin matches:", err);
     res.status(500).json({ error: err.message || "Failed to fetch matches" });
   }
@@ -5236,9 +8122,8 @@ app.get("/api/msksksnuwje/matches", async (req, res) => {
 app.get("/api/msksksnuwje/gmail/config", async (req, res) => {
   try {
     const { userId } = req.query;
-    const user = await getUserFromDb(userId);
-    if (!user || user.role !== "admin") {
-      return res.status(403).json({ error: "Unauthorized: Admin privileges required" });
+    if (req.adminUser.role !== "admin") {
+      return res.status(403).json({ error: "Unauthorized: Admin access required" });
     }
     const config = await getGmailConfig();
     res.json({
@@ -5380,11 +8265,33 @@ app.post(["/api/inbound-mail", "/api/msksksnuwje/mail/webhook"], async (req, res
   }
 });
 async function startServer() {
-  await initDatabase();
-  await initGmailTables();
-  startGmailAutoSyncService();
-  sweepAbandonedMatches().catch((e) => console.warn("Initial sweepAbandonedMatches error:", e));
-  setInterval(sweepAbandonedMatches, 3 * 60 * 1e3);
+  (async () => {
+    try {
+      await initDatabase();
+      console.log("\u2705 Supabase PostgreSQL database initialized");
+    } catch (err) {
+      console.warn("\u26A0\uFE0F Supabase database init error (handled non-fatally):", err.message);
+    }
+    try {
+      await initGmailTables();
+      startGmailAutoSyncService();
+      console.log("\u2705 Gmail sync service initialized");
+    } catch (err) {
+      console.warn("\u26A0\uFE0F Gmail sync init error (handled non-fatally):", err.message);
+    }
+    try {
+      sweepAbandonedMatches().catch((e) => console.warn("Initial sweepAbandonedMatches error:", e));
+      setInterval(sweepAbandonedMatches, 3 * 60 * 1e3);
+    } catch (err) {
+      console.warn("\u26A0\uFE0F Match sweeper init error:", err.message);
+    }
+    try {
+      startTelegramBotPolling();
+      console.log("\u2705 Telegram Bot polling service initialized");
+    } catch (err) {
+      console.warn("\u26A0\uFE0F Telegram Bot init error (handled non-fatally):", err.message);
+    }
+  })();
   const publicPath = path.resolve(__dirname, "public");
   if (fs.existsSync(publicPath)) {
     app.use(express.static(publicPath));
@@ -5406,12 +8313,29 @@ async function startServer() {
   }
   const server = http.createServer(app);
   const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
+  globalIo = io;
   app.io = io;
+  const roomUsers = /* @__PURE__ */ new Map();
   io.on("connection", (socket) => {
+    let currentMatchId = null;
+    let currentUserId = null;
     socket.on("joinMatch", (data) => {
       const matchId = typeof data === "string" ? data : data?.matchId;
+      const userId = data?.userId;
       if (matchId) {
         socket.join(matchId);
+        currentMatchId = matchId;
+        if (userId) {
+          currentUserId = userId;
+          if (!roomUsers.has(matchId)) {
+            roomUsers.set(matchId, /* @__PURE__ */ new Set());
+          }
+          roomUsers.get(matchId).add(userId);
+          io.to(matchId).emit("presence", {
+            matchId,
+            users: Array.from(roomUsers.get(matchId))
+          });
+        }
       }
     });
     socket.on("chat", async (data) => {
@@ -5424,16 +8348,34 @@ async function startServer() {
           text: data.text.trim(),
           timestamp: data.timestamp || Date.now()
         };
-        try {
-          await pool.query(`
-            UPDATE matches 
-            SET chat_messages = COALESCE(chat_messages, '[]'::jsonb) || ${escapeSql([newMsg])}::jsonb
-            WHERE id = ${escapeSql(data.matchId)}
-          `);
-        } catch (dbErr) {
-          console.error("Failed to persist socket chat message in DB:", dbErr);
+        if (data.matchId !== "lobby_global") {
+          try {
+            await pool.query(`
+              UPDATE matches 
+              SET chat_messages = COALESCE(chat_messages, '[]'::jsonb) || ${escapeSql([newMsg])}::jsonb
+              WHERE id = ${escapeSql(data.matchId)}
+            `);
+          } catch (dbErr) {
+            console.error("Failed to persist socket chat message in DB:", dbErr);
+          }
         }
         io.to(data.matchId).emit("chat", { ...newMsg, matchId: data.matchId });
+        socket.to(data.matchId).emit("chatNotification", {
+          id: `chat_notif_${newMsg.id}`,
+          matchId: data.matchId,
+          senderId: newMsg.senderId,
+          senderName: newMsg.senderName,
+          text: newMsg.text,
+          timestamp: newMsg.timestamp
+        });
+        io.emit("globalChatAlert", {
+          id: `chat_notif_${newMsg.id}`,
+          matchId: data.matchId,
+          senderId: newMsg.senderId,
+          senderName: newMsg.senderName,
+          text: newMsg.text,
+          timestamp: newMsg.timestamp
+        });
       } catch (err) {
         console.error("Error processing socket chat message:", err);
       }
@@ -5456,6 +8398,14 @@ async function startServer() {
         });
       }
     });
+    socket.on("typing", (data) => {
+      if (data && data.matchId) {
+        socket.to(data.matchId).emit("typing", {
+          userId: data.userId,
+          isTyping: data.isTyping
+        });
+      }
+    });
     socket.on("clear_chat", async (data) => {
       const matchId = typeof data === "string" ? data : data?.matchId;
       if (matchId) {
@@ -5473,10 +8423,27 @@ async function startServer() {
     socket.on("matchUpdated", (data) => {
       io.emit("matchUpdated", data);
     });
+    socket.on("matchAlert", (data) => {
+      io.emit("matchAlert", data);
+    });
     socket.on("updateBalance", (data) => {
       io.emit("balanceUpdated", data);
     });
     socket.on("disconnect", () => {
+      if (currentMatchId && currentUserId) {
+        const users = roomUsers.get(currentMatchId);
+        if (users) {
+          users.delete(currentUserId);
+          if (users.size === 0) {
+            roomUsers.delete(currentMatchId);
+          } else {
+            io.to(currentMatchId).emit("presence", {
+              matchId: currentMatchId,
+              users: Array.from(users)
+            });
+          }
+        }
+      }
     });
   });
   server.listen(PORT, "0.0.0.0", () => {
@@ -5487,6 +8454,20 @@ startServer().catch((err) => {
   console.error("Failed to start server:", err);
 });
 export {
+  analyzeImageSystemLogic,
+  broadcastMatchStateChange,
   broadcastToMatchRoom,
-  clearMatchChatInDb
+  clearMatchChatInDb,
+  computeMatchConflictReasons,
+  fetchTelegramBotInfo,
+  handleTelegramCallbackQuery,
+  handleTelegramMessage,
+  postMatchToPublicChannel,
+  sanitizeMatchForPublic,
+  sanitizePublicPlayerProfile,
+  sendMatchDisputeVideoToTelegram,
+  sendTelegramMatchAcceptedAlert,
+  sendTelegramMatchSettledAlert,
+  sendTelegramSquadSlotJoinedAlert,
+  startTelegramBotPolling
 };

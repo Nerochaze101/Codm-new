@@ -110,7 +110,7 @@ export const RulesPage: React.FC<RulesPageProps> = ({
 
       {/* 3. New Rule Sections */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Rule 1: Automatic Result Settlement */}
+        {/* Rule 1: Result Verification Protocol */}
         <div className="p-6 rounded-3xl bg-neutral-900 border border-amber-500/40 space-y-4 shadow-xl relative overflow-hidden">
           <img src={CODM_IMAGES.rulesFairPlayBg} className="absolute inset-0 w-full h-full object-cover opacity-10" />
           <div className="relative z-10 flex items-center gap-3">
@@ -119,31 +119,42 @@ export const RulesPage: React.FC<RulesPageProps> = ({
             </div>
             <div>
               <h3 className="text-base sm:text-lg font-heading font-black text-white uppercase">
-                1. Automatic Result Settlement
+                1. Result Verification Protocol
               </h3>
             </div>
           </div>
           <p className="text-xs text-neutral-300 leading-relaxed relative z-10">
-            When a match is finished and a player submits a result, the opponent has <strong>60 minutes</strong> to confirm or dispute. If they fail to do so, the win is automatically awarded to the first claimant.
+            When a match concludes, both players must upload an uncropped end-game scoreboard screenshot or screen recording. Payouts require mutual agreement or automated AI scoreboard validation. Contested results are immediately referred to human referees.
           </p>
         </div>
 
-        {/* Rule 2: Abandoned Match Policy & Penalties */}
-        <div className="p-6 rounded-3xl bg-neutral-900 border border-rose-500/30 space-y-4 shadow-xl relative overflow-hidden">
+        {/* Rule 2: Abandoned & Stalled Matches: No Auto-Settlement & Mutual Agreement Policy */}
+        <div className="p-6 rounded-3xl bg-neutral-900 border border-amber-500/50 space-y-4 shadow-xl relative overflow-hidden">
           <img src={CODM_IMAGES.rulesFairPlayBg} className="absolute inset-0 w-full h-full object-cover opacity-10" />
           <div className="relative z-10 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
-              <AlertTriangle className="w-5 h-5" />
+            <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
+              <ShieldCheck className="w-5 h-5" />
             </div>
             <div>
               <h3 className="text-base sm:text-lg font-heading font-black text-white uppercase">
-                2. Abandoned Match Policy & Penalties
+                2. Abandoned Matches: Strictly No Auto-Settlement
               </h3>
             </div>
           </div>
-          <p className="text-xs text-neutral-300 leading-relaxed relative z-10">
-            Stalled matches are subject to automated settlement. Abandoned matches incur a <strong>10% abandonment penalty</strong> on the stake, in addition to the standard platform fee. Remaining stakes are refunded to both players.
-          </p>
+          <div className="text-xs text-neutral-300 leading-relaxed relative z-10 space-y-2">
+            <p>
+              <strong>Strictly No Automated Settlement:</strong> If the countdown timer expires, an opponent goes AFK, or a match stalls, the system does <strong>NOT</strong> automatically settle the wager or award a default win.
+            </p>
+            <p>
+              <strong>No Unilateral Refunds or Timer Restarts:</strong> Neither player can unilaterally claim a refund or restart the match timer.
+            </p>
+            <p>
+              <strong>Mutual Consent Required:</strong> Both players must agree in the arena to either <strong>(a) Restart the match timer</strong> or <strong>(b) Mutually void the match with a 100% full refund</strong>.
+            </p>
+            <p className="text-neutral-400 text-[11px]">
+              If mutual agreement cannot be reached or an opponent is unresponsive, stakes remain locked safely in escrow. Gladiators may submit match recordings to the <strong>Moderator Review Queue</strong> for manual referee investigation.
+            </p>
+          </div>
         </div>
 
         {/* Rule 3: Weapon Loadouts & Agreement */}

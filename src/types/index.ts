@@ -166,6 +166,19 @@ export interface Match {
   opponentScreenshot?: string;
   reviewerId?: string;
   reviewerName?: string;
+  mutualActionState?: MutualActionState;
+  firstClaimSubmittedAt?: number;
+  firstClaimBy?: string;
+  firstClaimByName?: string;
+  firstClaimType?: 'VICTORY' | 'DEFEAT' | 'DRAW';
+  claimConfirmationDeadline?: number;
+}
+
+export interface MutualActionState {
+  action: 'RESTART_TIMER' | 'MUTUAL_REFUND';
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: number;
 }
 
 

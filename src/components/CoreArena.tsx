@@ -11,7 +11,6 @@ import { CODM_IMAGES } from '../assets/images';
 import { SkeletonLoader } from './SkeletonLoader';
 import { StakePaymentModal } from './StakePaymentModal';
 import { MatchLobbyChat } from './MatchLobbyChat';
-import { calculateAbandonedMatchRefund } from '../utils/feeCalculator';
 import { requestNotificationPermission, getNotificationPermission, isIOS, isStandalone } from '../services/notificationService';
 import { IOSNotificationGuideModal } from './IOSNotificationGuideModal';
 import { playShotgunSound } from '../hooks/useSound';
@@ -708,7 +707,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                      {myActiveMatch.roomGeneratedAt && (
                        <div className="flex items-center justify-between p-3 rounded-xl bg-black border border-neutral-800">
                          <div className="flex items-center gap-2 text-neutral-400 text-[10px] font-bold uppercase tracking-wider"><Clock size={14} className="text-amber-400" /><span>Match Timer:</span><span className={`font-mono text-xs ${isExpired ? 'text-rose-500' : 'text-amber-400'}`}>{timeLeft}</span></div>
-                         <button onClick={() => { setAbandonError(null); setShowAbandonModal(true); }} className="text-neutral-500 text-[9px] hover:text-white uppercase font-bold underline cursor-pointer">Settle Abandoned</button>
+                         <span className="text-neutral-500 text-[9px] uppercase font-bold tracking-wider">{isExpired ? 'Timer Exceeded (No Auto-Settle)' : 'Active Battle'}</span>
                        </div>
                      )}
                      {myActiveMatch.roomCode && (
@@ -958,17 +957,6 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
       )}
 
       {/* 6. Modals */}
-      {showAbandonModal && myActiveMatch && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-in fade-in">
-          <div className="relative w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-3xl p-6 space-y-6 shadow-2xl">
-            <div className="flex justify-between items-center border-b border-neutral-800 pb-3"><div className="flex items-center gap-2"><AlertTriangle className="text-amber-400" /><span className="text-sm font-black uppercase text-white">Settle Abandoned</span></div><button onClick={() => setShowAbandonModal(false)}><X size={20} className="text-neutral-500" /></button></div>
-            {(() => {
-              const calc = calculateAbandonedMatchRefund(myActiveMatch.stakeAmount, myActiveMatch.platformFeePercentage);
-              return (<div className="space-y-5"><p className="text-xs text-neutral-400">Settle immediately if opponent is AFK. Refunded stake minus 10% penalty.</p><div className="p-4 rounded-xl bg-black space-y-2 text-[11px] font-mono"><div className="flex justify-between text-neutral-500"><span>Stake:</span><span>₦{calc.stakeAmount.toLocaleString()}</span></div><div className="flex justify-between text-rose-500"><span>Penalty:</span><span>-₦{calc.penaltyFee.toLocaleString()}</span></div><div className="pt-2 border-t border-neutral-800 flex justify-between text-emerald-400 font-bold text-xs"><span>Refund:</span><span>₦{calc.refundPerPlayer.toLocaleString()}</span></div></div>{abandonError && <div className="p-3 bg-rose-500/10 text-rose-400 text-[10px] rounded-lg border border-rose-500/20">{abandonError}</div>}<div className="flex gap-3 pt-2"><button onClick={() => setShowAbandonModal(false)} className="flex-1 py-3 bg-neutral-800 text-white font-bold rounded-xl text-xs uppercase">Wait</button><button disabled={isAbandoning} onClick={async () => { setIsAbandoning(true); try { await onAbandonMatch?.(myActiveMatch.id); setShowAbandonModal(false); } catch(err:any){ setAbandonError(err.message); } finally { setIsAbandoning(false); } }} className="flex-1 py-3 bg-amber-400 text-neutral-950 font-black rounded-xl text-xs uppercase shadow-xl">{isAbandoning ? 'Settle...' : 'Confirm Settle'}</button></div></div>);
-            })()}
-          </div>
-        </div>
-      )}
 
       <StakePaymentModal isOpen={isStakeModalOpen} match={stakeTargetMatch} currentUser={currentUser} role={stakeRole} onClose={() => { setIsStakeModalOpen(false); setStakeTargetMatch(null); }} onConfirmStake={handleConfirmStake} />
       <IOSNotificationGuideModal isOpen={showIOSGuideModal} onClose={() => setShowIOSGuideModal(false)} />
