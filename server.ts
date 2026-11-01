@@ -1102,6 +1102,20 @@ app.post('/api/msksksnuwje/flagged-accounts/:userId/ban', async (req, res) => {
   }
 });
 
+app.post('/api/msksksnuwje/flagged-accounts/:userId/unban', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    await pool.query(`
+      UPDATE users 
+      SET role = 'user', is_flagged = false, flag_reason = NULL 
+      WHERE id = ${escapeSql(userId)}
+    `);
+    res.json({ success: true, message: 'Account unbanned successfully' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to unban account' });
+  }
+});
+
 // REST API ROUTES
 app.post('/api/msksksnuwje/withdraw', async (req, res) => {
   if (req.adminUser!.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
@@ -1681,9 +1695,8 @@ app.post('/api/msksksnuwje/assign-role', async (req, res) => {
     const { adminUserId, targetUserId, identifier, role = 'admin' } = req.body;
     const adminUser = req.adminUser!;
     
-    const isOwner = adminUser.email.toLowerCase() === OWNER_EMAIL.toLowerCase() || adminUser.email.toLowerCase() === 'b@gmail.com';
-    if (!isOwner) {
-      return res.status(403).json({ error: 'Unauthorized: Only the Main Admin (Owner) can assign roles' });
+    if (adminUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin role required' });
     }
 
     if (role !== 'admin' && role !== 'user' && role !== 'moderator') {
@@ -1784,17 +1797,20 @@ app.post('/api/msksksnuwje/claim-admin', async (req, res) => {
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     const isOwnerEmail = user.email.toLowerCase() === OWNER_EMAIL.toLowerCase() || user.email.toLowerCase() === 'b@gmail.com';
-    const isPasscode = passcode === 'admin123' || passcode === 'OPAY_ADMIN_2025' || passcode === 'codmadmin' || passcode === (process.env.ADMIN_PASSCODE || 'OPS_ARENA_ROOT_2026');
+    const cleanPass = (passcode || '').trim();
+    const isAdminPasscode = cleanPass === 'admin123' || cleanPass === 'OPAY_ADMIN_2025' || cleanPass === 'codmadmin' || cleanPass === (process.env.ADMIN_PASSCODE || 'OPS_ARENA_ROOT_2026');
+    const isModPasscode = cleanPass === 'mod123' || cleanPass === 'moderator123' || cleanPass === 'codmmod';
 
-    if (!isOwnerEmail && !isPasscode) {
-      return res.status(403).json({ error: 'Invalid admin authorization credentials' });
+    if (!isOwnerEmail && !isAdminPasscode && !isModPasscode) {
+      return res.status(403).json({ error: 'Invalid terminal authorization passcode. For moderator access, use mod123 or ask an admin.' });
     }
 
-    await pool.query(`UPDATE users SET role = 'admin' WHERE id = ${escapeSql(userId)}`);
+    const assignedRole = (isModPasscode && !isAdminPasscode && !isOwnerEmail) ? 'moderator' : 'admin';
+    await pool.query(`UPDATE users SET role = ${escapeSql(assignedRole)} WHERE id = ${escapeSql(userId)}`);
     const refreshed = await getUserFromDb(userId);
     res.json({
       success: true,
-      message: `Admin access granted to ${refreshed?.codmIgn || refreshed?.email}`,
+      message: `${assignedRole === 'moderator' ? 'Moderator' : 'Admin'} access granted to ${refreshed?.codmIgn || refreshed?.email}`,
       user: refreshed,
     });
   } catch (err: any) {

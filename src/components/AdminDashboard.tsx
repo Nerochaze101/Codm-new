@@ -69,6 +69,7 @@ import {
   fetchFlaggedAccounts,
   dismissAccountFlag,
   banDuplicateAccount,
+  unbanAccount,
   claimMatchReview,
   GmailIntegrationStatus,
   AdminEmailItem,
@@ -205,6 +206,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
   const [assignIdentifier, setAssignIdentifier] = useState('');
   const [assignRoleType, setAssignRoleType] = useState<'admin' | 'moderator' | 'user'>('admin');
   const [assignMsg, setAssignMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [grantModal, setGrantModal] = useState({
+    isOpen: false,
+    identifier: "",
+    role: "admin" as "admin" | "moderator" | "user",
+    submitting: false,
+    message: null as string | null,
+    error: null as string | null,
+  });
   const [isAssigning, setIsAssigning] = useState(false);
 
   // Gmail & Mailbox State
@@ -384,7 +393,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
 
   const reloadAll = async () => {
     setRefreshing(true);
-    await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings(), loadFlaggedAccounts()]);
+    if (currentUser.role === 'moderator') {
+      await Promise.all([loadDisputes(), loadReviewQueue()]);
+    } else {
+      await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings(), loadFlaggedAccounts()]);
+    }
     if (onRefreshUser) onRefreshUser();
     setRefreshing(false);
   };
@@ -392,7 +405,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
   useEffect(() => {
     const init = async () => {
       setLoading(true);
-      if (currentUser.role === 'admin') {
+      if (currentUser.role === 'moderator') {
+        await Promise.all([loadDisputes(), loadReviewQueue()]);
+      } else if (currentUser.role === 'admin' || currentUser.role === 'super_admin') {
         await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings(), loadFlaggedAccounts()]);
       }
       setLoading(false);
@@ -676,7 +691,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     }
   };
 
-  if (currentUser.role !== 'admin') {
+  if (currentUser.role !== 'admin' && currentUser.role !== 'super_admin' && currentUser.role !== 'moderator') {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] p-8 bg-neutral-900 border border-neutral-800 rounded-[2rem] text-white space-y-8 max-w-2xl mx-auto shadow-2xl animate-in zoom-in-95 duration-500">
         <div className="w-24 h-24 rounded-[2rem] bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-500 shadow-[0_0_50px_rgba(239,68,68,0.1)]">
@@ -684,12 +699,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
         </div>
         <div className="text-center space-y-2">
           <h2 className="text-4xl font-black uppercase tracking-tighter text-white">Sector Restricted</h2>
-          <p className="text-neutral-500 max-w-xs mx-auto leading-relaxed">Authorization required. Only Level-4 Administrative Gladiators can access the Command Center.</p>
+          <p className="text-neutral-500 max-w-xs mx-auto leading-relaxed">Authorization required. Enter the Admin or Moderator Terminal Passcode to access your Command Center.</p>
         </div>
         <form onSubmit={async (e) => { e.preventDefault(); try { await claimAdminRole(currentUser.id, adminPasscode.trim()); window.location.reload(); } catch(err:any) { setClaimMsg(err.message); } }} className="w-full space-y-4">
           <div className="space-y-1.5">
             <label className="text-[10px] font-black text-neutral-500 uppercase tracking-widest ml-4">Terminal Passcode</label>
             <input type="password" value={adminPasscode} onChange={e => setAdminPasscode(e.target.value)} placeholder="••••••••" className="w-full bg-black border border-neutral-800 rounded-2xl px-6 py-5 text-center font-mono tracking-[1em] focus:border-amber-400 focus:outline-none transition-all placeholder:tracking-normal placeholder:font-sans" />
+            <p className="text-[10px] text-neutral-500 text-center pt-1 font-mono">Accepts Administrator or Moderator passcodes</p>
           </div>
           {claimMsg && <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-500 text-[10px] font-black uppercase tracking-widest text-center rounded-xl">{claimMsg}</div>}
           <button type="submit" className="w-full bg-amber-400 text-black font-black py-5 rounded-2xl uppercase tracking-[0.2em] hover:bg-amber-300 transition-all active:scale-[0.98] shadow-lg shadow-amber-400/20">Authorize Terminal</button>
@@ -712,10 +728,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
       <aside className="w-full lg:w-72 flex flex-col gap-4">
         <div className="p-6 bg-neutral-900 border border-neutral-800 rounded-[2.5rem] space-y-8 shadow-2xl sticky top-24">
           <div className="flex items-center gap-4 border-b border-neutral-800/50 pb-8">
-            <div className="w-14 h-14 rounded-2xl bg-amber-400 flex items-center justify-center text-black font-black text-2xl shadow-xl shadow-amber-400/20">A</div>
+            <div className="w-14 h-14 rounded-2xl bg-amber-400 flex items-center justify-center text-black font-black text-2xl shadow-xl shadow-amber-400/20">
+              {currentUser.role === 'moderator' ? 'M' : 'A'}
+            </div>
             <div>
               <h1 className="font-black text-white uppercase tracking-tighter text-2xl leading-none">HQ COMMAND</h1>
-              <p className="text-[10px] text-amber-400 font-bold uppercase tracking-[0.2em] mt-1.5 opacity-80">Admin Sector</p>
+              <p className="text-[10px] text-amber-400 font-bold uppercase tracking-[0.2em] mt-1.5 opacity-80">
+                {currentUser.role === 'moderator' ? 'Moderator Sector' : 'Admin Sector'}
+              </p>
             </div>
           </div>
 
@@ -766,46 +786,112 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
       {/* MAIN CONTENT AREA */}
       <main className="flex-1 space-y-8 animate-in fade-in slide-in-from-bottom-6 duration-700">
         
+        {/* Telegram Group Banner for Screen Records & Disputes */}
+        <div className="bg-gradient-to-r from-cyan-950/80 via-neutral-900 to-cyan-950/80 border border-cyan-500/30 p-6 rounded-[2rem] shadow-xl flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0">
+              <Send size={24} />
+            </div>
+            <div>
+              <h3 className="text-base font-black text-white uppercase tracking-tight">Admin & Moderator Telegram Group</h3>
+              <p className="text-xs text-neutral-300 pt-0.5">
+                Join the official Telegram group for instant screen record reviews, room code conflict checks, and dispute coordination.
+              </p>
+            </div>
+          </div>
+          <a
+            href="https://t.me/+I5vcFF4RXwJkMWVk"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-6 py-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-black text-xs uppercase tracking-wider flex items-center gap-2 transition-all shrink-0 shadow-lg shadow-cyan-500/20"
+          >
+            <span>Join Telegram Group</span>
+            <ExternalLink size={16} />
+          </a>
+        </div>
+
         {/* HEADER SUMMARY CARDS */}
-        <header className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-neutral-900 border border-neutral-800 p-8 rounded-[2.5rem] shadow-2xl relative overflow-hidden group">
-            <div className="absolute -top-4 -right-4 p-4 opacity-[0.03] group-hover:opacity-[0.07] transition-all group-hover:scale-110 duration-700"><Wallet size={160} /></div>
-            <p className="text-[10px] font-black text-neutral-500 uppercase tracking-[0.3em] mb-1">Fee Treasury</p>
-            <h2 className="text-4xl font-black text-emerald-400 font-mono tracking-tighter">₦{availableFees.toLocaleString()}</h2>
-            <div className="flex items-center gap-2 mt-4">
-              <div className="px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-[10px] text-emerald-400 font-black uppercase tracking-widest flex items-center gap-1.5">
-                <TrendingUp size={12} />
-                <span>+10% Rake</span>
+        {currentUser.role === 'moderator' ? (
+          <header className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="bg-neutral-900 border border-neutral-800 p-8 rounded-[2.5rem] shadow-2xl relative overflow-hidden group">
+              <div className="absolute -top-4 -right-4 p-4 opacity-[0.03] group-hover:opacity-[0.07] transition-all group-hover:scale-110 duration-700"><AlertTriangle size={160} /></div>
+              <p className="text-[10px] font-black text-neutral-500 uppercase tracking-[0.3em] mb-1">Moderation Queue</p>
+              <h2 className="text-4xl font-black text-amber-400 font-mono tracking-tighter">{reviewQueueMatches.length}</h2>
+              <div className="flex items-center gap-2 mt-4">
+                <div className="px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[10px] text-amber-400 font-black uppercase tracking-widest flex items-center gap-1.5">
+                  <Clock size={12} />
+                  <span>Pending Audits</span>
+                </div>
+                <span className="text-[10px] text-neutral-500 font-bold">1-Admin Lock</span>
               </div>
-              <span className="text-[10px] text-neutral-500 font-bold">Automated</span>
             </div>
-          </div>
 
-          <div className="bg-neutral-900 border border-neutral-800 p-8 rounded-[2.5rem] shadow-2xl relative overflow-hidden group">
-            <div className="absolute -top-4 -right-4 p-4 opacity-[0.03] group-hover:opacity-[0.07] transition-all group-hover:scale-110 duration-700"><Users size={160} /></div>
-            <p className="text-[10px] font-black text-neutral-500 uppercase tracking-[0.3em] mb-1">Active Population</p>
-            <h2 className="text-4xl font-black text-white font-mono tracking-tighter">{usersList.length}</h2>
-            <div className="flex items-center gap-2 mt-4">
-              <div className="px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20 text-[10px] text-blue-400 font-black uppercase tracking-widest flex items-center gap-1.5">
-                <Shield size={12} />
-                <span>{usersList.filter(u => u.role === 'admin').length} Authorized</span>
+            <div className="bg-neutral-900 border border-neutral-800 p-8 rounded-[2.5rem] shadow-2xl relative overflow-hidden group">
+              <div className="absolute -top-4 -right-4 p-4 opacity-[0.03] group-hover:opacity-[0.07] transition-all group-hover:scale-110 duration-700"><ShieldCheck size={160} /></div>
+              <p className="text-[10px] font-black text-neutral-500 uppercase tracking-[0.3em] mb-1">Active Disputes</p>
+              <h2 className="text-4xl font-black text-white font-mono tracking-tighter">{disputesList.length}</h2>
+              <div className="flex items-center gap-2 mt-4">
+                <div className="px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20 text-[10px] text-blue-400 font-black uppercase tracking-widest flex items-center gap-1.5">
+                  <Shield size={12} />
+                  <span>Forensic Proofs</span>
+                </div>
+                <span className="text-[10px] text-neutral-500 font-bold">Screen Records</span>
               </div>
-              <span className="text-[10px] text-neutral-500 font-bold">Total Gladiators</span>
             </div>
-          </div>
 
-          <div className="bg-neutral-900 border border-neutral-800 p-8 rounded-[2.5rem] shadow-2xl relative overflow-hidden group">
-            <div className="absolute -top-4 -right-4 p-4 opacity-[0.03] group-hover:opacity-[0.07] transition-all group-hover:scale-110 duration-700"><Mail size={160} /></div>
-            <p className="text-[10px] font-black text-neutral-500 uppercase tracking-[0.3em] mb-1">Engine Status</p>
-            <h2 className={`text-4xl font-black font-mono tracking-tighter ${gmailStatus?.configured ? 'text-amber-400' : 'text-neutral-600'}`}>{gmailStatus?.configured ? 'ACTIVE' : 'OFFLINE'}</h2>
-            <div className="flex items-center gap-2 mt-4">
-              <div className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 ${gmailStatus?.configured ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border border-rose-500/20 text-rose-400'}`}>
-                {gmailStatus?.configured ? <CheckCircle2 size={12} /> : <AlertCircle size={12} />}
-                <span>{gmailStatus?.configured ? 'IMAP SSL Stable' : 'Action Req.'}</span>
+            <div className="bg-neutral-900 border border-neutral-800 p-8 rounded-[2.5rem] shadow-2xl relative overflow-hidden group">
+              <div className="absolute -top-4 -right-4 p-4 opacity-[0.03] group-hover:opacity-[0.07] transition-all group-hover:scale-110 duration-700"><Send size={160} /></div>
+              <p className="text-[10px] font-black text-neutral-500 uppercase tracking-[0.3em] mb-1">Telegram Review</p>
+              <h2 className="text-4xl font-black font-mono tracking-tighter text-cyan-400">ACTIVE</h2>
+              <div className="flex items-center gap-2 mt-4">
+                <div className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">
+                  <CheckCircle2 size={12} />
+                  <span>Evidence Channel</span>
+                </div>
               </div>
             </div>
-          </div>
-        </header>
+          </header>
+        ) : (
+          <header className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="bg-neutral-900 border border-neutral-800 p-8 rounded-[2.5rem] shadow-2xl relative overflow-hidden group">
+              <div className="absolute -top-4 -right-4 p-4 opacity-[0.03] group-hover:opacity-[0.07] transition-all group-hover:scale-110 duration-700"><Wallet size={160} /></div>
+              <p className="text-[10px] font-black text-neutral-500 uppercase tracking-[0.3em] mb-1">Fee Treasury</p>
+              <h2 className="text-4xl font-black text-emerald-400 font-mono tracking-tighter">₦{availableFees.toLocaleString()}</h2>
+              <div className="flex items-center gap-2 mt-4">
+                <div className="px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-[10px] text-emerald-400 font-black uppercase tracking-widest flex items-center gap-1.5">
+                  <TrendingUp size={12} />
+                  <span>+10% Rake</span>
+                </div>
+                <span className="text-[10px] text-neutral-500 font-bold">Automated</span>
+              </div>
+            </div>
+
+            <div className="bg-neutral-900 border border-neutral-800 p-8 rounded-[2.5rem] shadow-2xl relative overflow-hidden group">
+              <div className="absolute -top-4 -right-4 p-4 opacity-[0.03] group-hover:opacity-[0.07] transition-all group-hover:scale-110 duration-700"><Users size={160} /></div>
+              <p className="text-[10px] font-black text-neutral-500 uppercase tracking-[0.3em] mb-1">Active Population</p>
+              <h2 className="text-4xl font-black text-white font-mono tracking-tighter">{usersList.length}</h2>
+              <div className="flex items-center gap-2 mt-4">
+                <div className="px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20 text-[10px] text-blue-400 font-black uppercase tracking-widest flex items-center gap-1.5">
+                  <Shield size={12} />
+                  <span>{usersList.filter(u => u.role === 'admin').length} Authorized</span>
+                </div>
+                <span className="text-[10px] text-neutral-500 font-bold">Total Gladiators</span>
+              </div>
+            </div>
+
+            <div className="bg-neutral-900 border border-neutral-800 p-8 rounded-[2.5rem] shadow-2xl relative overflow-hidden group">
+              <div className="absolute -top-4 -right-4 p-4 opacity-[0.03] group-hover:opacity-[0.07] transition-all group-hover:scale-110 duration-700"><Mail size={160} /></div>
+              <p className="text-[10px] font-black text-neutral-500 uppercase tracking-[0.3em] mb-1">Engine Status</p>
+              <h2 className={`text-4xl font-black font-mono tracking-tighter ${gmailStatus?.configured ? 'text-amber-400' : 'text-neutral-600'}`}>{gmailStatus?.configured ? 'ACTIVE' : 'OFFLINE'}</h2>
+              <div className="flex items-center gap-2 mt-4">
+                <div className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 ${gmailStatus?.configured ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border border-rose-500/20 text-rose-400'}`}>
+                  {gmailStatus?.configured ? <CheckCircle2 size={12} /> : <AlertCircle size={12} />}
+                  <span>{gmailStatus?.configured ? 'IMAP SSL Stable' : 'Action Req.'}</span>
+                </div>
+              </div>
+            </div>
+          </header>
+        )}
 
         {/* TAB CONTENT: MULTI-ACCOUNT DETECTION */}
         {activeTab === 'multi_accounts' && (
@@ -898,21 +984,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                       >
                         Dismiss Flag
                       </button>
-                      <button
-                        onClick={async () => {
-                          if (confirm(`Are you sure you want to ban duplicate account ${account.codmIgn}?`)) {
-                            try {
-                              await banDuplicateAccount(currentUser.id, account.id);
-                              loadFlaggedAccounts();
-                            } catch (e: any) {
-                              alert(e.message || 'Failed to ban account');
+                      {(account as any).role === 'banned' ? (
+                        <button
+                          onClick={async () => {
+                            if (confirm(`Are you sure you want to unban account ${account.codmIgn}?`)) {
+                              try {
+                                await unbanAccount(currentUser.id, account.id);
+                                loadFlaggedAccounts();
+                              } catch (e: any) {
+                                alert(e.message || 'Failed to unban account');
+                              }
                             }
-                          }
-                        }}
-                        className="px-5 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-rose-600/30 transition-all"
-                      >
-                        Ban Account
-                      </button>
+                          }}
+                          className="px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-emerald-600/30 transition-all"
+                        >
+                          Unban Account
+                        </button>
+                      ) : (
+                        <button
+                          onClick={async () => {
+                            if (confirm(`Are you sure you want to ban duplicate account ${account.codmIgn}?`)) {
+                              try {
+                                await banDuplicateAccount(currentUser.id, account.id);
+                                loadFlaggedAccounts();
+                              } catch (e: any) {
+                                alert(e.message || 'Failed to ban account');
+                              }
+                            }
+                          }}
+                          className="px-5 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-rose-600/30 transition-all"
+                        >
+                          Ban Account
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1327,7 +1431,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                         ) : match.reviewerId === currentUser.id ? (
                           <div className="flex flex-wrap items-center gap-3">
                             {/* 1. Approve Payout (Full Admin Only) */}
-                            {currentUser.role === 'admin' && (
+                                                            
+{currentUser.role === 'admin' && (
                               <button
                                 type="button"
                                 onClick={() => setPayoutModal({
@@ -1729,6 +1834,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
         {/* TAB CONTENT: USERS */}
         {activeTab === 'users' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-500">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 px-2">
+                <div>
+                  <h3 className="text-xl font-black text-white uppercase tracking-tight">Gladiator Roster & Permissions</h3>
+                  <p className="text-xs text-neutral-500 mt-1">Manage operator clearance levels and role assignments.</p>
+                </div>
+                <button
+                  onClick={() => setGrantModal({ isOpen: true, identifier: "", role: "admin", submitting: false, message: null, error: null })}
+                  className="px-8 py-4 bg-amber-400 hover:bg-amber-300 text-black font-black rounded-2xl text-[11px] uppercase tracking-widest shadow-xl shadow-amber-400/10 flex items-center gap-3 transition-all active:scale-95 shrink-0"
+                >
+                  <ShieldCheck size={18} />
+                  Grant Admin Privileges
+                </button>
+              </div>
              <section className="bg-neutral-900 border border-neutral-800 rounded-[2.5rem] p-10 shadow-2xl relative overflow-hidden">
                <div className="flex flex-col md:flex-row gap-6 items-center relative z-10">
                  <div className="relative flex-1 w-full group">
@@ -1794,7 +1912,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                                >
                                  <Coins size={18} />
                                </button>
-                               {currentUser.email?.toLowerCase() === 'onelly103@gmail.com' && (
+                               {currentUser.role === 'admin' && (
                                  <button 
                                   onClick={async () => { 
                                     const roles: ('user' | 'moderator' | 'admin')[] = ['user', 'moderator', 'admin'];
@@ -2699,6 +2817,106 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
            </div>
         </div>
       )}
+
+      {grantModal.isOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/90 backdrop-blur-xl animate-in fade-in duration-300">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-[3rem] w-full max-w-lg p-10 shadow-[0_0_100px_rgba(0,0,0,0.8)] animate-in zoom-in-95 duration-300 space-y-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-amber-400/10 border border-amber-400/20 flex items-center justify-center text-amber-400">
+                  <ShieldCheck size={24} />
+                </div>
+                <div>
+                  <h3 className="text-xl font-black text-white uppercase tracking-tight">Grant Privileges</h3>
+                  <p className="text-xs text-neutral-500 mt-0.5">Elevate user clearance level</p>
+                </div>
+              </div>
+              <button onClick={() => setGrantModal({ ...grantModal, isOpen: false })} className="p-3 bg-neutral-800 rounded-2xl text-neutral-400 hover:text-white transition-all"><X size={18} /></button>
+            </div>
+
+            {grantModal.error && (
+              <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-rose-400 text-xs font-bold flex items-center gap-3">
+                <AlertCircle size={16} className="shrink-0" />
+                {grantModal.error}
+              </div>
+            )}
+
+            {grantModal.message && (
+              <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl text-emerald-400 text-xs font-bold flex items-center gap-3">
+                <CheckCircle2 size={16} className="shrink-0" />
+                {grantModal.message}
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-[0.2em] text-neutral-400 mb-2">User Email, IGN or ID</label>
+                <input
+                  type="text"
+                  value={grantModal.identifier}
+                  onChange={e => setGrantModal({ ...grantModal, identifier: e.target.value })}
+                  placeholder="e.g. user@gmail.com or CODM_Gamer"
+                  className="w-full bg-black border border-neutral-800 rounded-2xl px-6 py-4 text-sm font-bold text-white focus:border-amber-400 focus:outline-none focus:ring-4 focus:ring-amber-400/5 placeholder:text-neutral-700"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-[0.2em] text-neutral-400 mb-2">Select Permission Level</label>
+                <div className="grid grid-cols-3 gap-3">
+                  {(["user", "moderator", "admin"] as const).map(r => (
+                    <button
+                      key={r}
+                      type="button"
+                      onClick={() => setGrantModal({ ...grantModal, role: r })}
+                      className={`py-4 rounded-2xl text-xs font-black uppercase tracking-widest border transition-all ${
+                        grantModal.role === r
+                          ? r === "admin" ? "bg-rose-500/20 border-rose-500/50 text-rose-400 shadow-lg shadow-rose-500/10" : r === "moderator" ? "bg-amber-500/20 border-amber-500/50 text-amber-400 shadow-lg shadow-amber-500/10" : "bg-blue-500/20 border-blue-500/50 text-blue-400"
+                          : "bg-black border-neutral-800 text-neutral-500 hover:text-white"
+                      }`}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-4 pt-4 border-t border-neutral-800">
+              <button
+                type="button"
+                onClick={() => setGrantModal({ ...grantModal, isOpen: false })}
+                className="flex-1 px-6 py-4 bg-neutral-800 hover:bg-neutral-700 text-white font-black rounded-2xl text-[11px] uppercase tracking-widest transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={grantModal.submitting || !grantModal.identifier.trim()}
+                onClick={async () => {
+                  try {
+                    setGrantModal(prev => ({ ...prev, submitting: true, error: null, message: null }));
+                    const res = await assignUserRole(currentUser.id, { identifier: grantModal.identifier.trim(), role: grantModal.role });
+                    setGrantModal(prev => ({
+                      ...prev,
+                      submitting: false,
+                      message: `Successfully granted ${grantModal.role.toUpperCase()} role to ${res?.user?.codmIgn || grantModal.identifier}!`,
+                      identifier: "",
+                    }));
+                    if (typeof loadUsers === "function") loadUsers();
+                  } catch (err: any) {
+                    setGrantModal(prev => ({ ...prev, submitting: false, error: err.message || "Failed to assign role" }));
+                  }
+                }}
+                className="flex-1 px-6 py-4 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-black font-black rounded-2xl text-[11px] uppercase tracking-widest transition-all shadow-xl shadow-amber-400/10 flex items-center justify-center gap-2"
+              >
+                {grantModal.submitting ? <Loader2 size={16} className="animate-spin" /> : <ShieldCheck size={16} />}
+                Confirm Grant
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+

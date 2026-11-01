@@ -107,7 +107,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     },
   ];
 
-  if (currentUser.role === 'admin' || currentUser.role === 'super_admin') {
+  if (currentUser.role === 'admin' || currentUser.role === 'super_admin' || currentUser.role === 'moderator') {
     navTabs.push({
       id: 'admin',
       label: 'Admin Portal',

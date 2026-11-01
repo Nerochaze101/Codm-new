@@ -870,7 +870,7 @@ function MainApp() {
           <Route
             path="/msksksnuwje"
             element={
-              currentUser.role === 'admin' ? (
+              currentUser.role === 'admin' || currentUser.role === 'super_admin' || currentUser.role === 'moderator' ? (
                 <AdminDashboard
                   currentUser={currentUser}
                   onRefreshUser={async () => {

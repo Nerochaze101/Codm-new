@@ -876,6 +876,15 @@ export async function banDuplicateAccount(adminUserId: string, targetUserId: str
   return await parseResponse(res);
 }
 
+export async function unbanAccount(adminUserId: string, targetUserId: string) {
+  const res = await fetch(`/api/msksksnuwje/flagged-accounts/${targetUserId}/unban`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
+    body: JSON.stringify({ adminUserId }),
+  });
+  return await parseResponse(res);
+}
+
 
 
 
