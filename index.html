@@ -3,29 +3,61 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>OPS STAKE 1v1 - Mobile Shooter Esports Escrow</title>
-    <meta name="description" content="Escrow-backed 1v1 Tactical Mobile Shooter wagering platform in Nigerian Naira (₦). Create stakes, invite rivals, track custom room matches, and automatically verify victory screenshots with AI for instant payouts." />
-    <meta property="og:title" content="OPS STAKE 1v1 - Mobile Shooter Esports Escrow" />
-    <meta property="og:description" content="Escrow-backed 1v1 Tactical Mobile Shooter wagering platform in Nigerian Naira (₦). Create stakes, invite rivals, track custom room matches, and automatically verify victory screenshots with AI for instant payouts." />
+    <title>OpsSTAKE – Tactical Mobile Shooter Esports Escrow Arena</title>
+    <meta name="description" content="Secure 1v1 tactical mobile shooter wagering platform with automated escrow and AI result verification. Stake, battle, and win rewards in the official OpsSTAKE arena." />
+    
+    <!-- OpenGraph / Facebook -->
     <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://opsstake.online/" />
+    <meta property="og:title" content="OpsSTAKE – Tactical Mobile Shooter Esports Escrow Arena" />
+    <meta property="og:description" content="Secure 1v1 tactical mobile shooter wagering platform with automated escrow and AI result verification. Stake, battle, and win rewards in the official OpsSTAKE arena." />
+    <meta property="og:image" content="https://opsstake.online/logo.png" />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:url" content="https://opsstake.online/" />
+    <meta name="twitter:title" content="OpsSTAKE – Tactical Mobile Shooter Esports Escrow Arena" />
+    <meta name="twitter:description" content="Secure 1v1 tactical mobile shooter wagering platform with automated escrow and AI result verification. Stake, battle, and win rewards in the official OpsSTAKE arena." />
+    <meta name="twitter:image" content="https://opsstake.online/logo.png" />
+
+    <!-- Meta Tags for Search & Mobile -->
+    <meta name="robots" content="index, follow" />
     <meta name="theme-color" content="#09090b" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="OPS Stake" />
-    <link rel="icon" type="image/jpeg" href="/assets/aistudio/IMG_2853_9c73529e.jpeg" />
-    <link rel="apple-touch-icon" href="/assets/aistudio/IMG_2853_9c73529e.jpeg" />
+    <meta name="apple-mobile-web-app-title" content="OpsSTAKE" />
+
+    <!-- Icons -->
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="apple-touch-icon" href="/logo.png" />
     <link rel="manifest" href="/manifest.json" />
-    <!-- Splash screens for iOS performance -->
-    <link rel="apple-touch-startup-image" href="/assets/aistudio/IMG_2853_9c73529e.jpeg" />
+
+    <!-- Schema.org Structured Data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "OpsSTAKE",
+      "url": "https://opsstake.online/",
+      "logo": "https://opsstake.online/logo.png",
+      "description": "Secure 1v1 tactical mobile shooter wagering platform with automated escrow and AI result verification.",
+      "applicationCategory": "GamingApplication",
+      "operatingSystem": "All",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "NGN"
+      }
+    }
+    </script>
+
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,500;0,600;0,700;1,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-    <!-- Google Identity Services for embedded Google Sign-In widget -->
+    
     <script src="https://accounts.google.com/gsi/client" async defer></script>
-    <!-- Paystack Inline Payment Gateway SDK -->
     <script src="https://js.paystack.co/v1/inline.js"></script>
-    <!-- Flutterwave v3 Inline Payment Gateway SDK -->
     <script src="https://checkout.flutterwave.com/v3.js"></script>
   </head>
   <body class="bg-neutral-950 text-neutral-100 min-h-screen selection:bg-amber-500 selection:text-black touch-manipulation" style="touch-action: manipulation;">

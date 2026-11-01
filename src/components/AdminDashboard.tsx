@@ -1094,7 +1094,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                                 })}
                                 className="relative aspect-video bg-black rounded-xl overflow-hidden border border-neutral-800 group/img cursor-pointer hover:border-amber-400/50 transition-all"
                               >
-                                <img src={match.creator.screenshotUrl} alt="Host proof" className="w-full h-full object-contain" />
+                                {match.creator.screenshotUrl.startsWith('data:video/') ? (
+                                  <video src={match.creator.screenshotUrl} className="w-full h-full object-contain" />
+                                ) : (
+                                  <img src={match.creator.screenshotUrl} alt="Host proof" className="w-full h-full object-contain" />
+                                )}
                                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center gap-1.5 text-white text-xs font-bold">
                                   <ZoomIn size={16} />
                                   <span>Inspect Full-Res</span>
@@ -1107,7 +1111,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                               <div className="aspect-video bg-neutral-950 rounded-xl border border-dashed border-neutral-800 flex flex-col items-center justify-center text-neutral-600 gap-1.5 text-xs">
                                 <Camera size={20} className="opacity-40" />
                                 <span className="text-[10px] font-mono uppercase">
-                                  {match.creator.resubmissionRequested ? 'Resubmission Awaited' : 'No Screenshot Uploaded'}
+                                  {match.creator.resubmissionRequested ? 'Resubmission Awaited' : 'No Proof Uploaded'}
                                 </span>
                               </div>
                             )}
@@ -1199,7 +1203,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                                 })}
                                 className="relative aspect-video bg-black rounded-xl overflow-hidden border border-neutral-800 group/img cursor-pointer hover:border-amber-400/50 transition-all"
                               >
-                                <img src={match.opponent.screenshotUrl} alt="Rival proof" className="w-full h-full object-contain" />
+                                {match.opponent.screenshotUrl.startsWith('data:video/') ? (
+                                  <video src={match.opponent.screenshotUrl} className="w-full h-full object-contain" />
+                                ) : (
+                                  <img src={match.opponent.screenshotUrl} alt="Rival proof" className="w-full h-full object-contain" />
+                                )}
                                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center gap-1.5 text-white text-xs font-bold">
                                   <ZoomIn size={16} />
                                   <span>Inspect Full-Res</span>
@@ -1212,7 +1220,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                               <div className="aspect-video bg-neutral-950 rounded-xl border border-dashed border-neutral-800 flex flex-col items-center justify-center text-neutral-600 gap-1.5 text-xs">
                                 <Camera size={20} className="opacity-40" />
                                 <span className="text-[10px] font-mono uppercase">
-                                  {match.opponent?.resubmissionRequested ? 'Resubmission Awaited' : 'No Screenshot Uploaded'}
+                                  {match.opponent?.resubmissionRequested ? 'Resubmission Awaited' : 'No Proof Uploaded'}
                                 </span>
                               </div>
                             )}
@@ -2546,11 +2554,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
             </div>
 
             <div className="flex-1 overflow-auto bg-black p-4 flex items-center justify-center">
-              <img
-                src={lightboxData.url}
-                alt={`${lightboxData.playerIgn} proof`}
-                className="max-w-full max-h-[70vh] object-contain rounded-lg border border-neutral-800 shadow-2xl"
-              />
+              {lightboxData.url.startsWith('data:video/') ? (
+                <video 
+                  src={lightboxData.url} 
+                  className="max-w-full max-h-[70vh] rounded-lg border border-neutral-800 shadow-2xl" 
+                  controls 
+                  autoPlay
+                />
+              ) : (
+                <img
+                  src={lightboxData.url}
+                  alt={`${lightboxData.playerIgn} proof`}
+                  className="max-w-full max-h-[70vh] object-contain rounded-lg border border-neutral-800 shadow-2xl"
+                />
+              )}
             </div>
 
             {lightboxData.systemAi && (

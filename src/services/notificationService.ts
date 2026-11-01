@@ -208,7 +208,7 @@ export async function showBrowserNotification(payload: NotificationPayload): Pro
     return false;
   }
 
-  const notificationOptions: NotificationOptions = {
+  const notificationOptions: any = {
     body: payload.body,
     icon: payload.icon || NOTIFICATION_ICON,
     badge: payload.badge || NOTIFICATION_ICON,

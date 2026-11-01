@@ -23,8 +23,8 @@ export const Logo: React.FC<LogoProps> = ({ className = '', size = 40, glow = tr
       {/* Official OPS STAKE Uploaded Logo Image */}
       <div className="relative z-10 w-full h-full overflow-hidden rounded-2xl border border-amber-500/40 bg-neutral-950 shadow-xl flex items-center justify-center">
         <img 
-          src="/assets/aistudio/IMG_2853_9c73529e.jpeg" 
-          alt="OPS STAKE" 
+          src="/logo.png" 
+          alt="OpsSTAKE" 
           className="w-full h-full object-cover"
         />
       </div>

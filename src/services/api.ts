@@ -47,6 +47,7 @@ export async function signUpUser(data: {
   accountNumber?: string;
   accountName?: string;
   initialDeposit?: number;
+  verificationCode?: string;
   referralCode?: string;
 }): Promise<UserProfile> {
   const res = await fetch('/api/auth/register', {
@@ -67,6 +68,24 @@ export async function signInUser(data: {
     body: JSON.stringify(data),
   });
   return await parseResponse<UserProfile>(res);
+}
+
+export async function requestVerification(email: string, type: 'REGISTER' | 'RESET_PASSWORD'): Promise<{ success: boolean; message: string }> {
+  const res = await fetch('/api/auth/request-verification', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, type }),
+  });
+  return await parseResponse(res);
+}
+
+export async function resetPassword(data: { email: string; code: string; newPassword?: string }): Promise<{ success: boolean; message: string }> {
+  const res = await fetch('/api/auth/reset-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return await parseResponse(res);
 }
 
 export async function createUser(data: Partial<UserProfile> & { initialDeposit?: number }): Promise<UserProfile> {

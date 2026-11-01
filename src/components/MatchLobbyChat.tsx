@@ -84,6 +84,8 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   const [opponentPresence, setOpponentPresence] = useState<boolean>(false);
   const [isOpponentTyping, setIsOpponentTyping] = useState<boolean>(false);
   const [isTtsEnabled, setIsTtsEnabled] = useState<boolean>(true);
+  const [micLevel, setMicLevel] = useState<number>(0);
+  const [opponentSpeaking, setOpponentSpeaking] = useState<boolean>(false);
 
   const socketRef = useRef<Socket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);

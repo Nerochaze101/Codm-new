@@ -721,8 +721,16 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
 
                      {myActiveMatch.status === 'DISPUTED' ? (
                        <div className="p-5 rounded-2xl bg-rose-950/40 border-2 border-rose-500/60 space-y-4 animate-in zoom-in-95">
-                         <div className="flex gap-3"><div className="w-10 h-10 rounded-xl bg-rose-500/20 flex items-center justify-center shrink-0"><AlertTriangle className="text-rose-400" /></div><div><div className="text-sm font-black text-white uppercase">Dispute Detected!</div><p className="text-[11px] text-neutral-400">Conflicting scores. Upload scoreboard screenshot to resolve.</p></div></div>
-                         <div className="space-y-3"><input type="file" accept="image/*" className="w-full text-xs text-neutral-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:bg-rose-500 file:text-white" onChange={e => { const f = e.target.files?.[0]; if(f){ const r=new FileReader(); r.onload=()=>setScreenshotPreview(r.result as string); r.readAsDataURL(f); } }} />{screenshotPreview && <div className="h-40 rounded-xl overflow-hidden border border-rose-500/50 bg-black"><img src={screenshotPreview} className="w-full h-full object-contain" alt="" /></div>}<button onClick={() => handleResultSubmit(myActiveMatch.id)} disabled={isSubmitting || !screenshotPreview} className="w-full py-3 bg-rose-500 text-white font-black rounded-xl text-xs uppercase shadow-xl">{isSubmitting ? 'Verifying...' : 'Submit Proof & Resolve'}</button></div>
+                         <div className="flex gap-3"><div className="w-10 h-10 rounded-xl bg-rose-500/20 flex items-center justify-center shrink-0"><AlertTriangle className="text-rose-400" /></div><div><div className="text-sm font-black text-white uppercase">Dispute Detected!</div><p className="text-[11px] text-neutral-400">Conflicting scores. Upload a <b>screen recording</b> of your history and game result to resolve.</p></div></div>
+                         <div className="space-y-3"><input type="file" accept="video/*" className="w-full text-xs text-neutral-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:bg-rose-500 file:text-white" onChange={e => { const f = e.target.files?.[0]; if(f){ const r=new FileReader(); r.onload=()=>setScreenshotPreview(r.result as string); r.readAsDataURL(f); } }} />{screenshotPreview && (
+                              <div className="h-40 rounded-xl overflow-hidden border border-rose-500/50 bg-black">
+                                {screenshotPreview.startsWith('data:video/') ? (
+                                  <video src={screenshotPreview} className="w-full h-full object-contain" controls />
+                                ) : (
+                                  <img src={screenshotPreview} className="w-full h-full object-contain" alt="Proof preview" />
+                                )}
+                              </div>
+                            )}<button onClick={() => handleResultSubmit(myActiveMatch.id)} disabled={isSubmitting || !screenshotPreview} className="w-full py-3 bg-rose-500 text-white font-black rounded-xl text-xs uppercase shadow-xl">{isSubmitting ? 'Uploading Proof...' : 'Submit Video Proof & Resolve'}</button></div>
                        </div>
                      ) : (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) ? (
                        <div className="p-6 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-4 animate-in fade-in">
@@ -770,7 +778,18 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                          </div>
                        </div>
                      ) : (
-                       <div className="p-5 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-4">
+                        <div className="p-5 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-4">
+                          {(myActiveMatch.conflictRetries ?? 0) > 0 && (
+                            <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-400 flex flex-col gap-1.5 animate-pulse">
+                              <div className="flex items-center gap-2">
+                                <AlertTriangle className="w-4 h-4 shrink-0" />
+                                <strong className="uppercase">Result Conflict detected!</strong>
+                              </div>
+                              <p className="text-[10px] text-neutral-400">
+                                Both players submitted different results. You have <strong>{3 - (myActiveMatch.conflictRetries ?? 0)} retries remaining</strong> before mandatory screenshot review. Please confirm the correct outcome.
+                              </p>
+                            </div>
+                          )}
                          {(isCreatorOfActive ? myActiveMatch.opponent?.resultClaim : myActiveMatch.creator.resultClaim) && (
                            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-center gap-2.5 animate-in fade-in">
                              <Sparkles className="w-4 h-4 text-amber-400 shrink-0 animate-pulse" />

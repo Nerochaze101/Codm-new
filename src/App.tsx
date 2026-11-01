@@ -622,6 +622,7 @@ function MainApp() {
     accountNumber: string;
     accountName: string;
     initialDeposit: number;
+    verificationCode: string;
     referralCode?: string;
   }) => {
     const user = await signUpUser(data);

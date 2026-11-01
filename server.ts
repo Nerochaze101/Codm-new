@@ -40,7 +40,8 @@ const requestRateLimits = new Map<string, { count: number; resetTime: number }>(
 
 function rateLimitMiddleware(maxRequests: number = 15, windowMs: number = 60000) {
   return (req: any, res: any, next: any) => {
-    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    // Priority: Cloudflare real IP -> X-Forwarded-For -> Standard Remote IP
+    const ip = req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip || 'unknown';
     const key = `${ip}_${req.path}`;
     const now = Date.now();
 
@@ -51,6 +52,7 @@ function rateLimitMiddleware(maxRequests: number = 15, windowMs: number = 60000)
     } else {
       record.count++;
       if (record.count > maxRequests) {
+        console.warn(`[Rate Limit] Blocked IP: ${ip} for path: ${req.path}`);
         return res.status(429).json({ error: 'Rate limit exceeded: Too many requests. Automated bot protection active.' });
       }
     }
@@ -103,6 +105,47 @@ if (process.env.GEMINI_API_KEY) {
       },
     },
   });
+}
+
+/**
+ * Tactical Email Service exclusively using Resend API
+ */
+async function sendEmail(to: string, subject: string, html: string) {
+  try {
+    const resendKey = process.env.RESEND_API_KEY;
+    const senderEmail = process.env.SENDER_EMAIL || 'noreply@opsstake.online';
+
+    if (!resendKey) {
+      console.warn('[Email Service] RESEND_API_KEY not configured. Outbound email blocked.');
+      return false;
+    }
+
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${resendKey}`,
+      },
+      body: JSON.stringify({
+        from: `OpsSTAKE Arena <${senderEmail}>`,
+        to: [to],
+        subject,
+        html,
+      }),
+    });
+    
+    const data: any = await res.json();
+    if (res.ok) {
+      console.log(`[Email Service] Message sent via Resend: ${data.id} to ${to}`);
+      return true;
+    } else {
+      console.error(`[Email Service] Resend API error:`, data);
+      return false;
+    }
+  } catch (err) {
+    console.error('[Email Service] Critical error sending email:', err);
+    return false;
+  }
 }
 
 const app = express();
@@ -1023,7 +1066,7 @@ app.post('/api/msksksnuwje/flagged-accounts/:userId/ban', async (req, res) => {
     const { userId } = req.params;
     await pool.query(`
       UPDATE users 
-      SET role = 'banned', balance = 0, is_flagged = true, flag_reason = 'Account banned for multi-accounting violation'
+      SET role = 'banned', is_flagged = true, flag_reason = 'Account banned for multi-accounting violation'
       WHERE id = ${escapeSql(userId)}
     `);
     res.json({ success: true, message: 'Account banned successfully' });
@@ -3747,9 +3790,12 @@ app.get('/api/users/:id', async (req, res) => {
 
 // Register user with Email, Password, CODM IGN and Permanent Banking Details
 app.post('/api/auth/register', async (req, res) => {
-  const { email, password, codmIgn, codmUid, phone, bankName, accountNumber, accountName, initialDeposit = 0, referralCode } = req.body;
+  const { email, password, codmIgn, codmUid, phone, bankName, accountNumber, accountName, initialDeposit = 0, referralCode, verificationCode } = req.body;
   if (!email || !email.trim()) {
     return res.status(400).json({ error: 'Valid email address is required' });
+  }
+  if (!verificationCode) {
+    return res.status(400).json({ error: 'Verification code is required' });
   }
   if (!password || password.length < 4) {
     return res.status(400).json({ error: 'Password must be at least 4 characters' });
@@ -3764,6 +3810,25 @@ app.post('/api/auth/register', async (req, res) => {
     return res.status(400).json({ error: 'Banking details (Bank Name and Account Number) are required for deposits and withdrawals' });
   }
 
+  // Verify code
+  const cleanEmail = email.trim().toLowerCase();
+  try {
+    const codeRes = await pool.query(`SELECT * FROM verification_codes WHERE LOWER(email) = LOWER($1) AND type = 'REGISTER'`, [cleanEmail]);
+    if (codeRes.rows.length === 0) {
+      return res.status(400).json({ error: 'Please request a verification code first' });
+    }
+    const verification = codeRes.rows[0];
+    if (verification.code !== String(verificationCode)) {
+      return res.status(400).json({ error: 'Invalid verification code' });
+    }
+    if (Date.now() > parseInt(verification.expires_at, 10)) {
+      return res.status(400).json({ error: 'Verification code has expired. Please request a new one.' });
+    }
+  } catch (err: any) {
+    console.error('Registration verification error:', err);
+    return res.status(500).json({ error: 'Internal server error verifying code' });
+  }
+
   // Validate referral code if provided
   let referredBy: string | undefined;
   if (referralCode) {
@@ -3775,7 +3840,6 @@ app.post('/api/auth/register', async (req, res) => {
   }
 
   // Strict Multi-Accounting Prevention Check (Email, Phone, CODM IGN, and Bank Account Number)
-  const cleanEmail = email.trim().toLowerCase();
   const cleanPhone = phone.trim().replace(/\D/g, '');
   const cleanIgn = codmIgn.trim().toLowerCase();
   const cleanAccNum = accountNumber.trim().replace(/\D/g, '');
@@ -3856,10 +3920,174 @@ app.post('/api/auth/register', async (req, res) => {
     if (newUser.transactions.length > 0) {
       await saveTransactionToDb(newUser.id, newUser.transactions[0]);
     }
+
+    // Send Welcome Email
+    sendEmail(
+      newUser.email,
+      '⚔️ Welcome to the OpsSTAKE Arena!',
+      `
+      <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: auto; padding: 30px; border: 1px solid #222; background: #0a0a0a; color: #eee; border-radius: 12px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+          <h1 style="color: #facc15; margin: 0; font-size: 28px; letter-spacing: 2px;">OpsSTAKE</h1>
+          <p style="color: #666; font-size: 10px; margin: 5px 0 0 0; text-transform: uppercase;">ESPORTS ESCROW ARENA</p>
+        </div>
+        
+        <div style="background: #111; padding: 25px; border-radius: 8px; border: 1px solid #333; margin-bottom: 25px;">
+          <h2 style="color: #fff; text-align: center; margin-top: 0; font-size: 18px; text-transform: uppercase;">WELCOME TO THE ARENA, ${newUser.codmIgn.toUpperCase()}!</h2>
+          <p style="font-size: 14px; color: #ccc; line-height: 1.6;">Your gladiator profile is now active on <strong>OpsSTAKE</strong>. Prepare for battle and claim your rewards.</p>
+          
+          <div style="background: #000; padding: 15px; border-radius: 4px; border-left: 4px solid #facc15; margin: 20px 0;">
+            <p style="margin: 5px 0; font-size: 13px;"><strong>Gamer Tag:</strong> ${newUser.codmIgn}</p>
+            <p style="margin: 5px 0; font-size: 13px;"><strong>Referral Code:</strong> ${newUser.referralCode}</p>
+          </div>
+        </div>
+
+        <div style="text-align: center; margin: 35px 0;">
+          <a href="https://opsstake.online/" style="background: #facc15; color: #000; padding: 16px 32px; text-decoration: none; font-weight: 900; border-radius: 6px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">ENTER THE ARENA</a>
+        </div>
+        
+        <div style="text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1px solid #222;">
+          <p style="font-size: 12px; color: #888;">Follow the rules, stake wisely, and may your aim be true.</p>
+          <a href="https://opsstake.online/" style="color: #facc15; text-decoration: none; font-size: 11px; font-weight: bold;">WWW.OPSSTAKE.ONLINE</a>
+          <p style="font-size: 10px; color: #555; margin-top: 15px;">&copy; 2026 OpsSTAKE Esports Escrow Arena. All rights reserved.</p>
+        </div>
+      </div>
+      `
+    ).catch(console.error);
+
     res.status(201).json(newUser);
   } catch (err: any) {
     console.error('Registration database error:', err);
     res.status(500).json({ error: 'Failed to create user account in database' });
+  }
+});
+
+/**
+ * Endpoint to request a 6-digit verification code for registration or password reset
+ */
+app.post('/api/auth/request-verification', async (req, res) => {
+  const { email, type } = req.body; // type: 'REGISTER' | 'RESET_PASSWORD'
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({ error: 'Valid email address is required' });
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  
+  // If reset password, ensure user exists
+  if (type === 'RESET_PASSWORD') {
+    const userRes = await pool.query(`SELECT id FROM users WHERE LOWER(email) = LOWER($1)`, [cleanEmail]);
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ error: 'No account found with this email address' });
+    }
+  }
+
+  // Generate 6-digit code
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = Date.now() + (15 * 60 * 1000); // 15 minutes expiration
+
+  try {
+    // Save code to database
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS verification_codes (
+        email VARCHAR(255) PRIMARY KEY,
+        code VARCHAR(10) NOT NULL,
+        expires_at BIGINT NOT NULL,
+        type VARCHAR(50) NOT NULL
+      )
+    `);
+
+    await pool.query(`
+      INSERT INTO verification_codes (email, code, expires_at, type)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (email) DO UPDATE SET
+        code = EXCLUDED.code,
+        expires_at = EXCLUDED.expires_at,
+        type = EXCLUDED.type
+    `, [cleanEmail, code, expiresAt, type]);
+
+    const subject = type === 'RESET_PASSWORD' ? '🔑 Password Reset Code - OpsSTAKE' : '🛡️ Verification Code - OpsSTAKE';
+    const actionText = type === 'RESET_PASSWORD' ? 'reset your password' : 'create your account';
+
+    const sent = await sendEmail(
+      cleanEmail,
+      subject,
+      `
+      <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: auto; padding: 30px; border: 1px solid #222; background: #0a0a0a; color: #eee; border-radius: 12px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+          <h1 style="color: #facc15; margin: 0; font-size: 28px; letter-spacing: 2px;">OpsSTAKE</h1>
+          <p style="color: #666; font-size: 10px; margin: 5px 0 0 0; text-transform: uppercase;">ESPORTS ESCROW ARENA</p>
+        </div>
+        
+        <div style="background: #111; padding: 25px; border-radius: 8px; border: 1px solid #333;">
+          <h2 style="color: #fff; text-align: center; margin-top: 0; font-size: 18px;">VERIFICATION REQUIRED</h2>
+          <p style="text-align: center; font-size: 14px; color: #ccc;">You requested a code to <strong>${actionText}</strong> on the OpsSTAKE arena.</p>
+          
+          <div style="background: #000; padding: 25px; text-align: center; font-size: 36px; font-weight: 900; letter-spacing: 12px; color: #facc15; border: 2px dashed #facc15; margin: 25px 0; border-radius: 4px;">
+            ${code}
+          </div>
+          
+          <p style="text-align: center; color: #888; font-size: 12px;">This tactical code will expire in <strong>15 minutes</strong>.</p>
+        </div>
+        
+        <p style="margin-top: 30px; font-size: 13px; line-height: 1.6; color: #aaa;">
+          If you did not request this verification, your account security may be compromised. Please ignore this email or contact support if you suspect unauthorized activity.
+        </p>
+        
+        <div style="text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1px solid #222;">
+          <a href="https://opsstake.online/" style="color: #facc15; text-decoration: none; font-size: 11px; font-weight: bold;">WWW.OPSSTAKE.ONLINE</a>
+          <p style="font-size: 10px; color: #555; margin-top: 15px;">&copy; 2026 OpsSTAKE Esports Escrow Arena. All rights reserved.</p>
+        </div>
+      </div>
+      `
+    );
+
+    if (sent) {
+      res.json({ success: true, message: 'Verification code sent to your email.' });
+    } else {
+      res.status(500).json({ error: 'Failed to send verification email. Please try again later.' });
+    }
+  } catch (err: any) {
+    console.error('Verification code error:', err);
+    res.status(500).json({ error: 'Internal server error processing verification request' });
+  }
+});
+
+/**
+ * Endpoint to reset password using verification code
+ */
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { email, code, newPassword } = req.body;
+  if (!email || !code || !newPassword) {
+    return res.status(400).json({ error: 'Email, code, and new password are required' });
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+
+  try {
+    const codeRes = await pool.query(`SELECT * FROM verification_codes WHERE LOWER(email) = LOWER($1) AND type = 'RESET_PASSWORD'`, [cleanEmail]);
+    if (codeRes.rows.length === 0) {
+      return res.status(400).json({ error: 'No reset request found for this email' });
+    }
+
+    const verification = codeRes.rows[0];
+    if (verification.code !== String(code)) {
+      return res.status(400).json({ error: 'Invalid verification code' });
+    }
+
+    if (Date.now() > parseInt(verification.expires_at, 10)) {
+      return res.status(400).json({ error: 'Verification code has expired' });
+    }
+
+    // Update password
+    await pool.query(`UPDATE users SET password_hash = $1 WHERE LOWER(email) = LOWER($2)`, [newPassword, cleanEmail]);
+
+    // Delete used code
+    await pool.query(`DELETE FROM verification_codes WHERE email = $1`, [cleanEmail]);
+
+    res.json({ success: true, message: 'Password has been reset successfully.' });
+  } catch (err: any) {
+    console.error('Reset password error:', err);
+    res.status(500).json({ error: 'Failed to reset password' });
   }
 });
 
@@ -4498,6 +4726,73 @@ app.post('/api/users/:id/clean-history', async (req, res) => {
 // TELEGRAM BOT CONFIGURATION
 const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_PUBLIC_CHANNEL_ID = (process.env.TELEGRAM_PUBLIC_CHANNEL_ID || '').trim();
+const TELEGRAM_REVIEW_GROUP_ID = (process.env.TELEGRAM_REVIEW_GROUP_ID || '').trim();
+
+/**
+ * Sends a video recording file to the Telegram Review Group for manual referee inspection.
+ */
+export async function sendMatchDisputeVideoToTelegram(match: Match, playerIgn: string, videoBase64: string) {
+  try {
+    if (!TELEGRAM_BOT_TOKEN) {
+      console.warn('[Telegram Bot] Cannot send dispute video: TELEGRAM_BOT_TOKEN not configured.');
+      return;
+    }
+
+    const targetGroupId = TELEGRAM_REVIEW_GROUP_ID || TELEGRAM_PUBLIC_CHANNEL_ID;
+    if (!targetGroupId) {
+      console.warn('[Telegram Bot] Cannot send dispute video: TELEGRAM_REVIEW_GROUP_ID not configured.');
+      return;
+    }
+
+    console.log(`[Telegram Bot] Preparing to upload dispute video for Match #${match.challengeCode} (${playerIgn}) to Group ${targetGroupId}...`);
+
+    const messageText = 
+      `🚨 <b>MATCH DISPUTE VIDEO SUBMITTED</b> 🚨\n\n` +
+      `👤 <b>Gladiator:</b> ${playerIgn}\n` +
+      `🏷️ <b>Match Code:</b> #${match.challengeCode}\n` +
+      `🎮 <b>Mode:</b> ${match.gameMode}\n` +
+      `🗺️ <b>Map:</b> ${match.map}\n` +
+      `💰 <b>Pot Amount:</b> <b>₦${match.potAmount.toLocaleString()}</b>\n\n` +
+      `📹 <i>This player has uploaded a screen recording of their history and game result for manual referee review.</i>`;
+
+    // Extract raw base64 data
+    const matches = videoBase64.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.*)$/);
+    if (!matches || matches.length < 3) {
+      console.error('[Telegram Bot] Invalid video data format');
+      return;
+    }
+    
+    const mimeType = matches[1];
+    const base64Content = matches[2];
+    const buffer = Buffer.from(base64Content, 'base64');
+
+    // Create FormData for file upload
+    const formData = new FormData();
+    formData.append('chat_id', targetGroupId);
+    formData.append('caption', messageText);
+    formData.append('parse_mode', 'HTML');
+    
+    // Convert Buffer to Blob/File for fetch
+    const blob = new Blob([buffer], { type: mimeType });
+    const extension = mimeType.split('/')[1] || 'mp4';
+    formData.append('video', blob, `dispute_${match.challengeCode}_${playerIgn.replace(/\s+/g, '_')}.${extension}`);
+
+    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    const data: any = await res.json();
+    if (!data.ok) {
+      console.error(`❌ [Telegram Bot] Video upload FAILED: ${data.description}`);
+    } else {
+      console.log(`✅ [Telegram Bot] Dispute video for Match #${match.challengeCode} posted successfully to review group.`);
+    }
+  } catch (err: any) {
+    console.error('❌ [Telegram Bot] Critical exception during video upload:', err.message);
+  }
+}
+
 
 /**
  * Dispatches a real-time wager alert to the configured public Telegram channel.
@@ -5012,7 +5307,12 @@ export async function handleTelegramMessage(message: any) {
   const telegramUsername = from.username || '';
   const senderName = from.first_name ? `${from.first_name} ${from.last_name || ''}`.trim() : (telegramUsername || 'Gladiator');
 
-  console.log(`[Telegram Bot] Inbound msg from ${chatId} (@${telegramUsername || 'anon'}): "${text}"`);
+  const logPrefix = (message.chat.type === 'group' || message.chat.type === 'supergroup') 
+    ? `[Telegram Bot] 👥 Group "${message.chat.title || 'Untitled'}" (ID: ${chatId})` 
+    : `[Telegram Bot] 👤 Private User (${chatId})`;
+  
+  console.log(`${logPrefix} @${telegramUsername || 'anon'}: "${text || '[Media/Other]'}"`);
+
 
   // Handle /start with deep link parameter: /start link_<userId> or /start <userId>
   if (text.startsWith('/start')) {
@@ -6332,7 +6632,7 @@ export function analyzeImageSystemLogic(base64Data: string, filename?: string) {
       isLikelyFake: true,
       confidenceScore: 0.90,
       fakeRiskScore: 90,
-      verdict: 'NO IMAGE DATA PROVIDED',
+      verdict: 'NO DATA PROVIDED',
       dimensions: null,
       aspectRatio: 'Unknown',
       fileType: 'unknown',
@@ -6340,10 +6640,32 @@ export function analyzeImageSystemLogic(base64Data: string, filename?: string) {
       headerHex: 'NONE',
       isStandardType: false,
       detectedSoftware: null,
-      redFlags: ['No valid image payload received'],
+      redFlags: ['No valid payload received'],
       positiveSignals: []
     };
   }
+
+  // Handle Video Recordings for Dispute Resolution
+  if (base64Data.startsWith('data:video/')) {
+    const rawLen = base64Data.length - base64Data.indexOf(',') - 1;
+    const sizeKb = Math.round((rawLen * 0.75) / 1024);
+    return {
+      isLikelyFake: false,
+      confidenceScore: 1.0,
+      fakeRiskScore: 0,
+      verdict: 'VIDEO RECORDING SUBMITTED',
+      dimensions: null,
+      aspectRatio: 'Video',
+      fileType: 'video',
+      fileSizeKb: sizeKb,
+      headerHex: 'VIDEO',
+      isStandardType: true,
+      detectedSoftware: null,
+      redFlags: [],
+      positiveSignals: ['Video format detected for review']
+    };
+  }
+
 
   const cleanBase64 = base64Data.replace(/^data:image\/[a-z0-9.+-]+;base64,/, '');
   let buf: Buffer;
@@ -6706,29 +7028,43 @@ app.post('/api/matches/:id/submit-result', rateLimitMiddleware(15, 60000), secur
   let resolveWinner: 'creator' | 'opponent' | 'draw' | 'dispute' | null = null;
 
   if (isDisputeMode) {
-    // Already in conflict mode: screenshot proof is evaluated
+    // Already in conflict mode: Video or Screenshot proof is evaluated
     if (screenshotBase64) {
+      const isVideo = screenshotBase64.startsWith('data:video/');
+      const proofType = isVideo ? 'screen recording' : 'scoreboard screenshot';
+      const proofEmoji = isVideo ? '📹' : '📸';
+
       match.chatMessages.push({
         id: `msg_${Date.now()}`,
         senderId: 'SYSTEM',
         senderName: 'CODM Referee Bot',
-        text: `📸 ${playerIgn} submitted dispute scoreboard screenshot. Manual review required by admin.`,
+        text: `${proofEmoji} ${playerIgn} submitted dispute ${proofType}. Manual review required by admin.`,
         timestamp: Date.now(),
       });
 
-      // DISBALE AUTO-RESOLUTION: Once screenshots are involved in a dispute, ONLY admin can resolve.
+      // If it's a video, automatically dispatch to Telegram Review Group for instant admin visibility
+      if (isVideo) {
+        setImmediate(() => {
+          sendMatchDisputeVideoToTelegram(match, playerIgn, screenshotBase64).catch(err => 
+            console.error('[Telegram Bot] Background video upload error:', err.message)
+          );
+        });
+      }
+
+      // DISBALE AUTO-RESOLUTION: Once proof is involved in a dispute, ONLY admin can resolve.
       resolveWinner = null; 
       match.status = 'DISPUTED';
-      match.resolutionNotes = `Awaiting referee review of screenshots submitted by ${playerIgn}. Pot ₦${match.potAmount.toLocaleString()} remains locked.`;
+      match.resolutionNotes = `Awaiting referee review of ${proofType} submitted by ${playerIgn}. Pot ₦${match.potAmount.toLocaleString()} remains locked.`;
     } else {
       match.chatMessages.push({
         id: `msg_${Date.now()}`,
         senderId: 'SYSTEM',
         senderName: 'CODM Referee Bot',
-        text: `⚠️ Match is in dispute. Please upload your post-game scoreboard screenshot to resolve.`,
+        text: `⚠️ Match is in dispute. Please upload your screen recording of history and result to resolve.`,
         timestamp: Date.now(),
       });
     }
+
   } else {
     // FAST 3-BUTTON MATCH OUTCOME (No screenshot required!)
     const claimLabel = claim === 'VICTORY' ? 'I Won 🏆' : claim === 'DEFEAT' ? 'I Lost ❌' : 'Draw ⚖️';
@@ -6956,6 +7292,7 @@ app.post('/api/matches/:id/submit-result', rateLimitMiddleware(15, 60000), secur
 
     if (match.conflictRetries < 3) {
       match.status = 'SUBMITTING_RESULTS';
+      // Reset claims for retry
       delete match.creator.resultClaim;
       delete match.creator.screenshotUrl;
       delete match.creator.screenshotAnalysis;
@@ -6975,17 +7312,20 @@ app.post('/api/matches/:id/submit-result', rateLimitMiddleware(15, 60000), secur
         timestamp: Date.now(),
       });
     } else {
+      // 3 retries exhausted -> Force DISPUTED status for manual screenshot review
       match.status = 'DISPUTED';
-      match.resolutionNotes = `🚨 Maximum 3 conflict retries reached. Match has been escalated to Admin Review Queue for manual referee inspection and winnings screenshot review.`;
+      match.resolutionNotes = `🚨 Maximum 3 conflict retries reached. Match escalated to Admin Review Queue for manual video recording inspection.`;
       match.chatMessages.push({
         id: `msg_${Date.now()}_dispute_final`,
         senderId: 'SYSTEM',
         senderName: 'CODM Referee Bot',
-        text: `🚨 MAXIMUM 3 CONFLICT RETRIES REACHED: Match escalated to Admin Review Queue. Both players must submit post-game winnings screenshots for manual review. Pending admin verdict.`,
+        text: `🚨 MAXIMUM 3 CONFLICT RETRIES REACHED: Match escalated to Admin Review. Both players MUST upload a <b>screen recording</b> of their history and game result now for manual referee verification.`,
         timestamp: Date.now(),
       });
     }
+
   } else {
+    // If one player submitted but match not yet resolved
     match.status = 'SUBMITTING_RESULTS';
     const waitingForIgn = isCreator ? (match.opponent?.codmIgn || 'Rival') : match.creator.codmIgn;
     const submittedLabel = claim === 'VICTORY' ? 'I Won 🏆' : claim === 'DEFEAT' ? 'I Lost ❌' : 'Draw ⚖️';

@@ -2,10 +2,12 @@ import React, { useState } from 'react';
 import { UserProfile } from '../types';
 import {
   Swords, ShieldCheck, Mail, Lock, Eye, EyeOff, Crosshair, Target,
-  Phone, Building2, CreditCard, ArrowRight, ArrowLeft, AlertCircle, CheckCircle2, Sparkles, UserCheck, Loader2
+  Phone, Building2, CreditCard, ArrowRight, ArrowLeft, AlertCircle, CheckCircle2, Sparkles, UserCheck, Loader2,
+  KeyRound, RefreshCcw
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { Logo } from './Logo';
+import { requestVerification, resetPassword } from '../services/api';
 
 interface AuthPageProps {
   initialMode?: 'signin' | 'signup';
@@ -20,6 +22,7 @@ interface AuthPageProps {
     accountNumber: string;
     accountName: string;
     initialDeposit: number;
+    verificationCode: string;
     referralCode?: string;
   }) => Promise<void>;
   onSignIn: (data: {
@@ -58,7 +61,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   onBackToLanding,
   demoUsers,
 }) => {
-  const [mode, setMode] = useState<'signin' | 'signup'>(initialMode);
+  const [mode, setMode] = useState<'signin' | 'signup' | 'forgot_password'>(initialMode);
 
   // Sign Up Form State
   const [signupEmail, setSignupEmail] = useState('');
@@ -68,6 +71,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   const [signupBankName, setSignupBankName] = useState('OPay Digital Services Limited (OPay)');
   const [signupAccountNumber, setSignupAccountNumber] = useState('');
   const [signupAccountName, setSignupAccountName] = useState('');
+  const [signupVerificationCode, setSignupVerificationCode] = useState('');
   const [isResolvingNuban, setIsResolvingNuban] = useState(false);
   const [nubanResolved, setNubanResolved] = useState(false);
   const [nubanError, setNubanError] = useState<string | null>(null);
@@ -82,9 +86,19 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   const [signinPassword, setSigninPassword] = useState('');
   const [showSigninPassword, setShowSigninPassword] = useState(false);
 
+  // Password Reset State
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetCode, setResetCode] = useState('');
+  const [resetNewPassword, setResetNewPassword] = useState('');
+  const [resetStep, setResetStep] = useState<'request' | 'verify'>('request');
+  const [resetSuccess, setResetSuccess] = useState(false);
+
   // Status
   const [loading, setLoading] = useState(false);
+  const [verifyingCode, setVerifyingCode] = useState(false);
+  const [codeSent, setCodeSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const resolveBankDetails = async (accNum: string, bank: string) => {
     if (accNum.length !== 10) return;
@@ -135,12 +149,42 @@ export const AuthPage: React.FC<AuthPageProps> = ({
     }
   };
 
+  const handleRequestVerification = async (email: string, type: 'REGISTER' | 'RESET_PASSWORD') => {
+    if (!email || !email.includes('@')) {
+      setError('Please provide a valid email address');
+      return;
+    }
+
+    setVerifyingCode(true);
+    setError(null);
+    setSuccessMsg(null);
+
+    try {
+      const res = await requestVerification(email, type);
+      if (res.success) {
+        setCodeSent(true);
+        setSuccessMsg(res.message);
+        if (type === 'RESET_PASSWORD') {
+          setResetStep('verify');
+        }
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to send verification code');
+    } finally {
+      setVerifyingCode(false);
+    }
+  };
+
   const handleSignUpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
     if (!signupEmail.trim() || !signupEmail.includes('@')) {
       setError('Please provide a valid Gmail/email address');
+      return;
+    }
+    if (!signupVerificationCode.trim()) {
+      setError('Please enter the 6-digit verification code sent to your email');
       return;
     }
     if (!signupPassword || signupPassword.length < 4) {
@@ -176,6 +220,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
         accountNumber: signupAccountNumber.trim(),
         accountName: signupAccountName || `${signupCodmIgn.trim()} (Verified)`,
         initialDeposit: 0,
+        verificationCode: signupVerificationCode.trim(),
         referralCode: signupReferralCode.trim(),
       });
     } catch (err: any) {
@@ -201,6 +246,35 @@ export const AuthPage: React.FC<AuthPageProps> = ({
       });
     } catch (err: any) {
       setError(err.message || 'Sign in failed');
+      setLoading(false);
+    }
+  };
+
+  const handleResetPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccessMsg(null);
+
+    if (!resetEmail.trim() || !resetCode.trim() || !resetNewPassword.trim()) {
+      setError('Please fill in all fields');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await resetPassword({
+        email: resetEmail.trim(),
+        code: resetCode.trim(),
+        newPassword: resetNewPassword,
+      });
+      if (res.success) {
+        setResetSuccess(true);
+        setSuccessMsg('Password reset successful! You can now sign in.');
+        setTimeout(() => setMode('signin'), 3000);
+      }
+    } catch (err: any) {
+      setError(err.message || 'Password reset failed');
+    } finally {
       setLoading(false);
     }
   };
@@ -261,44 +335,60 @@ export const AuthPage: React.FC<AuthPageProps> = ({
       {/* Main Authentication Card */}
       <div className="relative z-10 max-w-lg w-full mx-auto my-auto bg-neutral-900/95 border border-neutral-800 rounded-3xl shadow-2xl overflow-hidden backdrop-blur-xl">
         {/* Toggle Mode Tabs */}
-        <div className="grid grid-cols-2 p-1.5 bg-neutral-950/80 border-b border-neutral-800">
-          <button
-            type="button"
-            onClick={() => { setMode('signup'); setError(null); }}
-            className={`py-3 text-xs sm:text-sm font-black rounded-2xl transition-all cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wider ${
-              mode === 'signup'
-                ? 'bg-amber-400 text-neutral-950 shadow-lg'
-                : 'text-neutral-400 hover:text-white'
-            }`}
-          >
-            <Crosshair className="w-4 h-4" />
-            <span>Create Account</span>
-          </button>
+        {mode !== 'forgot_password' && (
+          <div className="grid grid-cols-2 p-1.5 bg-neutral-950/80 border-b border-neutral-800">
+            <button
+              type="button"
+              onClick={() => { setMode('signup'); setError(null); setSuccessMsg(null); }}
+              className={`py-3 text-xs sm:text-sm font-black rounded-2xl transition-all cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wider ${
+                mode === 'signup'
+                  ? 'bg-amber-400 text-neutral-950 shadow-lg'
+                  : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              <Crosshair className="w-4 h-4" />
+              <span>Create Account</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => { setMode('signin'); setError(null); }}
-            className={`py-3 text-xs sm:text-sm font-black rounded-2xl transition-all cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wider ${
-              mode === 'signin'
-                ? 'bg-amber-400 text-neutral-950 shadow-lg'
-                : 'text-neutral-400 hover:text-white'
-            }`}
-          >
-            <UserCheck className="w-4 h-4" />
-            <span>Sign In</span>
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={() => { setMode('signin'); setError(null); setSuccessMsg(null); }}
+              className={`py-3 text-xs sm:text-sm font-black rounded-2xl transition-all cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wider ${
+                mode === 'signin'
+                  ? 'bg-amber-400 text-neutral-950 shadow-lg'
+                  : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              <UserCheck className="w-4 h-4" />
+              <span>Sign In</span>
+            </button>
+          </div>
+        )}
+
+        {mode === 'forgot_password' && (
+          <div className="p-1.5 bg-neutral-950/80 border-b border-neutral-800">
+            <button
+              onClick={() => { setMode('signin'); setError(null); setSuccessMsg(null); }}
+              className="w-full py-3 text-xs sm:text-sm font-black rounded-2xl text-amber-400 hover:bg-neutral-900 transition-all cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wider"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Return to Sign In</span>
+            </button>
+          </div>
+        )}
 
         <div className="p-6 sm:p-8 space-y-6">
           {/* Header Title */}
           <div>
             <h2 className="text-xl sm:text-2xl font-black font-heading text-white tracking-wide uppercase">
-              {mode === 'signup' ? 'Create OPS Stake Account' : 'Sign In to Your Account'}
+              {mode === 'signup' && 'Create OPS Stake Account'}
+              {mode === 'signin' && 'Sign In to Your Account'}
+              {mode === 'forgot_password' && 'Reset Your Password'}
             </h2>
             <p className="text-xs text-neutral-400 mt-1 leading-relaxed">
-              {mode === 'signup'
-                ? 'Register with your gamer tag and permanent NUBAN banking details to prevent multiple accounts & payment lockups.'
-                : 'Access your wallet, open match rooms, and battle arena.'}
+              {mode === 'signup' && 'Register with your gamer tag and verified email. Permanent NUBAN details prevent multiple accounts.'}
+              {mode === 'signin' && 'Access your wallet, open match rooms, and battle arena.'}
+              {mode === 'forgot_password' && 'Enter your registered email address to receive a secure password reset code.'}
             </p>
           </div>
 
@@ -310,24 +400,63 @@ export const AuthPage: React.FC<AuthPageProps> = ({
             </div>
           )}
 
+          {/* Success Banner */}
+          {successMsg && (
+            <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2.5">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+              <span>{successMsg}</span>
+            </div>
+          )}
+
           {/* ===================== SIGN UP FORM ===================== */}
           {mode === 'signup' ? (
             <form onSubmit={handleSignUpSubmit} className="space-y-4">
               {/* Email Address */}
               <div className="space-y-1">
-                <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider flex items-center gap-1.5">
-                  <Mail className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Gmail / Email Address <span className="text-rose-400">*</span></span>
+                <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Mail className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Gmail / Email Address <span className="text-rose-400">*</span></span>
+                  </div>
                 </label>
-                <input
-                  type="email"
-                  required
-                  value={signupEmail}
-                  onChange={(e) => setSignupEmail(e.target.value)}
-                  placeholder="e.g. soldier@gmail.com"
-                  className="w-full px-4 py-3 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-sm focus:border-amber-400 focus:outline-none transition-colors"
-                />
+                <div className="flex gap-2">
+                  <input
+                    type="email"
+                    required
+                    value={signupEmail}
+                    onChange={(e) => setSignupEmail(e.target.value)}
+                    placeholder="e.g. soldier@gmail.com"
+                    className="flex-1 px-4 py-3 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-sm focus:border-amber-400 focus:outline-none transition-colors"
+                  />
+                  <button
+                    type="button"
+                    disabled={verifyingCode || !signupEmail.includes('@')}
+                    onClick={() => handleRequestVerification(signupEmail, 'REGISTER')}
+                    className="px-4 py-3 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-40 text-amber-400 text-[10px] font-black rounded-xl uppercase transition-all whitespace-nowrap cursor-pointer border border-neutral-700"
+                  >
+                    {verifyingCode ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : (codeSent ? 'Resend' : 'Send Code')}
+                  </button>
+                </div>
               </div>
+
+              {/* Verification Code */}
+              {codeSent && (
+                <div className="space-y-1 animate-in fade-in slide-in-from-top-2 duration-300">
+                  <label className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>Verification Code <span className="text-rose-400">*</span></span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={6}
+                    value={signupVerificationCode}
+                    onChange={(e) => setSignupVerificationCode(e.target.value.replace(/\D/g, ''))}
+                    placeholder="Enter 6-digit code"
+                    className="w-full px-4 py-3 rounded-xl bg-neutral-950 border border-emerald-500/50 text-white text-lg font-black tracking-[10px] text-center focus:border-emerald-400 focus:outline-none transition-colors"
+                  />
+                </div>
+              )}
 
               {/* Password */}
               <div className="space-y-1">
@@ -385,8 +514,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                 />
               </div>
 
-
-
               {/* Phone Number */}
               <div className="space-y-1">
                 <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider flex items-center gap-1.5">
@@ -403,7 +530,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                 />
               </div>
 
-                            {/* Permanent Banking Details Card */}
+              {/* Permanent Banking Details Card */}
               <div className="p-3.5 rounded-xl bg-neutral-950 border border-amber-400/40 space-y-2.5">
                 <div className="flex items-center justify-between pb-1.5 border-b border-neutral-800/80">
                   <span className="text-[11px] font-black uppercase text-amber-400 flex items-center gap-1 font-heading">
@@ -501,7 +628,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
               {/* Submit Button */}
               <button
                 type="submit"
-                disabled={loading || isResolvingNuban}
+                disabled={loading || isResolvingNuban || !codeSent}
                 className="w-full py-4 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-neutral-950 font-black rounded-2xl text-sm transition-all shadow-xl cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide"
               >
                 {loading ? (
@@ -517,14 +644,14 @@ export const AuthPage: React.FC<AuthPageProps> = ({
               <div className="text-center pt-2">
                 <button
                   type="button"
-                  onClick={() => { setMode('signin'); setError(null); }}
+                  onClick={() => { setMode('signin'); setError(null); setSuccessMsg(null); }}
                   className="text-xs text-neutral-400 hover:text-amber-400 transition-colors cursor-pointer"
                 >
                   Already registered? <span className="text-amber-400 font-bold underline">Sign In instead</span>
                 </button>
               </div>
             </form>
-          ) : (
+          ) : mode === 'signin' ? (
             /* ===================== SIGN IN FORM ===================== */
             <form onSubmit={handleSignInSubmit} className="space-y-4">
               {/* Identifier */}
@@ -545,10 +672,19 @@ export const AuthPage: React.FC<AuthPageProps> = ({
 
               {/* Password */}
               <div className="space-y-1">
-                <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider flex items-center gap-1.5">
-                  <Lock className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Password <span className="text-rose-400">*</span></span>
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Password <span className="text-rose-400">*</span></span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => { setMode('forgot_password'); setError(null); setSuccessMsg(null); }}
+                    className="text-[10px] font-bold text-amber-400 hover:text-amber-300 uppercase tracking-tight underline cursor-pointer"
+                  >
+                    Forgot Password?
+                  </button>
+                </div>
                 <div className="relative">
                   <input
                     type={showSigninPassword ? 'text' : 'password'}
@@ -587,7 +723,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
               <div className="text-center pt-1">
                 <button
                   type="button"
-                  onClick={() => { setMode('signup'); setError(null); }}
+                  onClick={() => { setMode('signup'); setError(null); setSuccessMsg(null); }}
                   className="text-xs text-neutral-400 hover:text-amber-400 transition-colors cursor-pointer"
                 >
                   Don't have an account yet? <span className="text-amber-400 font-bold underline">Create one now</span>
@@ -630,6 +766,95 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                       </button>
                     ))}
                   </div>
+                </div>
+              )}
+            </form>
+          ) : (
+            /* ===================== FORGOT PASSWORD FORM ===================== */
+            <form onSubmit={handleResetPasswordSubmit} className="space-y-4">
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <Mail className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Registered Email Address <span className="text-rose-400">*</span></span>
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="email"
+                    required
+                    disabled={resetStep === 'verify'}
+                    value={resetEmail}
+                    onChange={(e) => setResetEmail(e.target.value)}
+                    placeholder="e.g. ghost@gmail.com"
+                    className="flex-1 px-4 py-3 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-sm focus:border-amber-400 focus:outline-none transition-colors disabled:opacity-50"
+                  />
+                  {resetStep === 'request' && (
+                    <button
+                      type="button"
+                      disabled={verifyingCode || !resetEmail.includes('@')}
+                      onClick={() => handleRequestVerification(resetEmail, 'RESET_PASSWORD')}
+                      className="px-4 py-3 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-neutral-950 text-[10px] font-black rounded-xl uppercase transition-all whitespace-nowrap cursor-pointer shadow-lg"
+                    >
+                      {verifyingCode ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Get Code'}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {resetStep === 'verify' && !resetSuccess && (
+                <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-500">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <KeyRound className="w-3.5 h-3.5" />
+                      <span>6-Digit Verification Code <span className="text-rose-400">*</span></span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      maxLength={6}
+                      value={resetCode}
+                      onChange={(e) => setResetCode(e.target.value.replace(/\D/g, ''))}
+                      placeholder="ENTER CODE"
+                      className="w-full px-4 py-3 rounded-xl bg-neutral-950 border border-amber-400/50 text-white text-lg font-black tracking-[10px] text-center focus:border-amber-400 focus:outline-none transition-colors"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5 text-amber-400" />
+                      <span>New Password <span className="text-rose-400">*</span></span>
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      value={resetNewPassword}
+                      onChange={(e) => setResetNewPassword(e.target.value)}
+                      placeholder="Enter new secure password"
+                      className="w-full px-4 py-3 rounded-xl bg-neutral-950 border border-neutral-700 text-white text-sm focus:border-amber-400 focus:outline-none transition-colors"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-neutral-950 font-black rounded-2xl text-sm transition-all shadow-xl cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide"
+                  >
+                    {loading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <>
+                        <RefreshCcw className="w-4 h-4" />
+                        <span>Update Password Now</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setResetStep('request')}
+                    className="w-full text-center text-[10px] font-bold text-neutral-500 hover:text-neutral-300 uppercase underline transition-colors cursor-pointer"
+                  >
+                    Didn't get a code? Request again
+                  </button>
                 </div>
               )}
             </form>

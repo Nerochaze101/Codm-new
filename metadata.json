@@ -1,5 +1,5 @@
 {
-  "name": "Ops Stake",
+  "name": "OpsSTAKE",
   "description": "Secure 1v1 tactical mobile shooter wagering platform with automated escrow and AI result verification.",
   "requestFramePermissions": ["microphone", "camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
