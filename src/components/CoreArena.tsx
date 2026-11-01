@@ -722,7 +722,26 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                      {myActiveMatch.status === 'DISPUTED' ? (
                        <div className="p-5 rounded-2xl bg-rose-950/40 border-2 border-rose-500/60 space-y-4 animate-in zoom-in-95">
                          <div className="flex gap-3"><div className="w-10 h-10 rounded-xl bg-rose-500/20 flex items-center justify-center shrink-0"><AlertTriangle className="text-rose-400" /></div><div><div className="text-sm font-black text-white uppercase">Dispute Detected!</div><p className="text-[11px] text-neutral-400">Conflicting scores. Upload a <b>screen recording</b> of your history and game result to resolve.</p></div></div>
-                         <div className="space-y-3"><input type="file" accept="video/*" className="w-full text-xs text-neutral-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:bg-rose-500 file:text-white" onChange={e => { const f = e.target.files?.[0]; if(f){ const r=new FileReader(); r.onload=()=>setScreenshotPreview(r.result as string); r.readAsDataURL(f); } }} />{screenshotPreview && (
+                          <div className="space-y-3">
+                            <input 
+                              type="file" 
+                              accept="video/*" 
+                              className="w-full text-xs text-neutral-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:bg-rose-500 file:text-white cursor-pointer" 
+                              onChange={e => { 
+                                const f = e.target.files?.[0]; 
+                                if(f){ 
+                                  if (f.size > 150 * 1024 * 1024) {
+                                    alert('Video too large (Limit: 150MB). Please use a shorter recording or lower resolution.');
+                                    e.target.value = '';
+                                    return;
+                                  }
+                                  const r=new FileReader(); 
+                                  r.onload=()=>setScreenshotPreview(r.result as string); 
+                                  r.readAsDataURL(f); 
+                                } 
+                              }} 
+                            />
+                            {screenshotPreview && (
                               <div className="h-40 rounded-xl overflow-hidden border border-rose-500/50 bg-black">
                                 {screenshotPreview.startsWith('data:video/') ? (
                                   <video src={screenshotPreview} className="w-full h-full object-contain" controls />
@@ -730,7 +749,23 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                                   <img src={screenshotPreview} className="w-full h-full object-contain" alt="Proof preview" />
                                 )}
                               </div>
-                            )}<button onClick={() => handleResultSubmit(myActiveMatch.id)} disabled={isSubmitting || !screenshotPreview} className="w-full py-3 bg-rose-500 text-white font-black rounded-xl text-xs uppercase shadow-xl">{isSubmitting ? 'Uploading Proof...' : 'Submit Video Proof & Resolve'}</button></div>
+                            )}
+                            <button 
+                              onClick={() => handleResultSubmit(myActiveMatch.id)} 
+                              disabled={isSubmitting || !screenshotPreview} 
+                              className="w-full py-3 bg-rose-500 text-white font-black rounded-xl text-xs uppercase shadow-xl flex items-center justify-center gap-2"
+                            >
+                              {isSubmitting ? (
+                                <>
+                                  <RefreshCw size={16} className="animate-spin" />
+                                  <span>Uploading Large File... Please Wait</span>
+                                </>
+                              ) : (
+                                <span>Submit Video Proof & Resolve</span>
+                              )}
+                            </button>
+                            {isSubmitting && <p className="text-[9px] text-center text-neutral-500 animate-pulse uppercase font-black tracking-widest">Do not close browser during upload</p>}
+                          </div>
                        </div>
                      ) : (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) ? (
                        <div className="p-6 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-4 animate-in fade-in">

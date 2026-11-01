@@ -198,9 +198,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
   // Users & Role Management state
   const [usersList, setUsersList] = useState<any[]>([]);
   const [usersSearch, setUsersSearch] = useState('');
-  const [roleFilter, setRoleFilter] = useState<'all' | 'admin' | 'user'>('all');
+  const [roleFilter, setRoleFilter] = useState<'all' | 'admin' | 'moderator' | 'user'>('all');
   const [assignIdentifier, setAssignIdentifier] = useState('');
-  const [assignRoleType, setAssignRoleType] = useState<'admin' | 'user'>('admin');
+  const [assignRoleType, setAssignRoleType] = useState<'admin' | 'moderator' | 'user'>('admin');
   const [assignMsg, setAssignMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isAssigning, setIsAssigning] = useState(false);
 
@@ -706,13 +706,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
 
           <nav className="flex flex-col gap-3">
             {[
-              { id: 'review_queue', icon: AlertTriangle, label: 'Review Queue', badge: reviewQueueMatches.length },
-              { id: 'finance', icon: Wallet, label: 'Treasury', badge: `₦${availableFees.toLocaleString()}` },
-              { id: 'users', icon: Users, label: 'Gladiators', badge: usersList.length },
-              { id: 'disputes', icon: ShieldCheck, label: 'Disputes', badge: disputesList.length },
-              { id: 'gmail', icon: Mail, label: 'Sync Engine', badge: emailsList.length },
-              { id: 'multi_accounts', icon: ShieldAlert, label: 'Multi-Accounts', badge: flaggedAccounts.length }
-            ].map(tab => (
+              { id: 'review_queue', icon: AlertTriangle, label: 'Review Queue', badge: reviewQueueMatches.length, roles: ['admin', 'moderator'] },
+              { id: 'finance', icon: Wallet, label: 'Treasury', badge: `₦${availableFees.toLocaleString()}`, roles: ['admin'] },
+              { id: 'users', icon: Users, label: 'Gladiators', badge: usersList.length, roles: ['admin'] },
+              { id: 'disputes', icon: ShieldCheck, label: 'Disputes', badge: disputesList.length, roles: ['admin', 'moderator'] },
+              { id: 'gmail', icon: Mail, label: 'Sync Engine', badge: emailsList.length, roles: ['admin'] },
+              { id: 'multi_accounts', icon: ShieldAlert, label: 'Multi-Accounts', badge: flaggedAccounts.length, roles: ['admin'] }
+            ].filter(tab => tab.roles.includes(currentUser.role || 'user')).map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
@@ -1686,7 +1686,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                    />
                  </div>
                  <div className="flex p-1.5 bg-black rounded-[1.25rem] border border-neutral-800 w-full md:w-auto shadow-inner">
-                    {(['all', 'admin', 'user'] as const).map(f => (
+                    {(['all', 'admin', 'moderator', 'user'] as const).map(f => (
                       <button key={f} onClick={() => setRoleFilter(f)} className={`px-8 py-3.5 rounded-xl text-[11px] font-black uppercase tracking-[0.2em] transition-all duration-300 ${roleFilter === f ? 'bg-amber-400 text-black shadow-lg shadow-amber-400/20' : 'text-neutral-500 hover:text-white hover:bg-neutral-800/50'}`}>{f}</button>
                     ))}
                  </div>
@@ -1739,9 +1739,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                                  <Coins size={18} />
                                </button>
                                <button 
-                                onClick={async () => { if(confirm(`Adjust permissions for gladiator ${u.codmIgn}?`)) { await assignUserRole(currentUser.id, { targetUserId: u.id, role: u.role === 'admin' ? 'user' : 'admin' }); loadUsers(); } }} 
-                                className={`p-3 rounded-2xl transition-all border border-neutral-800 active:scale-90 ${u.role === 'admin' ? 'bg-rose-500/10 text-rose-500 hover:bg-rose-500/20 hover:border-rose-500/40' : 'bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 hover:border-blue-500/40'}`}
-                                title="Change Role"
+                                onClick={async () => { 
+                                  const roles: ('user' | 'moderator' | 'admin')[] = ['user', 'moderator', 'admin'];
+                                  const currentIndex = roles.indexOf(u.role as any);
+                                  const nextRole = roles[(currentIndex + 1) % roles.length];
+                                  if(confirm(`Promote/Demote ${u.codmIgn} to ${nextRole.toUpperCase()}?`)) { 
+                                    await assignUserRole(currentUser.id, { targetUserId: u.id, role: nextRole }); 
+                                    loadUsers(); 
+                                  } 
+                                }} 
+                                className={`p-3 rounded-2xl transition-all border border-neutral-800 active:scale-90 ${u.role === 'admin' ? 'bg-rose-500/10 text-rose-500 hover:bg-rose-500/20' : u.role === 'moderator' ? 'bg-amber-500/10 text-amber-500 hover:bg-amber-500/20' : 'bg-blue-500/10 text-blue-400 hover:bg-blue-500/20'}`}
+                                title={`Change Role (Current: ${u.role})`}
                                >
                                  <Shield size={18} />
                                </button>

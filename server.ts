@@ -154,7 +154,16 @@ async function sendEmail(to: string, subject: string, html: string) {
 }
 
 const app = express();
-app.use(express.json({ limit: '25mb' }));
+app.use(express.json({ limit: '200mb' }));
+
+// Extend Express Request to include adminUser from middleware
+declare global {
+  namespace Express {
+    interface Request {
+      adminUser?: UserProfile;
+    }
+  }
+}
 
 export interface UserProfile {
   id: string;
@@ -940,8 +949,8 @@ async function requireAdminAuth(req: any, res: any, next: any) {
   }
 
   const user = await getUserFromDb(String(userId));
-  if (!user || user.role !== 'admin') {
-    return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+  if (!user || (user.role !== 'admin' && user.role !== 'moderator')) {
+    return res.status(403).json({ error: 'Unauthorized: Administrative or Moderator privileges required' });
   }
 
   req.adminUser = user;
@@ -952,6 +961,8 @@ app.use('/api/msksksnuwje', requireAdminAuth);
 
 // Anti-Multi-Accounting Admin Endpoints
 app.get('/api/msksksnuwje/flagged-accounts', async (req, res) => {
+  const user = req.adminUser!;
+  if (user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
   try {
     const usersRes = await pool.query(`SELECT * FROM users ORDER BY created_at DESC`);
     const users = usersRes.rows;
@@ -1082,6 +1093,7 @@ app.post('/api/msksksnuwje/flagged-accounts/:userId/ban', async (req, res) => {
 
 // REST API ROUTES
 app.post('/api/msksksnuwje/withdraw', async (req, res) => {
+  if (req.adminUser!.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
   const { userId, amount } = req.body;
   const numAmount = Number(amount);
   if (!numAmount || numAmount <= 0) {
@@ -1619,9 +1631,8 @@ app.post('/api/msksksnuwje/withdrawals/:id/reject', async (req, res) => {
 app.get('/api/msksksnuwje/users', async (req, res) => {
   try {
     const { userId, search } = req.query;
-    const adminUser = await getUserFromDb(userId as string);
-    if (!adminUser || adminUser.role !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    if (req.adminUser!.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required to view gladiator database' });
     }
 
     let queryStr = `SELECT id, username, codm_ign, email, phone, role, balance, bank_name, account_number, account_name, created_at FROM users`;
@@ -1657,13 +1668,12 @@ app.get('/api/msksksnuwje/users', async (req, res) => {
 app.post('/api/msksksnuwje/assign-role', async (req, res) => {
   try {
     const { adminUserId, targetUserId, identifier, role = 'admin' } = req.body;
-    const adminUser = await getUserFromDb(adminUserId);
-    if (!adminUser || adminUser.role !== 'admin') {
+    if (req.adminUser!.role !== 'admin') {
       return res.status(403).json({ error: 'Unauthorized: Only an admin can assign roles' });
     }
 
-    if (role !== 'admin' && role !== 'user') {
-      return res.status(400).json({ error: "Invalid role. Must be 'admin' or 'user'" });
+    if (role !== 'admin' && role !== 'user' && role !== 'moderator') {
+      return res.status(400).json({ error: "Invalid role. Must be 'admin', 'moderator', or 'user'" });
     }
 
     let targetUser: any = null;
@@ -1704,9 +1714,8 @@ app.post('/api/msksksnuwje/users/:id/adjust-balance', async (req, res) => {
       return res.status(400).json({ error: 'Invalid adjustment amount' });
     }
 
-    const adminUser = await getUserFromDb(adminUserId);
-    if (!adminUser || adminUser.role !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    if (req.adminUser!.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin privileges required for financial adjustments' });
     }
 
     const targetUser = await getUserFromDb(targetUserId);
@@ -4749,17 +4758,6 @@ export async function sendMatchDisputeVideoToTelegram(match: Match, playerIgn: s
       return;
     }
 
-    console.log(`[Telegram Bot] Preparing to upload dispute video for Match #${match.challengeCode} (${playerIgn}) to Group ${targetGroupId}...`);
-
-    const messageText = 
-      `🚨 <b>MATCH DISPUTE VIDEO SUBMITTED</b> 🚨\n\n` +
-      `👤 <b>Gladiator:</b> ${playerIgn}\n` +
-      `🏷️ <b>Match Code:</b> #${match.challengeCode}\n` +
-      `🎮 <b>Mode:</b> ${match.gameMode}\n` +
-      `🗺️ <b>Map:</b> ${match.map}\n` +
-      `💰 <b>Pot Amount:</b> <b>₦${match.potAmount.toLocaleString()}</b>\n\n` +
-      `📹 <i>This player has uploaded a screen recording of their history and game result for manual referee review.</i>`;
-
     // Extract raw base64 data
     const matches = videoBase64.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.*)$/);
     if (!matches || matches.length < 3) {
@@ -4770,6 +4768,35 @@ export async function sendMatchDisputeVideoToTelegram(match: Match, playerIgn: s
     const mimeType = matches[1];
     const base64Content = matches[2];
     const buffer = Buffer.from(base64Content, 'base64');
+    const fileSizeMb = buffer.length / (1024 * 1024);
+
+    console.log(`[Telegram Bot] Preparing dispute video for Match #${match.challengeCode} (${playerIgn}). Size: ${fileSizeMb.toFixed(2)} MB`);
+
+    const messageText = 
+      `🚨 <b>MATCH DISPUTE VIDEO SUBMITTED</b> 🚨\n\n` +
+      `👤 <b>Gladiator:</b> ${playerIgn}\n` +
+      `🏷️ <b>Match Code:</b> #${match.challengeCode}\n` +
+      `🎮 <b>Mode:</b> ${match.gameMode}\n` +
+      `🗺️ <b>Map:</b> ${match.map}\n` +
+      `💰 <b>Pot Amount:</b> <b>₦${match.potAmount.toLocaleString()}</b>\n` +
+      `📦 <b>File Size:</b> ${fileSizeMb.toFixed(2)} MB\n\n` +
+      `📹 <i>This player has uploaded a screen recording of their history and game result for manual referee review.</i>\n\n` +
+      `🔍 <b>Search Tag:</b> <code>#DISPUTE_${match.challengeCode}</code>\n` +
+      `#Dispute #${match.challengeCode} #${playerIgn.replace(/\s+/g, '')}`;
+
+    if (fileSizeMb > 49.5) {
+      console.warn(`[Telegram Bot] Video exceeds 50MB limit (${fileSizeMb.toFixed(2)}MB). Sending notification only.`);
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: targetGroupId,
+          text: messageText + `\n\n⚠️ <b>SYSTEM NOTICE:</b> Video file was too large for Telegram upload (${fileSizeMb.toFixed(2)} MB). Please review this match forensic recording directly on the OpsSTAKE Admin Dashboard.`,
+          parse_mode: 'HTML',
+        }),
+      });
+      return;
+    }
 
     // Create FormData for file upload
     const formData = new FormData();
@@ -4790,6 +4817,16 @@ export async function sendMatchDisputeVideoToTelegram(match: Match, playerIgn: s
     const data: any = await res.json();
     if (!data.ok) {
       console.error(`❌ [Telegram Bot] Video upload FAILED: ${data.description}`);
+      // Fallback to text message if video upload fails
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: targetGroupId,
+          text: messageText + `\n\n❌ <b>UPLOAD FAILED:</b> ${data.description}\nPlease review proof on Admin Dashboard.`,
+          parse_mode: 'HTML',
+        }),
+      });
     } else {
       console.log(`✅ [Telegram Bot] Dispute video for Match #${match.challengeCode} posted successfully to review group.`);
     }
@@ -4845,7 +4882,8 @@ export async function postMatchToPublicChannel(match: Match, origin?: string) {
         `🎯 <b>Game Mode:</b> ${match.gameMode}\n` +
         `🗺️ <b>Map:</b> ${match.map}\n` +
         `🏷️ <b>Lobby Code:</b> #${match.challengeCode}\n\n` +
-        `🛡️ <i>Lock in your slot! Join Team Alpha or Team Bravo. All 5 members of the winning squad receive ₦${perPlayerPayout.toLocaleString()} each! Tap below to join!</i>`;
+        `🛡️ <i>Lock in your slot! Join Team Alpha or Team Bravo. All 5 members of the winning squad receive ₦${perPlayerPayout.toLocaleString()} each! Tap below to join!</i>\n\n` +
+        `#SquadBattle #${match.challengeCode} #CODM`;
       buttonLabel = `🛡️ JOIN SQUAD (₦${match.stakeAmount.toLocaleString()})`;
     } else {
       const netPot = match.potAmount - (match.platformFee || 0);
@@ -4862,7 +4900,8 @@ export async function postMatchToPublicChannel(match: Match, origin?: string) {
         `🎯 <b>Game Mode:</b> ${match.gameMode}\n` +
         `🗺️ <b>Map:</b> ${match.map}\n` +
         `🏷️ <b>Challenge Code:</b> #${match.challengeCode}\n\n` +
-        `⚔️ <i>A gladiator is waiting for a rival! Think you have what it takes to win? Tap the button below to join the match and claim ₦${winnerPayout.toLocaleString()}!</i>`;
+        `⚔️ <i>A gladiator is waiting for a rival! Think you have what it takes to win? Tap the button below to join the match and claim ₦${winnerPayout.toLocaleString()}!</i>\n\n` +
+        `#1v1Duel #${match.challengeCode} #CODM`;
       buttonLabel = `🎮 ACCEPT WAGER (₦${match.stakeAmount.toLocaleString()})`;
     }
 
@@ -7365,7 +7404,12 @@ app.post('/api/matches/:id/submit-result', rateLimitMiddleware(15, 60000), secur
 });
 
 // Admin manual resolution directly in database
-app.post('/api/matches/:id/admin-resolve', async (req, res) => {
+app.post('/api/msksksnuwje/matches/:id/admin-resolve', async (req, res) => {
+  const adminUser = req.adminUser;
+  if (!adminUser || (adminUser.role !== 'admin' && adminUser.role !== 'moderator')) {
+    return res.status(403).json({ error: 'Unauthorized: Staff privileges required' });
+  }
+
   const match = await getMatchFromDb(req.params.id);
   if (!match) return res.status(404).json({ error: 'Match not found' });
 
@@ -7853,9 +7897,9 @@ app.post('/api/msksksnuwje/matches/:id/abandon', async (req, res) => {
   try {
     const matchId = req.params.id;
     const { userId, reason = 'Admin settled as abandoned' } = req.body || {};
-    const adminUser = await getUserFromDb(userId);
-    if (!adminUser || adminUser.role !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    const adminUser = req.adminUser;
+    if (!adminUser || (adminUser.role !== 'admin' && adminUser.role !== 'moderator')) {
+      return res.status(403).json({ error: 'Unauthorized: Staff privileges required' });
     }
 
     const result = await settleAbandonedMatch(matchId, reason);
@@ -7875,9 +7919,9 @@ app.post('/api/msksksnuwje/matches/:id/abandon', async (req, res) => {
 app.get('/api/msksksnuwje/disputes', async (req, res) => {
   try {
     const { userId } = req.query;
-    const adminUser = await getUserFromDb(userId as string);
-    if (!adminUser || adminUser.role !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    const adminUser = req.adminUser;
+    if (!adminUser || (adminUser.role !== 'admin' && adminUser.role !== 'moderator')) {
+      return res.status(403).json({ error: 'Unauthorized: Staff privileges required' });
     }
 
     // Fetch matches that are in DISPUTED or SUBMITTING_RESULTS (potential disputes)
@@ -7919,9 +7963,9 @@ app.get('/api/msksksnuwje/disputes', async (req, res) => {
 app.get('/api/msksksnuwje/review-queue', async (req, res) => {
   try {
     const { userId } = req.query;
-    const adminUser = await getUserFromDb(userId as string);
-    if (!adminUser || adminUser.role !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    const adminUser = req.adminUser;
+    if (!adminUser || (adminUser.role !== 'admin' && adminUser.role !== 'moderator')) {
+      return res.status(403).json({ error: 'Unauthorized: Staff privileges required' });
     }
 
     const result = await pool.query(`
@@ -7998,9 +8042,9 @@ app.get('/api/msksksnuwje/review-queue', async (req, res) => {
 app.post('/api/msksksnuwje/matches/:id/resubmit', async (req, res) => {
   try {
     const { userId, targetPlayerId, reason } = req.body;
-    const adminUser = await getUserFromDb(userId);
-    if (!adminUser || adminUser.role !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    const adminUser = req.adminUser;
+    if (!adminUser || (adminUser.role !== 'admin' && adminUser.role !== 'moderator')) {
+      return res.status(403).json({ error: 'Unauthorized: Staff privileges required' });
     }
 
     const match = await getMatchFromDb(req.params.id);
@@ -8067,9 +8111,9 @@ app.post('/api/msksksnuwje/matches/:id/resubmit', async (req, res) => {
 app.post('/api/msksksnuwje/matches/:id/escalate', async (req, res) => {
   try {
     const { userId, reason } = req.body;
-    const adminUser = await getUserFromDb(userId);
-    if (!adminUser || adminUser.role !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    const adminUser = req.adminUser;
+    if (!adminUser || (adminUser.role !== 'admin' && adminUser.role !== 'moderator')) {
+      return res.status(403).json({ error: 'Unauthorized: Staff privileges required' });
     }
 
     const match = await getMatchFromDb(req.params.id);
@@ -8151,9 +8195,9 @@ app.post('/api/msksksnuwje/analyze-forensic', async (req, res) => {
 app.get('/api/msksksnuwje/matches', async (req, res) => {
   try {
     const { userId, status } = req.query;
-    const adminUser = await getUserFromDb(userId as string);
-    if (!adminUser || adminUser.role !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    const adminUser = req.adminUser;
+    if (!adminUser || (adminUser.role !== 'admin' && adminUser.role !== 'moderator')) {
+      return res.status(403).json({ error: 'Unauthorized: Staff privileges required' });
     }
 
     let queryStr = 'SELECT * FROM matches';
@@ -8197,9 +8241,8 @@ app.get('/api/msksksnuwje/matches', async (req, res) => {
 app.get('/api/msksksnuwje/gmail/config', async (req, res) => {
   try {
     const { userId } = req.query;
-    const user = await getUserFromDb(userId as string);
-    if (!user || user.role !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized: Admin privileges required' });
+    if (req.adminUser!.role !== 'admin') {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required' });
     }
 
     const config = await getGmailConfig();

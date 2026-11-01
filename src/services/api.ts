@@ -328,7 +328,7 @@ export async function updateUser(userId: string, data: Partial<UserProfile>): Pr
 }
 
 export async function adminResolveMatch(matchId: string, winnerId: string): Promise<Match> {
-  const res = await fetch(`/api/matches/${matchId}/admin-resolve`, {
+  const res = await fetch(`/api/msksksnuwje/matches/${matchId}/admin-resolve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ winnerId }),
@@ -410,7 +410,7 @@ export async function fetchAdminUsers(adminUserId: string, search?: string) {
   return data.users || [];
 }
 
-export async function assignUserRole(adminUserId: string, params: { targetUserId?: string; identifier?: string; role: 'admin' | 'user' }) {
+export async function assignUserRole(adminUserId: string, params: { targetUserId?: string; identifier?: string; role: 'admin' | 'moderator' | 'user' }) {
   const res = await fetch('/api/msksksnuwje/assign-role', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
