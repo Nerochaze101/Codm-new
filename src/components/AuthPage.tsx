@@ -748,7 +748,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                       >
                         <div className="flex items-center gap-2">
                           <img
-                            src={user.avatar}
+                            src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(user.codmIgn)}`}
                             alt={user.codmIgn}
                             className="w-7 h-7 rounded-lg object-cover bg-neutral-800"
                             referrerPolicy="no-referrer"

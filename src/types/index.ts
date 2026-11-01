@@ -164,6 +164,8 @@ export interface Match {
   conflictRetries?: number;
   creatorScreenshot?: string;
   opponentScreenshot?: string;
+  reviewerId?: string;
+  reviewerName?: string;
 }
 
 

@@ -287,6 +287,8 @@ export interface Match {
     timestamp: number;
   };
   conflictRetries?: number;
+  reviewerId?: string;
+  reviewerName?: string;
   creatorScreenshot?: string;
   opponentScreenshot?: string;
 }
@@ -629,6 +631,8 @@ async function getMatchFromDb(id: string): Promise<Match | null> {
       roomGeneratedAt: m.room_generated_at ? parseInt(m.room_generated_at, 10) : undefined,
       isPublic: m.is_public ?? true,
       conflictRetries: parseInt(m.conflict_retries || '0', 10),
+      reviewerId: m.reviewer_id || undefined,
+      reviewerName: m.reviewer_name || undefined,
       creatorScreenshot: m.creator_screenshot || undefined,
       opponentScreenshot: m.opponent_screenshot || undefined,
     };
@@ -645,7 +649,8 @@ async function getAllMatchesFromDb(): Promise<Match[]> {
              platform_fee_percentage, platform_fee, winner_payout, match_duration_minutes, 
              match_type, squad_data, status, created_at, creator_id, creator_data, 
              opponent_id, opponent_data, winner_id, winner_ign, resolution_notes, 
-             chat_messages, room_generated_at, settled_at, is_public, conflict_retries
+             chat_messages, room_generated_at, settled_at, is_public, conflict_retries,
+             reviewer_id, reviewer_name
       FROM matches 
       ORDER BY created_at DESC 
       LIMIT 100
@@ -676,6 +681,8 @@ async function getAllMatchesFromDb(): Promise<Match[]> {
       roomGeneratedAt: m.room_generated_at ? parseInt(m.room_generated_at, 10) : undefined,
       isPublic: m.is_public ?? true,
       conflictRetries: parseInt(m.conflict_retries || '0', 10),
+      reviewerId: m.reviewer_id || undefined,
+      reviewerName: m.reviewer_name || undefined,
       // screenshots excluded for list performance!
     }));
   } catch (err) {
@@ -701,7 +708,7 @@ async function saveMatchToDb(match: any) {
         stake_amount, pot_amount, platform_fee_percentage, platform_fee, winner_payout,
         match_duration_minutes, match_type, squad_data, status, creator_id, creator_data, opponent_id, opponent_data,
         winner_id, winner_ign, resolution_notes, chat_messages, created_at, room_generated_at, settled_at, is_public, conflict_retries,
-        creator_screenshot, opponent_screenshot
+        reviewer_id, reviewer_name, creator_screenshot, opponent_screenshot
       )
       VALUES (
         ${escapeSql(match.id)},
@@ -732,6 +739,8 @@ async function saveMatchToDb(match: any) {
         ${escapeSql(match.settled_at || match.settledAt || null)},
         ${escapeSql(match.isPublic !== false)},
         ${escapeSql(match.conflictRetries || 0)},
+        ${escapeSql(match.reviewerId || null)},
+        ${escapeSql(match.reviewerName || null)},
         ${escapeSql(creatorScreenshot || null)},
         ${escapeSql(opponentScreenshot || null)}
       )
@@ -756,6 +765,8 @@ async function saveMatchToDb(match: any) {
         settled_at = EXCLUDED.settled_at,
         is_public = EXCLUDED.is_public,
         conflict_retries = EXCLUDED.conflict_retries,
+        reviewer_id = EXCLUDED.reviewer_id,
+        reviewer_name = EXCLUDED.reviewer_name,
         creator_screenshot = EXCLUDED.creator_screenshot,
         opponent_screenshot = EXCLUDED.opponent_screenshot;
     `);
@@ -1668,8 +1679,11 @@ app.get('/api/msksksnuwje/users', async (req, res) => {
 app.post('/api/msksksnuwje/assign-role', async (req, res) => {
   try {
     const { adminUserId, targetUserId, identifier, role = 'admin' } = req.body;
-    if (req.adminUser!.role !== 'admin') {
-      return res.status(403).json({ error: 'Unauthorized: Only an admin can assign roles' });
+    const adminUser = req.adminUser!;
+    
+    const isOwner = adminUser.email.toLowerCase() === OWNER_EMAIL.toLowerCase() || adminUser.email.toLowerCase() === 'b@gmail.com';
+    if (!isOwner) {
+      return res.status(403).json({ error: 'Unauthorized: Only the Main Admin (Owner) can assign roles' });
     }
 
     if (role !== 'admin' && role !== 'user' && role !== 'moderator') {
@@ -1759,6 +1773,9 @@ app.post('/api/msksksnuwje/users/:id/adjust-balance', async (req, res) => {
   }
 });
 
+// Define the platform owner (Main Admin)
+const OWNER_EMAIL = 'onelly103@gmail.com';
+
 // Bootstrap / Claim Admin (for owner/creator access)
 app.post('/api/msksksnuwje/claim-admin', async (req, res) => {
   try {
@@ -1766,8 +1783,8 @@ app.post('/api/msksksnuwje/claim-admin', async (req, res) => {
     const user = await getUserFromDb(userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    const isOwnerEmail = user.email.toLowerCase().includes('loganhayes09') || user.email.toLowerCase().includes('abulsalam') || user.email.toLowerCase() === 'b@gmail.com';
-    const isPasscode = passcode === 'admin123' || passcode === 'OPAY_ADMIN_2025' || passcode === 'codmadmin';
+    const isOwnerEmail = user.email.toLowerCase() === OWNER_EMAIL.toLowerCase() || user.email.toLowerCase() === 'b@gmail.com';
+    const isPasscode = passcode === 'admin123' || passcode === 'OPAY_ADMIN_2025' || passcode === 'codmadmin' || passcode === (process.env.ADMIN_PASSCODE || 'OPS_ARENA_ROOT_2026');
 
     if (!isOwnerEmail && !isPasscode) {
       return res.status(403).json({ error: 'Invalid admin authorization credentials' });
@@ -1782,7 +1799,36 @@ app.post('/api/msksksnuwje/claim-admin', async (req, res) => {
     });
   } catch (err: any) {
     console.error('Error claiming admin:', err);
-    res.status(500).json({ error: err.message || 'Failed to claim admin' });
+    res.status(500).json({ error: 'Failed to claim admin' });
+  }
+});
+
+// Admin/Moderator: Claim a match for review
+app.post('/api/msksksnuwje/matches/:id/claim', async (req, res) => {
+  try {
+    const adminUser = req.adminUser!;
+    const matchId = req.params.id;
+
+    const match = await getMatchFromDb(matchId);
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+
+    if (match.reviewerId && match.reviewerId !== adminUser.id) {
+      return res.status(409).json({ error: `This match is already being reviewed by ${match.reviewerName || 'another admin'}` });
+    }
+
+    match.reviewerId = adminUser.id;
+    match.reviewerName = adminUser.codmIgn || adminUser.username;
+
+    await saveMatchToDb(match);
+
+    res.json({
+      success: true,
+      message: `You have successfully claimed Match #${match.challengeCode} for review`,
+      match
+    });
+  } catch (err: any) {
+    console.error('Error claiming match:', err);
+    res.status(500).json({ error: 'Failed to claim match for review' });
   }
 });
 
@@ -7405,13 +7451,18 @@ app.post('/api/matches/:id/submit-result', rateLimitMiddleware(15, 60000), secur
 
 // Admin manual resolution directly in database
 app.post('/api/msksksnuwje/matches/:id/admin-resolve', async (req, res) => {
-  const adminUser = req.adminUser;
-  if (!adminUser || (adminUser.role !== 'admin' && adminUser.role !== 'moderator')) {
-    return res.status(403).json({ error: 'Unauthorized: Staff privileges required' });
+  const adminUser = req.adminUser!;
+  if (adminUser.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized: Full Administrative privileges required to resolve matches.' });
   }
 
   const match = await getMatchFromDb(req.params.id);
   if (!match) return res.status(404).json({ error: 'Match not found' });
+
+  // Ensure only the claimed reviewer (or any admin if not claimed) can resolve
+  if (match.reviewerId && match.reviewerId !== adminUser.id) {
+    return res.status(403).json({ error: `Forbidden: This match is currently being reviewed by ${match.reviewerName || 'another admin'}` });
+  }
 
   const { winnerId } = req.body;
 
@@ -7897,9 +7948,14 @@ app.post('/api/msksksnuwje/matches/:id/abandon', async (req, res) => {
   try {
     const matchId = req.params.id;
     const { userId, reason = 'Admin settled as abandoned' } = req.body || {};
-    const adminUser = req.adminUser;
-    if (!adminUser || (adminUser.role !== 'admin' && adminUser.role !== 'moderator')) {
+    const adminUser = req.adminUser!;
+    if (adminUser.role !== 'admin' && adminUser.role !== 'moderator') {
       return res.status(403).json({ error: 'Unauthorized: Staff privileges required' });
+    }
+
+    const match = await getMatchFromDb(matchId);
+    if (match && match.reviewerId && match.reviewerId !== adminUser.id) {
+      return res.status(403).json({ error: `Forbidden: This match is assigned to ${match.reviewerName}` });
     }
 
     const result = await settleAbandonedMatch(matchId, reason);
@@ -8011,6 +8067,8 @@ app.get('/api/msksksnuwje/review-queue', async (req, res) => {
         winnerIgn: m.winner_ign || undefined,
         resolutionNotes: m.resolution_notes || undefined,
         chatMessages: typeof m.chat_messages === 'string' ? JSON.parse(m.chat_messages) : (m.chat_messages || []),
+        reviewerId: m.reviewer_id || undefined,
+        reviewerName: m.reviewer_name || undefined,
       };
 
       const conflictInfo = computeMatchConflictReasons(matchObj);
@@ -8049,6 +8107,10 @@ app.post('/api/msksksnuwje/matches/:id/resubmit', async (req, res) => {
 
     const match = await getMatchFromDb(req.params.id);
     if (!match) return res.status(404).json({ error: 'Match not found' });
+
+    if (match.reviewerId && match.reviewerId !== adminUser.id) {
+      return res.status(403).json({ error: `Forbidden: This match is assigned to ${match.reviewerName}` });
+    }
 
     const targetNoticeReason = reason || 'Screenshot proof rejected. Please upload an unedited, full-screen CODM landscape scoreboard.';
     const isTargetCreator = !targetPlayerId || targetPlayerId === 'both' || match.creator.id === targetPlayerId;
@@ -8118,6 +8180,10 @@ app.post('/api/msksksnuwje/matches/:id/escalate', async (req, res) => {
 
     const match = await getMatchFromDb(req.params.id);
     if (!match) return res.status(404).json({ error: 'Match not found' });
+
+    if (match.reviewerId && match.reviewerId !== adminUser.id) {
+      return res.status(403).json({ error: `Forbidden: This match is assigned to ${match.reviewerName}` });
+    }
 
     const auditReason = reason || 'Escalated to high-priority manual referee review';
     match.status = 'DISPUTED';

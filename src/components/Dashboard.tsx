@@ -311,7 +311,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     {/* Contender info */}
                     <div className="flex items-center gap-2.5 mb-3">
                       <img
-                        src={m.creator.avatar}
+                        src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(m.creator.codmIgn)}`}
                         alt={m.creator.codmIgn}
                         className="w-10 h-10 rounded-xl object-cover bg-neutral-800"
                         referrerPolicy="no-referrer"

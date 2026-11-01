@@ -182,7 +182,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               title="View Player Profile"
             >
               <img
-                src={currentUser.avatar}
+                src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(currentUser.codmIgn)}`}
                 alt={currentUser.codmIgn}
                 className="w-7 h-7 rounded-lg object-cover bg-neutral-800"
                 referrerPolicy="no-referrer"
@@ -279,7 +279,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
                     <img
-                      src={currentUser.avatar}
+                      src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(currentUser.codmIgn)}`}
                       alt={currentUser.codmIgn}
                       className="w-11 h-11 rounded-xl object-cover border border-amber-500/50 bg-neutral-800"
                       referrerPolicy="no-referrer"

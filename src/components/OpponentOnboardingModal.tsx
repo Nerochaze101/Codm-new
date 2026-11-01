@@ -121,7 +121,7 @@ export const OpponentOnboardingModal: React.FC<OpponentOnboardingModalProps> = (
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <img
-                  src={match.creator.avatar}
+                  src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(match.creator.codmIgn)}`}
                   alt={match.creator.codmIgn}
                   className="w-10 h-10 rounded-lg object-cover bg-neutral-800"
                   referrerPolicy="no-referrer"

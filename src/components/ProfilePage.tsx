@@ -30,13 +30,7 @@ interface ProfilePageProps {
   onNavigateToReferrals: () => void;
 }
 
-const AVATAR_OPTIONS = [
-  'https://images.unsplash.com/photo-1566492031773-4f4e44671857?auto=format&fit=crop&w=300&q=80',
-  'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=300&q=80',
-  'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?auto=format&fit=crop&w=300&q=80',
-  'https://images.unsplash.com/photo-1580489944761-15a19d654956?auto=format&fit=crop&w=300&q=80',
-  'https://images.unsplash.com/photo-1628157582853-a796fa650a6a?auto=format&fit=crop&w=300&q=80',
-];
+
 
 export const ProfilePage: React.FC<ProfilePageProps> = ({
   currentUser,
@@ -56,7 +50,6 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
   const [editUid, setEditUid] = useState(currentUser.codmUid);
   const [editEmail, setEditEmail] = useState(currentUser.email);
   const [editPhone, setEditPhone] = useState(currentUser.phone);
-  const [selectedAvatar, setSelectedAvatar] = useState(currentUser.avatar);
   const [copiedUid, setCopiedUid] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
@@ -267,12 +260,13 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (onUpdateUser) {
+      const cleanIgn = editIgn.trim() || currentUser.codmIgn;
       await onUpdateUser({
-        codmIgn: editIgn.trim() || currentUser.codmIgn,
+        codmIgn: cleanIgn,
         codmUid: editUid.trim() || currentUser.codmUid,
         email: editEmail.trim() || currentUser.email,
         phone: editPhone.trim() || currentUser.phone,
-        avatar: selectedAvatar,
+        avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanIgn)}`,
       });
     }
     setIsEditing(false);
@@ -292,11 +286,10 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
             <div className="relative shrink-0">
               <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl overflow-hidden border-2 border-amber-400 bg-neutral-950 shadow-lg">
                 <img
-                  src={currentUser.avatar}
+                  src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(currentUser.codmIgn)}`}
                   alt={currentUser.codmIgn}
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
-                  onError={(e) => { (e.target as HTMLImageElement).src = AVATAR_OPTIONS[0]; }}
                 />
               </div>
             </div>
@@ -744,22 +737,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
             </div>
 
             <form onSubmit={handleSaveProfile} className="space-y-4">
-              {/* Avatar Selector */}
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-neutral-400 uppercase">Select Avatar</label>
-                <div className="flex gap-3 overflow-x-auto pb-2">
-                  {AVATAR_OPTIONS.map((av, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => setSelectedAvatar(av)}
-                      className={`relative w-14 h-14 rounded-xl overflow-hidden border-2 shrink-0 ${selectedAvatar === av ? 'border-amber-400 scale-105' : 'border-neutral-800 opacity-60'}`}
-                    >
-                      <img src={av} alt="" className="w-full h-full object-cover" />
-                    </button>
-                  ))}
-                </div>
-              </div>
+
 
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-neutral-400 uppercase">CODM In-Game Name (IGN)</label>

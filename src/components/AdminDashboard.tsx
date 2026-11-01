@@ -39,7 +39,9 @@ import {
   ZoomIn,
   Camera,
   Maximize2,
-  ShieldAlert
+  ShieldAlert,
+  Handshake,
+  Lock
 } from 'lucide-react';
 import {
   fetchAdminUsers,
@@ -67,6 +69,7 @@ import {
   fetchFlaggedAccounts,
   dismissAccountFlag,
   banDuplicateAccount,
+  claimMatchReview,
   GmailIntegrationStatus,
   AdminEmailItem,
   FlaggedAccountItem,
@@ -444,6 +447,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
       await Promise.all([loadReviewQueue(), loadDisputes()]);
     } catch (err: any) {
       setEscalateModal(prev => ({ ...prev, isSubmitting: false, error: err.message || 'Failed to escalate match' }));
+    }
+  };
+
+  const handleClaimMatch = async (matchId: string) => {
+    try {
+      setRefreshing(true);
+      await claimMatchReview(matchId, currentUser.id);
+      await loadReviewQueue();
+    } catch (err: any) {
+      alert(err.message || 'Failed to claim match for review');
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -1024,13 +1039,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                           </div>
                         </div>
 
-                        <div className="text-right">
-                          <div className="text-base font-black text-emerald-400 font-mono">
-                            ₦{match.potAmount.toLocaleString()} POT
+                        <div className="text-right flex flex-col items-end gap-2">
+                          <div className="flex flex-col items-end">
+                            <div className="text-base font-black text-emerald-400 font-mono">
+                              ₦{match.potAmount.toLocaleString()} POT
+                            </div>
+                            <div className="text-[10px] text-neutral-500 font-mono">
+                              ₦{match.stakeAmount.toLocaleString()} stake · ₦{match.winnerPayout.toLocaleString()} payout
+                            </div>
                           </div>
-                          <div className="text-[10px] text-neutral-500 font-mono">
-                            ₦{match.stakeAmount.toLocaleString()} stake · ₦{match.winnerPayout.toLocaleString()} payout
-                          </div>
+
+                          {/* Reviewer Assignment Badge */}
+                          {match.reviewerId ? (
+                            <div className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest border flex items-center gap-1.5 ${
+                              match.reviewerId === currentUser.id 
+                                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
+                                : 'bg-neutral-800 border-neutral-700 text-neutral-500'
+                            }`}>
+                              {match.reviewerId === currentUser.id ? (
+                                <><UserCheck size={12} /> Reviewing (You)</>
+                              ) : (
+                                <><Shield size={12} /> Claimed by {match.reviewerName || 'Staff'}</>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest bg-amber-500/10 border border-amber-500/30 text-amber-400 animate-pulse">
+                              Unclaimed
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -1062,7 +1098,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                         <div className="p-4 rounded-2xl bg-black/40 border border-neutral-800 space-y-3.5">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2.5 min-w-0">
-                              <img src={match.creator.avatar} alt="" className="w-8 h-8 rounded-lg bg-neutral-800 border border-neutral-700 object-cover shrink-0" />
+                              <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(match.creator.codmIgn)}`} alt="" className="w-8 h-8 rounded-lg bg-neutral-800 border border-neutral-700 object-cover shrink-0" />
                               <div className="min-w-0">
                                 <div className="text-xs font-black text-white truncate">{match.creator.codmIgn}</div>
                                 <div className="text-[9px] text-neutral-500 font-mono">HOST · UID: {match.creator.codmUid.slice(-6)}</div>
@@ -1171,7 +1207,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                         <div className="p-4 rounded-2xl bg-black/40 border border-neutral-800 space-y-3.5">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2.5 min-w-0">
-                              <img src={match.opponent?.avatar || '/placeholder.png'} alt="" className="w-8 h-8 rounded-lg bg-neutral-800 border border-neutral-700 object-cover shrink-0" />
+                              <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(match.opponent?.codmIgn || 'player')}`} alt="" className="w-8 h-8 rounded-lg bg-neutral-800 border border-neutral-700 object-cover shrink-0" />
                               <div className="min-w-0">
                                 <div className="text-xs font-black text-white truncate">{match.opponent?.codmIgn || 'Awaiting Opponent'}</div>
                                 <div className="text-[9px] text-neutral-500 font-mono">RIVAL · UID: {match.opponent?.codmUid?.slice(-6) || 'N/A'}</div>
@@ -1277,62 +1313,82 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                         </div>
                       </div>
 
-                      {/* 3 Quick-Action Moderation Buttons */}
-                      <div className="pt-2 border-t border-neutral-800/80 flex flex-wrap items-center gap-3">
-                        {/* 1. Approve Payout */}
-                        <button
-                          type="button"
-                          onClick={() => setPayoutModal({
-                            isOpen: true,
-                            match,
-                            selectedWinnerId: match.creator.resultClaim === 'VICTORY' && match.opponent?.resultClaim !== 'VICTORY'
-                              ? match.creator.id
-                              : match.opponent?.resultClaim === 'VICTORY' && match.creator.resultClaim !== 'VICTORY'
-                              ? (match.opponent?.id || match.creator.id)
-                              : match.creator.id,
-                            isSubmitting: false,
-                            error: null,
-                          })}
-                          className="flex-1 py-3 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-emerald-500/10 active:scale-98"
-                        >
-                          <CheckCircle size={15} />
-                          <span>Approve Payout</span>
-                        </button>
+                      {/* Moderation Actions */}
+                      <div className="pt-2 border-t border-neutral-800/80">
+                        {!match.reviewerId ? (
+                          <button
+                            type="button"
+                            onClick={() => handleClaimMatch(match.id)}
+                            className="w-full py-4 px-4 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-sm uppercase tracking-widest transition-all flex items-center justify-center gap-3 cursor-pointer shadow-lg shadow-amber-400/20 active:scale-[0.98]"
+                          >
+                            <Handshake size={20} />
+                            <span>🤝 Claim for Review</span>
+                          </button>
+                        ) : match.reviewerId === currentUser.id ? (
+                          <div className="flex flex-wrap items-center gap-3">
+                            {/* 1. Approve Payout (Full Admin Only) */}
+                            {currentUser.role === 'admin' && (
+                              <button
+                                type="button"
+                                onClick={() => setPayoutModal({
+                                  isOpen: true,
+                                  match,
+                                  selectedWinnerId: match.creator.resultClaim === 'VICTORY' && match.opponent?.resultClaim !== 'VICTORY'
+                                    ? match.creator.id
+                                    : match.opponent?.resultClaim === 'VICTORY' && match.creator.resultClaim !== 'VICTORY'
+                                    ? (match.opponent?.id || match.creator.id)
+                                    : match.creator.id,
+                                  isSubmitting: false,
+                                  error: null,
+                                })}
+                                className="flex-1 py-3 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-emerald-500/10 active:scale-98"
+                              >
+                                <CheckCircle size={15} />
+                                <span>Approve Payout</span>
+                              </button>
+                            )}
 
-                        {/* 2. Reject & Request Resubmission */}
-                        <button
-                          type="button"
-                          onClick={() => setResubmitModal({
-                            isOpen: true,
-                            match,
-                            targetPlayerId: 'both',
-                            reason: hasAiFlags
-                              ? 'Uploaded screenshot contains synthetic AI artifacts or non-standard mobile dimensions. Please upload an authentic, unedited in-game landscape screenshot.'
-                              : 'Scoreboard proof rejected. Please upload an unedited full-screen CODM landscape scoreboard screenshot showing room code and player stats clearly.',
-                            isSubmitting: false,
-                            error: null,
-                          })}
-                          className="flex-1 py-3 px-4 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-amber-400/10 active:scale-98"
-                        >
-                          <RotateCcw size={15} />
-                          <span>Reject & Request Resubmission</span>
-                        </button>
+                            {/* 2. Reject & Request Resubmission */}
+                            <button
+                              type="button"
+                              onClick={() => setResubmitModal({
+                                isOpen: true,
+                                match,
+                                targetPlayerId: 'both',
+                                reason: hasAiFlags
+                                  ? 'Uploaded screenshot contains synthetic AI artifacts or non-standard mobile dimensions. Please upload an authentic, unedited in-game landscape screenshot.'
+                                  : 'Scoreboard proof rejected. Please upload an unedited full-screen CODM landscape scoreboard screenshot showing room code and player stats clearly.',
+                                isSubmitting: false,
+                                error: null,
+                              })}
+                              className="flex-1 py-3 px-4 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-amber-400/10 active:scale-98"
+                            >
+                              <RotateCcw size={15} />
+                              <span>Reject & Request Resubmission</span>
+                            </button>
 
-                        {/* 3. Escalate to Manual Review */}
-                        <button
-                          type="button"
-                          onClick={() => setEscalateModal({
-                            isOpen: true,
-                            match,
-                            reason: match.conflictReason || 'Escalated by Admin for detailed referee inspection.',
-                            isSubmitting: false,
-                            error: null,
-                          })}
-                          className="py-3 px-4 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer border border-neutral-700 active:scale-98"
-                        >
-                          <Shield size={15} />
-                          <span>Escalate</span>
-                        </button>
+                            {/* 3. Escalate to Manual Review */}
+                            <button
+                              type="button"
+                              onClick={() => setEscalateModal({
+                                isOpen: true,
+                                match,
+                                reason: match.conflictReason || 'Escalated by Admin for detailed referee inspection.',
+                                isSubmitting: false,
+                                error: null,
+                              })}
+                              className="py-3 px-4 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer border border-neutral-700 active:scale-98"
+                            >
+                              <Shield size={15} />
+                              <span>Escalate</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="w-full py-4 px-4 rounded-xl bg-neutral-800/50 border border-neutral-800 text-neutral-500 font-bold text-xs uppercase tracking-widest flex items-center justify-center gap-3">
+                            <Lock size={16} />
+                            <span>Locked for Review by {match.reviewerName || 'Staff'}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -1738,21 +1794,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                                >
                                  <Coins size={18} />
                                </button>
-                               <button 
-                                onClick={async () => { 
-                                  const roles: ('user' | 'moderator' | 'admin')[] = ['user', 'moderator', 'admin'];
-                                  const currentIndex = roles.indexOf(u.role as any);
-                                  const nextRole = roles[(currentIndex + 1) % roles.length];
-                                  if(confirm(`Promote/Demote ${u.codmIgn} to ${nextRole.toUpperCase()}?`)) { 
-                                    await assignUserRole(currentUser.id, { targetUserId: u.id, role: nextRole }); 
-                                    loadUsers(); 
-                                  } 
-                                }} 
-                                className={`p-3 rounded-2xl transition-all border border-neutral-800 active:scale-90 ${u.role === 'admin' ? 'bg-rose-500/10 text-rose-500 hover:bg-rose-500/20' : u.role === 'moderator' ? 'bg-amber-500/10 text-amber-500 hover:bg-amber-500/20' : 'bg-blue-500/10 text-blue-400 hover:bg-blue-500/20'}`}
-                                title={`Change Role (Current: ${u.role})`}
-                               >
-                                 <Shield size={18} />
-                               </button>
+                               {currentUser.email?.toLowerCase() === 'onelly103@gmail.com' && (
+                                 <button 
+                                  onClick={async () => { 
+                                    const roles: ('user' | 'moderator' | 'admin')[] = ['user', 'moderator', 'admin'];
+                                    const currentIndex = roles.indexOf(u.role as any);
+                                    const nextRole = roles[(currentIndex + 1) % roles.length];
+                                    if(confirm(`Promote/Demote ${u.codmIgn} to ${nextRole.toUpperCase()}?`)) { 
+                                      await assignUserRole(currentUser.id, { targetUserId: u.id, role: nextRole }); 
+                                      loadUsers(); 
+                                    } 
+                                  }} 
+                                  className={`p-3 rounded-2xl transition-all border border-neutral-800 active:scale-90 ${u.role === 'admin' ? 'bg-rose-500/10 text-rose-500 hover:bg-rose-500/20' : u.role === 'moderator' ? 'bg-amber-500/10 text-amber-500 hover:bg-amber-500/20' : 'bg-blue-500/10 text-blue-400 hover:bg-blue-500/20'}`}
+                                  title={`Change Role (Current: ${u.role})`}
+                                 >
+                                   <Shield size={18} />
+                                 </button>
+                               )}
                              </div>
                           </td>
                         </tr>
@@ -2059,7 +2117,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                     <div className="space-y-6">
                        <div className="flex items-center justify-between px-4">
                           <div className="flex items-center gap-3">
-                             <img src={selectedDispute.creator.avatar} className="w-10 h-10 rounded-xl bg-neutral-800 border border-neutral-700" alt="" />
+                             <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(selectedDispute.creator.codmIgn)}`} className="w-10 h-10 rounded-xl bg-neutral-800 border border-neutral-700" alt="" />
                              <div>
                                <p className="text-sm font-black text-white uppercase tracking-tight">{selectedDispute.creator.codmIgn}</p>
                                <p className="text-[10px] text-neutral-500 font-mono">CLAIM: {selectedDispute.creator.resultClaim || 'NONE'}</p>
@@ -2140,7 +2198,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                     <div className="space-y-6">
                        <div className="flex items-center justify-between px-4">
                           <div className="flex items-center gap-3">
-                             <img src={selectedDispute.opponent?.avatar} className="w-10 h-10 rounded-xl bg-neutral-800 border border-neutral-700" alt="" />
+                             <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(selectedDispute.opponent?.codmIgn || 'player')}`} className="w-10 h-10 rounded-xl bg-neutral-800 border border-neutral-700" alt="" />
                              <div>
                                <p className="text-sm font-black text-white uppercase tracking-tight">{selectedDispute.opponent?.codmIgn || 'Awaiting Opponent'}</p>
                                <p className="text-[10px] text-neutral-500 font-mono">CLAIM: {selectedDispute.opponent?.resultClaim || 'NONE'}</p>
@@ -2292,7 +2350,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <img src={payoutModal.match.creator.avatar} alt="" className="w-8 h-8 rounded-lg bg-neutral-800 object-cover" />
+                  <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(payoutModal.match.creator.codmIgn)}`} alt="" className="w-8 h-8 rounded-lg bg-neutral-800 object-cover" />
                   <div>
                     <div className="font-bold text-xs text-white">{payoutModal.match.creator.codmIgn} (Host)</div>
                     <div className="text-[10px] text-neutral-500 font-mono">Claimed: {payoutModal.match.creator.resultClaim || 'None'}</div>
@@ -2315,7 +2373,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                   }`}
                 >
                   <div className="flex items-center gap-3">
-                    <img src={payoutModal.match.opponent.avatar} alt="" className="w-8 h-8 rounded-lg bg-neutral-800 object-cover" />
+                    <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(payoutModal.match.opponent.codmIgn)}`} alt="" className="w-8 h-8 rounded-lg bg-neutral-800 object-cover" />
                     <div>
                       <div className="font-bold text-xs text-white">{payoutModal.match.opponent.codmIgn} (Rival)</div>
                       <div className="text-[10px] text-neutral-500 font-mono">Claimed: {payoutModal.match.opponent.resultClaim || 'None'}</div>

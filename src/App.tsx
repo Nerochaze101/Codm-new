@@ -52,7 +52,7 @@ function MainApp() {
     wins: 0,
     losses: 0,
     draws: 0,
-    avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=gamer',
+    avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=CODM_Gamer',
     transactions: [],
   });
   const [matches, setMatches] = useState<Match[]>([]);
@@ -658,7 +658,7 @@ function MainApp() {
       wins: 0,
       losses: 0,
       draws: 0,
-      avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=gamer',
+      avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=CODM_Gamer',
       transactions: [],
     });
     navigate('/');

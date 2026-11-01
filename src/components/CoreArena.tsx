@@ -314,7 +314,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                         </div>
 
                         <div className="flex items-center gap-2.5 mb-3">
-                          <img src={m.creator.avatar} alt="" className="w-8 h-8 rounded-lg bg-neutral-800 object-cover" />
+                          <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(m.creator.codmIgn)}`} alt="" className="w-8 h-8 rounded-lg bg-neutral-800 object-cover" />
                           <div className="min-w-0 flex-1">
                             <div className="text-xs font-bold text-white truncate">{m.creator.codmIgn}</div>
                             <div className="text-[10px] text-neutral-400 truncate">{m.gameMode} · {m.map}</div>
@@ -534,7 +534,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                                   <span className="text-[10px] font-mono text-neutral-500 w-4 shrink-0">#{idx + 1}</span>
                                   {slot.staked ? (
                                     <>
-                                      <img src={slot.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${slot.codmIgn || 'player'}`} alt="" className="w-6 h-6 rounded-md bg-neutral-800 shrink-0 object-cover" />
+                                      <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(slot.codmIgn || 'player')}`} alt="" className="w-6 h-6 rounded-md bg-neutral-800 shrink-0 object-cover" />
                                       <div className="min-w-0 flex-1">
                                         <div className="font-bold text-white text-[11px] truncate flex items-center gap-1">
                                           <span>{slot.codmIgn}</span>
@@ -598,7 +598,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                                   <span className="text-[10px] font-mono text-neutral-500 w-4 shrink-0">#{idx + 6}</span>
                                   {slot.staked ? (
                                     <>
-                                      <img src={slot.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${slot.codmIgn || 'player'}`} alt="" className="w-6 h-6 rounded-md bg-neutral-800 shrink-0 object-cover" />
+                                      <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(slot.codmIgn || 'player')}`} alt="" className="w-6 h-6 rounded-md bg-neutral-800 shrink-0 object-cover" />
                                       <div className="min-w-0 flex-1">
                                         <div className="font-bold text-white text-[11px] truncate flex items-center gap-1">
                                           <span>{slot.codmIgn}</span>
@@ -655,7 +655,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                       return (
                         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 rounded-xl bg-neutral-900 border border-neutral-800/80">
                           <div className="flex items-center gap-3 min-w-0 w-full sm:w-auto">
-                            <img src={rival?.avatar || 'https://api.dicebear.com/7.x/bottts/svg?seed=rival'} alt="" className="w-10 h-10 rounded-xl bg-neutral-800 shrink-0 object-cover" />
+                            <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(rival?.codmIgn || 'player')}`} alt="" className="w-10 h-10 rounded-xl bg-neutral-800 shrink-0 object-cover" />
                             <div className="min-w-0 flex-1">
                               <div className="text-xs font-bold text-white truncate flex items-center gap-1">
                                 <span>{rival?.codmIgn || 'Awaiting Opponent...'}</span>

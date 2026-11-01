@@ -3,7 +3,7 @@ import { Match, UserProfile, ChatMessage } from '../types';
 import {
   Swords, ShieldCheck, Trophy, Copy, Check, Upload, Send, AlertTriangle,
   CheckCircle2, Clock, Sparkles, MessageSquare, ArrowLeft, RefreshCw, FileText,
-  Lock, Share2, UserCheck, Zap, Shield, XCircle
+  Lock, Share2, UserCheck, Zap, Shield, XCircle, Film
 } from 'lucide-react';
 import { StakePaymentModal } from './StakePaymentModal';
 import { MatchLobbyChat } from './MatchLobbyChat';
@@ -657,7 +657,7 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
 
             <div className="flex items-center gap-3">
               <img
-                src={match.creator.avatar}
+                src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(match.creator.codmIgn)}`}
                 alt={match.creator.codmIgn}
                 className="w-12 h-12 rounded-xl object-cover bg-neutral-800"
                 referrerPolicy="no-referrer"
@@ -722,7 +722,7 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
             {match.opponent ? (
               <div className="flex items-center gap-3">
                 <img
-                  src={match.opponent.avatar}
+                  src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(match.opponent.codmIgn)}`}
                   alt={match.opponent.codmIgn}
                   className="w-12 h-12 rounded-xl object-cover bg-neutral-800"
                   referrerPolicy="no-referrer"
@@ -890,7 +890,7 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                 </div>
 
                 <div className="space-y-3 pt-2 border-t border-rose-500/20">
-                  <div className="flex flex-col sm:flex-row items-center gap-2">
+                  <div className="flex flex-col sm:flex-row items-center gap-2 flex-wrap">
                     <input
                       type="file"
                       ref={fileInputRef}
@@ -898,18 +898,42 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                       onChange={handleFileUpload}
                       className="hidden"
                     />
+                    <input
+                      type="file"
+                      id="videoUploadInput"
+                      accept="video/*"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onload = () => {
+                            setScreenshotPreview(reader.result as string);
+                          };
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                      className="hidden"
+                    />
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      className="w-full sm:w-auto px-4 py-2 bg-rose-500 hover:bg-rose-400 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2"
+                      className="px-4 py-2 bg-rose-500 hover:bg-rose-400 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2"
                     >
                       <Upload className="w-4 h-4" />
-                      <span>{screenshotPreview ? 'Change Scoreboard' : 'Upload Scoreboard Screenshot'}</span>
+                      <span>Upload Scoreboard Screenshot</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => document.getElementById('videoUploadInput')?.click()}
+                      className="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      <Film className="w-4 h-4" />
+                      <span>Upload Screen Record (Video)</span>
                     </button>
                     <button
                       type="button"
                       onClick={useSampleVictoryScreenshot}
-                      className="w-full sm:w-auto px-3.5 py-2 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs font-bold rounded-xl transition-colors cursor-pointer whitespace-nowrap"
+                      className="px-3.5 py-2 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs font-bold rounded-xl transition-colors cursor-pointer whitespace-nowrap"
                     >
                       Use Demo Scoreboard
                     </button>

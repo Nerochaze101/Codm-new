@@ -284,6 +284,8 @@ export async function initDatabase() {
         result_submitted_at BIGINT,
         result_submitted_by VARCHAR(255),
         is_public BOOLEAN DEFAULT true,
+        reviewer_id VARCHAR(255),
+        reviewer_name VARCHAR(255),
         creator_screenshot TEXT,
         opponent_screenshot TEXT
       );
@@ -295,6 +297,8 @@ export async function initDatabase() {
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS match_type VARCHAR(50) DEFAULT 'solo';
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS squad_data JSONB;
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS conflict_retries INT DEFAULT 0;
+      ALTER TABLE matches ADD COLUMN IF NOT EXISTS reviewer_id VARCHAR(255);
+      ALTER TABLE matches ADD COLUMN IF NOT EXISTS reviewer_name VARCHAR(255);
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS creator_screenshot TEXT;
       ALTER TABLE matches ADD COLUMN IF NOT EXISTS opponent_screenshot TEXT;
 

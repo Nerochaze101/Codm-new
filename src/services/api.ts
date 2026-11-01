@@ -574,6 +574,19 @@ export async function adminEscalateMatch(params: {
   return await res.json();
 }
 
+export async function claimMatchReview(matchId: string, adminUserId: string): Promise<{ success: boolean; match: Match }> {
+  const res = await fetch(`/api/msksksnuwje/matches/${matchId}/claim`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
+    body: JSON.stringify({ userId: adminUserId }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to claim match for review');
+  }
+  return await res.json();
+}
+
 export async function analyzeScreenshotForensic(params: {
   adminUserId: string;
   screenshotBase64: string;
