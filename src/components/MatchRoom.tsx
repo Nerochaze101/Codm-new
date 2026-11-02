@@ -51,6 +51,8 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
   const [isRoomCashoutSubmitting, setIsRoomCashoutSubmitting] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentRole, setPaymentRole] = useState<'opponent' | 'creator'>('opponent');
+  const [isReadingFile, setIsReadingFile] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -138,11 +140,40 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      // Validate file size (max 50MB for screen recordings)
+      if (file.size > 50 * 1024 * 1024) {
+        setSubmitError("File is too large (Max 50MB). Please trim your screen recording.");
+        return;
+      }
+
+      setIsReadingFile(true);
+      setSubmitError(null);
+      
       const reader = new FileReader();
+      
+      reader.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const progress = Math.round((event.loaded / event.total) * 100);
+          setUploadProgress(progress);
+        }
+      };
+
       reader.onload = () => {
         setScreenshotPreview(reader.result as string);
+        setIsReadingFile(false);
+        setUploadProgress(0);
       };
-      reader.readAsDataURL(file);
+
+      reader.onerror = () => {
+        setSubmitError("Failed to read file. Please try again.");
+        setIsReadingFile(false);
+        setUploadProgress(0);
+      };
+
+      // Use a timeout to allow the UI to update with "Reading..." state before heavy processing
+      setTimeout(() => {
+        reader.readAsDataURL(file);
+      }, 50);
     }
   };
 
@@ -932,12 +963,28 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
 
               <div className="p-3 rounded-lg bg-neutral-950/80 border border-sky-500/30 space-y-1 sm:col-span-2">
                 <div className="font-bold text-sky-400 flex items-center justify-between">
-                  <span>5. Admin Screen Recording Telegram Group</span>
+                  <span>5. Admin Evidence Group</span>
                   <a href="https://t.me/+I5vcFF4RXwJkMWVk" target="_blank" rel="noopener noreferrer" className="text-[10px] bg-sky-500 text-black px-2 py-0.5 rounded font-black hover:bg-sky-400">Join Telegram</a>
                 </div>
-                <p className="text-neutral-300 text-xs">
-                  Admins and players must join the official Telegram group for screen recordings and evidence review: <a href="https://t.me/+I5vcFF4RXwJkMWVk" target="_blank" rel="noopener noreferrer" className="text-sky-400 underline font-mono">https://t.me/+I5vcFF4RXwJkMWVk</a>
+                <p className="text-neutral-300 text-xs leading-relaxed">
+                  Join the official Telegram group for instant evidence review: <a href="https://t.me/+I5vcFF4RXwJkMWVk" target="_blank" rel="noopener noreferrer" className="text-sky-400 underline font-mono">https://t.me/+I5vcFF4RXwJkMWVk</a>
                 </p>
+              </div>
+
+              <div className="p-3 rounded-lg bg-black/60 border border-amber-500/30 space-y-2 sm:col-span-2">
+                <div className="font-bold text-amber-400 flex items-center gap-2">
+                  <Film size={14} />
+                  <span>6. Video Guide: How to Screen Record Your Victory</span>
+                </div>
+                <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-neutral-800 bg-black mt-1">
+                  <iframe
+                    src="https://www.youtube.com/embed/L8s4zUbMoMo"
+                    title="How to make a screen recording of your winning"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowFullScreen
+                    className="w-full h-full border-0"
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -1052,7 +1099,7 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                       className="px-4 py-2 bg-rose-500 hover:bg-rose-400 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2"
                     >
                       <Upload className="w-4 h-4" />
-                      <span>Upload Scoreboard Screenshot</span>
+                      <span>{isReadingFile ? 'Reading...' : 'Upload Scoreboard Screenshot'}</span>
                     </button>
                     <button
                       type="button"
@@ -1060,7 +1107,7 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                       className="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2"
                     >
                       <Film className="w-4 h-4" />
-                      <span>Upload Screen Record (Video)</span>
+                      <span>{isReadingFile ? 'Processing...' : 'Upload Screen Record (Video)'}</span>
                     </button>
                     <button
                       type="button"
@@ -1071,18 +1118,36 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                     </button>
                   </div>
 
-                  {/* Video Guide: How to make a screen recording of winning */}
-                  <div className="p-4 rounded-2xl bg-black/80 border border-sky-500/40 space-y-2 text-left animate-in fade-in duration-300">
+                  {isReadingFile && (
+                    <div className="p-4 rounded-xl bg-sky-500/10 border border-sky-500/30 space-y-3 animate-pulse">
+                      <div className="flex items-center justify-between text-[10px] font-black text-sky-400 uppercase tracking-widest">
+                        <span>Background Processing Evidence...</span>
+                        <span>{uploadProgress}%</span>
+                      </div>
+                      <div className="w-full h-1.5 bg-sky-950 rounded-full overflow-hidden">
+                        <div 
+                          className="h-full bg-sky-500 transition-all duration-300" 
+                          style={{ width: `${uploadProgress}%` }}
+                        />
+                      </div>
+                      <p className="text-[10px] text-neutral-400 italic">
+                        Processing large screen recording in background. Please wait for completion.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Persistent Hardcoded Video Guide for Conflict Resolution - Moved ABOVE preview for instant visibility */}
+                  <div className="p-4 rounded-2xl bg-black/80 border border-sky-500/40 space-y-2 text-left animate-in fade-in duration-300 shadow-xl">
                     <div className="flex items-center gap-2 text-sky-400 font-bold text-xs uppercase tracking-wide">
                       <Film className="w-4 h-4" />
-                      <span>How to Make a Screen Recording of Your Victory (Video Guide)</span>
+                      <span>Instant Video Tutorial: How to Record Your Screen</span>
                     </div>
-                    <p className="text-[11px] text-neutral-300 leading-relaxed">
-                      Watch this step-by-step video tutorial below to learn how to properly record your screen and victory scoreboard for dispute resolution:
+                    <p className="text-[11px] text-neutral-400 leading-relaxed italic">
+                      Watch this guide instantly to ensure your evidence is valid for referee review.
                     </p>
-                    <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-neutral-800 bg-black mt-2 shadow-lg">
+                    <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-neutral-800 bg-black mt-2 shadow-2xl">
                       <iframe
-                        src="https://www.youtube.com/embed/L8s4zUbMoMo"
+                        src="https://www.youtube.com/embed/L8s4zUbMoMo?autoplay=0&rel=0"
                         title="How to make a screen recording of your winning"
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                         allowFullScreen
@@ -1092,14 +1157,16 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                   </div>
 
                   {screenshotPreview && (
-                    <div className="h-44 rounded-xl overflow-hidden border border-rose-500/50 relative bg-black">
+                    <div className="h-56 rounded-xl overflow-hidden border-2 border-emerald-500/50 relative bg-black shadow-2xl animate-in zoom-in-95">
                       <img
                         src={screenshotPreview}
                         alt="Scoreboard Preview"
                         className="w-full h-full object-contain"
                       />
-                      <div className="absolute top-2 right-2 px-2.5 py-1 rounded bg-black/90 text-[10px] text-emerald-400 font-bold border border-emerald-500/40 font-mono">
-                        PROOF READY FOR REFEREE REVIEW
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
+                      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full bg-emerald-500 text-black text-[10px] font-black uppercase tracking-widest shadow-lg flex items-center gap-1.5">
+                        <CheckCircle2 size={12} />
+                        <span>PROOF READY FOR REVIEW</span>
                       </div>
                     </div>
                   )}

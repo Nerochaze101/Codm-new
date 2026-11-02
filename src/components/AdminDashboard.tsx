@@ -299,7 +299,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
 
   const loadFeeSettings = async () => {
     try {
-      const res = await fetch('/api/admin/fee-settings');
+      const res = await fetch('/api/admin/fee-settings', {
+        headers: { 'X-Admin-Id': currentUser.id }
+      });
       const data = await res.json();
       if (data.soloFeePercent) setSoloFeeRate(data.soloFeePercent);
       if (data.squadFeePercent) setSquadFeeRate(data.squadFeePercent);
@@ -314,7 +316,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     try {
       const res = await fetch('/api/admin/fee-settings', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Admin-Id': currentUser.id
+        },
         body: JSON.stringify({
           userId: currentUser.id,
           soloFeePercent: soloFeeRate,
@@ -421,7 +426,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     if (!payoutModal.match || !payoutModal.selectedWinnerId) return;
     setPayoutModal(prev => ({ ...prev, isSubmitting: true, error: null }));
     try {
-      await adminResolveMatch(payoutModal.match.id, payoutModal.selectedWinnerId);
+      await adminResolveMatch(payoutModal.match.id, currentUser.id, payoutModal.selectedWinnerId);
       setPayoutModal({ isOpen: false, match: null, selectedWinnerId: '', isSubmitting: false, error: null });
       await Promise.all([loadReviewQueue(), loadFinance(), loadDisputes()]);
       if (onRefreshUser) onRefreshUser();
@@ -1725,7 +1730,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                           try {
                             const res = await fetch('/api/telegram/test-channel-post', {
                               method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
+                              headers: { 
+                                'Content-Type': 'application/json',
+                                'X-Admin-Id': currentUser.id
+                              },
                               body: JSON.stringify({ userId: currentUser.id, channelId: cid }),
                             });
                             const data = await res.json();
@@ -2433,13 +2441,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                     </div>
                     <div className="flex items-center gap-3">
                        <button 
-                         onClick={async () => { if(confirm(`Award victory and ₦${selectedDispute.winnerPayout.toLocaleString()} to ${selectedDispute.creator.codmIgn}?`)) { await adminResolveMatch(selectedDispute.id, selectedDispute.creator.id); setSelectedDispute(null); loadDisputes(); } }}
+                         onClick={async () => { if(confirm(`Award victory and ₦${selectedDispute.winnerPayout.toLocaleString()} to ${selectedDispute.creator.codmIgn}?`)) { await adminResolveMatch(selectedDispute.id, currentUser.id, selectedDispute.creator.id); setSelectedDispute(null); loadDisputes(); } }}
                          className="px-6 py-4 bg-emerald-500 text-black font-black text-[10px] uppercase tracking-widest rounded-2xl shadow-xl shadow-emerald-500/10 hover:bg-emerald-400 transition-all active:scale-95"
                        >
                          Victory to Host
                        </button>
                        <button 
-                         onClick={async () => { if(selectedDispute.opponent && confirm(`Award victory and ₦${selectedDispute.winnerPayout.toLocaleString()} to ${selectedDispute.opponent.codmIgn}?`)) { await adminResolveMatch(selectedDispute.id, selectedDispute.opponent.id); setSelectedDispute(null); loadDisputes(); } }}
+                         onClick={async () => { if(selectedDispute.opponent && confirm(`Award victory and ₦${selectedDispute.winnerPayout.toLocaleString()} to ${selectedDispute.opponent.codmIgn}?`)) { await adminResolveMatch(selectedDispute.id, currentUser.id, selectedDispute.opponent.id); setSelectedDispute(null); loadDisputes(); } }}
                          disabled={!selectedDispute.opponent}
                          className="px-6 py-4 bg-emerald-500 text-black font-black text-[10px] uppercase tracking-widest rounded-2xl shadow-xl shadow-emerald-500/10 hover:bg-emerald-400 transition-all active:scale-95 disabled:opacity-30"
                        >

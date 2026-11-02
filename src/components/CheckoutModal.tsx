@@ -56,7 +56,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [activePaymentRef, setActivePaymentRef] = useState<string>(reference);
   const [autoConfirmed, setAutoConfirmed] = useState<boolean>(false);
   const [sessionInput, setSessionInput] = useState<string>("");
-  const [showSessionPrompt, setShowSessionPrompt] = useState<boolean>(false);
   const [showSessionHelpModal, setShowSessionHelpModal] = useState<boolean>(false);
 
   const feeCalc = calculateDepositFee(amount);
@@ -139,13 +138,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     setTimeout(() => setCopiedAcc(false), 2000);
   };
 
-  const handleCopyRef = () => {
-    navigator.clipboard.writeText(activePaymentRef);
-    setCopiedRef(true);
-    setTimeout(() => setCopiedRef(false), 2000);
-  };
-
-  
   const handleVerifySession = async () => {
     if (!sessionInput.trim()) {
       setError("Please enter your transaction session ID or reference.");
@@ -262,7 +254,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             </div>
           ) : (
             <>
-              {/* Error banner */}
               {error && (
                 <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
@@ -270,7 +261,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                 </div>
               )}
 
-              {/* OPay Direct Bank Transfer Checkout (Only Bank Transfer as requested) */}
               <div className="space-y-4 animate-in fade-in duration-200">
                 <div className="p-5 rounded-2xl bg-neutral-950 border-2 border-amber-400/60 space-y-4 shadow-xl">
                   <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
@@ -336,84 +326,60 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                     Transfer exactly <strong className="text-amber-400 font-mono">₦{feeCalc.totalPayable.toLocaleString(undefined, { minimumFractionDigits: feeCalc.totalPayable % 1 !== 0 ? 2 : 0, maximumFractionDigits: 2 })}</strong> from your OPay or bank app to the account above, then click the confirmation button below.
                   </p>
 
-                  
-                  <div className="flex flex-col gap-2.5 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => setShowSessionHelpModal(true)}
-                      className="w-full py-2.5 bg-gradient-to-r from-sky-950 to-blue-950 hover:from-sky-900 hover:to-blue-900 border border-sky-500/40 text-sky-300 font-bold rounded-xl text-xs uppercase tracking-wider cursor-pointer transition-all flex items-center justify-center gap-2 shadow"
-                    >
-                      <HelpCircle className="w-4 h-4 text-sky-400" />
-                      <span>📸 How To Get Your Session ID (Receipt Guide)</span>
-                    </button>
-
-                    {!showSessionPrompt ? (
-                      <button
-                        type="button"
-                        onClick={() => setShowSessionPrompt(true)}
-                        className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs uppercase tracking-wider cursor-pointer transition-all shadow-xl flex items-center justify-center gap-2"
-                      >
-                        <CheckCircle2 className="w-4 h-4" />
-                        <span>I Have Made the Transfer</span>
-                      </button>
-                    ) : (
-                    <div className="space-y-3 pt-2 border-t border-neutral-800 animate-in fade-in duration-200">
-                      <div>
-                        <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
-                          <label className="block text-[11px] font-mono uppercase text-amber-400 font-bold">
-                            Enter Transfer Session ID / Reference
-                          </label>
+                  <div className="flex flex-col gap-4 pt-4 border-t border-neutral-800">
+                    <div className="p-5 rounded-2xl bg-sky-500/10 border-2 border-sky-500/40 space-y-4 shadow-xl">
+                       <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                             <div className="w-8 h-8 rounded-lg bg-sky-500/20 flex items-center justify-center text-sky-400">
+                                <ShieldCheck className="w-5 h-5" />
+                             </div>
+                             <label className="block text-xs font-black uppercase text-white tracking-wider">
+                                Confirm Your Transfer
+                             </label>
+                          </div>
                           <button
                             type="button"
                             onClick={() => setShowSessionHelpModal(true)}
-                            className="text-[10px] text-sky-400 hover:text-sky-300 font-bold flex items-center gap-1 cursor-pointer bg-sky-500/10 px-2 py-0.5 rounded border border-sky-500/30"
+                            className="text-[10px] text-amber-400 hover:text-amber-300 font-black flex items-center gap-1.5 cursor-pointer bg-amber-500/10 px-3 py-1.5 rounded-xl border border-amber-500/30 transition-all active:scale-95 shadow-sm"
                           >
-                            <HelpCircle className="w-3 h-3" />
-                            <span>How to get Session ID?</span>
+                            <HelpCircle className="w-3.5 h-3.5" />
+                            <span>HOW TO GET SESSION ID?</span>
                           </button>
-                        </div>
-                        <input
-                          type="text"
-                          value={sessionInput}
-                          onChange={(e) => setSessionInput(e.target.value)}
-                          placeholder="e.g. 100004261005134755173346848244"
-                          className="w-full p-3 bg-neutral-900 border border-neutral-700 rounded-xl text-white font-mono text-xs focus:border-amber-400 outline-none"
-                        />
-                        <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
-                          <p className="text-[10px] text-neutral-400">
-                            Copy the Session ID directly from your bank or OPay receipt.
+                       </div>
+                       
+                       <div className="space-y-2">
+                          <div className="relative group">
+                             <input
+                               type="text"
+                               value={sessionInput}
+                               onChange={(e) => setSessionInput(e.target.value)}
+                               placeholder="Paste Transaction Session ID or Reference"
+                               className="w-full p-4.5 bg-black border-2 border-neutral-800 rounded-2xl text-white font-mono text-sm focus:border-sky-500 outline-none transition-all placeholder:text-neutral-700 shadow-inner group-hover:border-neutral-700"
+                             />
+                             <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                               {sessionInput.length > 5 && <CheckCircle2 className="w-5 h-5 text-emerald-500" />}
+                             </div>
+                          </div>
+                          <p className="text-[10px] text-neutral-500 leading-relaxed pl-1">
+                            Find the <strong>Session ID</strong> on your bank/OPay success receipt and paste it above to credit your wallet instantly.
                           </p>
-                          <button
-                            type="button"
-                            onClick={() => setShowSessionHelpModal(true)}
-                            className="px-3 py-1.5 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white text-[10px] font-black uppercase rounded-lg transition-all shadow flex items-center gap-1.5 cursor-pointer shrink-0"
-                          >
-                            <span>📸 How To Get Session ID</span>
-                          </button>
-                        </div>
-                      </div>
+                       </div>
 
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setShowSessionPrompt(false)}
-                          className="px-4 py-3 bg-neutral-850 hover:bg-neutral-800 text-neutral-300 font-bold rounded-xl text-xs uppercase cursor-pointer"
-                        >
-                          Back
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleVerifySession}
-                          className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs uppercase tracking-wider cursor-pointer transition-all shadow-lg flex items-center justify-center gap-2"
-                        >
-                          <Zap className="w-4 h-4 fill-current" />
-                          <span>Submit & Verify Instantly</span>
-                        </button>
-                      </div>
+                       <button
+                         type="button"
+                         onClick={handleVerifySession}
+                         disabled={isVerifying || !sessionInput.trim()}
+                         className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-2xl text-xs sm:text-sm uppercase tracking-widest cursor-pointer transition-all shadow-xl flex items-center justify-center gap-3 disabled:opacity-50 active:scale-[0.98] border-b-4 border-emerald-700 hover:border-emerald-600"
+                       >
+                         {isVerifying ? (
+                           <Loader2 className="w-5 h-5 animate-spin" />
+                         ) : (
+                           <Zap className="w-5 h-5 fill-current" />
+                         )}
+                         <span>{isVerifying ? 'RECONCILING WITH BANK...' : 'I HAVE MADE THE TRANSFER - VERIFY NOW'}</span>
+                       </button>
                     </div>
-                  )}
                   </div>
-
                 </div>
               </div>
 

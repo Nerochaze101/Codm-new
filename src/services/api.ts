@@ -303,7 +303,7 @@ export async function sendMutualAction(
 export async function adminAbandonMatch(matchId: string, adminUserId: string, reason?: string): Promise<{ success: boolean; match: Match; data: any }> {
   const res = await fetch(`/api/msksksnuwje/matches/${matchId}/abandon`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
     body: JSON.stringify({ userId: adminUserId, reason }),
   });
   return await parseResponse<{ success: boolean; match: Match; data: any }>(res);
@@ -340,11 +340,11 @@ export async function updateUser(userId: string, data: Partial<UserProfile>): Pr
   return { ...DEFAULT_USERS[userId], ...data } as UserProfile;
 }
 
-export async function adminResolveMatch(matchId: string, winnerId: string): Promise<Match> {
+export async function adminResolveMatch(matchId: string, adminUserId: string, winnerId: string): Promise<Match> {
   const res = await fetch(`/api/msksksnuwje/matches/${matchId}/admin-resolve`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ winnerId }),
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId },
+    body: JSON.stringify({ winnerId, adminUserId }),
   });
   if (!res.ok) {
     const err = await res.json();
