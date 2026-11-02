@@ -1071,6 +1071,26 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                     </button>
                   </div>
 
+                  {/* Video Guide: How to make a screen recording of winning */}
+                  <div className="p-4 rounded-2xl bg-black/80 border border-sky-500/40 space-y-2 text-left animate-in fade-in duration-300">
+                    <div className="flex items-center gap-2 text-sky-400 font-bold text-xs uppercase tracking-wide">
+                      <Film className="w-4 h-4" />
+                      <span>How to Make a Screen Recording of Your Victory (Video Guide)</span>
+                    </div>
+                    <p className="text-[11px] text-neutral-300 leading-relaxed">
+                      Watch this step-by-step video tutorial below to learn how to properly record your screen and victory scoreboard for dispute resolution:
+                    </p>
+                    <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-neutral-800 bg-black mt-2 shadow-lg">
+                      <iframe
+                        src="https://www.youtube.com/embed/L8s4zUbMoMo"
+                        title="How to make a screen recording of your winning"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        allowFullScreen
+                        className="w-full h-full border-0"
+                      />
+                    </div>
+                  </div>
+
                   {screenshotPreview && (
                     <div className="h-44 rounded-xl overflow-hidden border border-rose-500/50 relative bg-black">
                       <img

@@ -12,6 +12,7 @@ import {
   Clock,
   Radio,
   Smartphone,
+  HelpCircle,
 } from 'lucide-react';
 import { createDepositRequest, checkDepositStatus, verifyDepositSession } from '../services/api';
 import { calculateDepositFee } from '../utils/feeCalculator';
@@ -55,6 +56,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [autoConfirmed, setAutoConfirmed] = useState<boolean>(false);
   const [sessionInput, setSessionInput] = useState<string>("");
   const [showSessionPrompt, setShowSessionPrompt] = useState<boolean>(false);
+  const [showSessionHelpModal, setShowSessionHelpModal] = useState<boolean>(false);
 
   const feeCalc = calculateDepositFee(amount);
 
@@ -346,19 +348,38 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   ) : (
                     <div className="space-y-3 pt-2 border-t border-neutral-800 animate-in fade-in duration-200">
                       <div>
-                        <label className="block text-[11px] font-mono uppercase text-amber-400 font-bold mb-1.5">
-                          Enter Transfer Session ID / Reference
-                        </label>
+                        <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
+                          <label className="block text-[11px] font-mono uppercase text-amber-400 font-bold">
+                            Enter Transfer Session ID / Reference
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setShowSessionHelpModal(true)}
+                            className="text-[10px] text-sky-400 hover:text-sky-300 font-bold flex items-center gap-1 cursor-pointer bg-sky-500/10 px-2 py-0.5 rounded border border-sky-500/30"
+                          >
+                            <HelpCircle className="w-3 h-3" />
+                            <span>How to get Session ID?</span>
+                          </button>
+                        </div>
                         <input
                           type="text"
                           value={sessionInput}
                           onChange={(e) => setSessionInput(e.target.value)}
-                          placeholder="e.g. 20261017... or Ref ID"
-                          className="w-full p-3 bg-neutral-900 border border-neutral-700 rounded-xl text-white font-mono text-xs focus:border-amber-450 outline-none"
+                          placeholder="e.g. 100004261005134755173346848244"
+                          className="w-full p-3 bg-neutral-900 border border-neutral-700 rounded-xl text-white font-mono text-xs focus:border-amber-400 outline-none"
                         />
-                        <p className="text-[10px] text-neutral-400 mt-1">
-                          Enter the transaction reference or session ID from your transfer receipt to confirm your deposit.
-                        </p>
+                        <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
+                          <p className="text-[10px] text-neutral-400">
+                            Copy the Session ID directly from your bank or OPay receipt.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => setShowSessionHelpModal(true)}
+                            className="px-3 py-1.5 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white text-[10px] font-black uppercase rounded-lg transition-all shadow flex items-center gap-1.5 cursor-pointer shrink-0"
+                          >
+                            <span>📸 How To Get Session ID</span>
+                          </button>
+                        </div>
                       </div>
 
                       <div className="flex gap-2">
@@ -394,6 +415,47 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           )}
         </div>
       </div>
+
+      {/* Session ID Help Image Popup Modal */}
+      {showSessionHelpModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="relative w-full max-w-md bg-neutral-900 border-2 border-sky-500/50 rounded-3xl p-5 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+              <div className="flex items-center gap-2 text-sky-400 font-bold uppercase text-xs">
+                <HelpCircle className="w-5 h-5" />
+                <span>How to Get Your Session ID</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSessionHelpModal(false)}
+                className="p-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-neutral-300 leading-relaxed">
+              Open your bank or OPay transaction receipt. Look for the <strong className="text-amber-400">Session ID</strong> field and tap the copy button indicated by the red arrow in the guide below:
+            </p>
+
+            <div className="rounded-2xl overflow-hidden border border-neutral-800 bg-black shadow-inner">
+              <img
+                src="/assets/aistudio/54A9305C-3D3B-4553-B59D-1507F13A6CDD_66112ba4.png"
+                alt="How to get Session ID from transaction receipt"
+                className="w-full h-auto object-contain max-h-[60vh] mx-auto"
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowSessionHelpModal(false)}
+              className="w-full py-3 bg-sky-500 hover:bg-sky-400 text-neutral-950 font-black rounded-xl text-xs uppercase tracking-wider cursor-pointer shadow-lg transition-all"
+            >
+              Got It / Return to Submit Session ID
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
