@@ -209,20 +209,32 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <div
                   key={m.id}
                   onClick={() => onSelectMatch(m.id)}
-                  className="p-4 rounded-2xl bg-neutral-900 border border-amber-500/40 hover:border-amber-400 transition-all cursor-pointer shadow-lg group flex items-center justify-between"
+                  className="p-4 rounded-2xl bg-neutral-900 border border-amber-500/40 hover:border-amber-400 transition-all cursor-pointer shadow-lg group flex items-center justify-between relative overflow-hidden"
                 >
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
-                      <Swords className="w-5 h-5" />
+                      {m.matchType === 'squad' ? <Users size={20} /> : <Swords size={20} />}
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-bold text-white font-mono-nums">
                           {m.roomCode ? `#${m.roomCode}` : m.challengeCode}
                         </span>
-                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded border uppercase bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
-                          {m.status.replace(/_/g, ' ')}
-                        </span>
+                        {(() => {
+                          const isCreator = m.creator.id === currentUser.id;
+                          const myClaim = isCreator ? m.creator.resultClaim : m.opponent?.resultClaim;
+                          const isPending = myClaim && m.status !== 'SETTLED';
+                          
+                          return isPending ? (
+                            <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30 animate-pulse">
+                              PENDING...
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded border uppercase bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
+                              {m.status.replace(/_/g, ' ')}
+                            </span>
+                          );
+                        })()}
                       </div>
                       <div className="text-xs text-neutral-400">
                         {m.creator.codmIgn} vs {m.opponent?.codmIgn || 'Opponent'}

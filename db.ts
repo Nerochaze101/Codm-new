@@ -25,10 +25,10 @@ export const pool = new Pool({
   ssl: {
     rejectUnauthorized: false, // Required for Supabase cloud PostgreSQL
   },
-  max: 30, // Expanded for 200+ concurrent deposit submissions
+  max: 100, // Expanded for 1,000+ concurrent users peak
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 15000,
-  statement_timeout: 10000,
+  statement_timeout: 30000, // Increased to 30s for large video proof analysis
 });
 
 export interface DatabaseDiagnosticResult {
@@ -401,6 +401,27 @@ export async function initDatabase() {
       
       INSERT INTO platform_finance (id, total_fees_collected, total_fees_withdrawn) 
       VALUES ('main', 0, 0) ON CONFLICT (id) DO NOTHING;
+
+      -- High Concurrency Performance Indexes
+      CREATE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code);
+      CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+      CREATE INDEX IF NOT EXISTS idx_users_ign ON users(codm_ign);
+      
+      CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status);
+      CREATE INDEX IF NOT EXISTS idx_matches_creator_id ON matches(creator_id);
+      CREATE INDEX IF NOT EXISTS idx_matches_opponent_id ON matches(opponent_id);
+      CREATE INDEX IF NOT EXISTS idx_matches_created_at ON matches(created_at);
+      CREATE INDEX IF NOT EXISTS idx_matches_is_public ON matches(is_public);
+      
+      CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
+      CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions(timestamp);
+      
+      CREATE INDEX IF NOT EXISTS idx_withdrawal_user_id ON withdrawal_requests(user_id);
+      CREATE INDEX IF NOT EXISTS idx_withdrawal_status ON withdrawal_requests(status);
+      
+      CREATE INDEX IF NOT EXISTS idx_deposit_user_id ON deposit_requests(user_id);
+      CREATE INDEX IF NOT EXISTS idx_deposit_status ON deposit_requests(status);
+      CREATE INDEX IF NOT EXISTS idx_deposit_ref ON deposit_requests(payment_reference);
     `);
 
     // Seed default starter players if table is empty

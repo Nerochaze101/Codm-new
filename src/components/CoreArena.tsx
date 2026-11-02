@@ -72,19 +72,38 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   const [timeLeft, setTimeLeft] = useState<string>('');
   const [isExpired, setIsExpired] = useState<boolean>(false);
   const [serverTimeOffset, setServerTimeOffset] = useState<number>(0);
+  const [selectedActiveMatchId, setSelectedActiveMatchId] = useState<string | null>(null);
+  const [localPendingSubmissions, setLocalPendingSubmissions] = useState<Record<string, boolean>>(() => {
+    try { return JSON.parse(localStorage.getItem('codm_local_pending_submissions') || '{}'); } catch { return {}; }
+  });
 
   const [dismissedMatchIds, setDismissedMatchIds] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('codm_dismissed_matches') || '[]'); } catch { return []; }
   });
 
-  const activeStatuses = ['PENDING_OPPONENT_STAKE', 'READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'];
-  const myActiveMatch = matches.find(m => {
+  const activeStatuses = ['PENDING_OPPONENT_STAKE', 'OPPONENT_STAKED_AWAITING_CREATOR', 'READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'];
+  const myActiveMatches = matches.filter(m => {
     const isCreator = m.creator.id === currentUser.id;
     const isOpponent = m.opponent?.id === currentUser.id;
     const isInSquad = m.squadData?.slots?.some(s => s.userId === currentUser.id && s.staked);
     return (isCreator || isOpponent || isInSquad) && activeStatuses.includes(m.status);
   });
-  const [arenaTab, setArenaTab] = useState<'live' | 'active' | 'hosted'>(() => myActiveMatch ? 'active' : 'live');
+  
+  const myActiveMatch = selectedActiveMatchId 
+    ? myActiveMatches.find(m => m.id === selectedActiveMatchId) || myActiveMatches[0]
+    : myActiveMatches[0];
+
+  const [arenaTab, setArenaTab] = useState<'live' | 'active' | 'hosted'>(() => myActiveMatches.length > 0 ? 'active' : 'live');
+
+  useEffect(() => {
+    if (myActiveMatches.length > 0 && !selectedActiveMatchId) {
+      setSelectedActiveMatchId(myActiveMatches[0].id);
+    }
+  }, [myActiveMatches.length]);
+
+  useEffect(() => {
+    localStorage.setItem('codm_local_pending_submissions', JSON.stringify(localPendingSubmissions));
+  }, [localPendingSubmissions]);
 
 
   const [showTelegramConnectPopup, setShowTelegramConnectPopup] = useState<boolean>(false);
@@ -158,11 +177,41 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
 
   const handleResultSubmit = async (matchId: string, directClaim?: 'VICTORY' | 'DEFEAT' | 'DRAW') => {
     const claim = directClaim || selectedClaim;
-    if (myActiveMatch?.status === 'DISPUTED' && !screenshotPreview) { setSubmitError('Screenshot required for dispute.'); return; }
-    setIsSubmitting(true); setSubmitError(null);
-    try { await onSubmitResult(matchId, claim, screenshotPreview || undefined); if (myActiveMatch?.status === 'DISPUTED') setScreenshotPreview(null); } 
-    catch (err: any) { setSubmitError(err.message || 'Submission failed'); } 
-    finally { setIsSubmitting(false); }
+    const targetMatch = matches.find(m => m.id === matchId);
+    if (targetMatch?.status === 'DISPUTED' && !screenshotPreview) { setSubmitError('Screenshot/Video required for dispute.'); return; }
+    
+    setIsSubmitting(true); 
+    setSubmitError(null);
+    
+    // Set local pending state for "Background Upload" feel
+    setLocalPendingSubmissions(prev => ({ ...prev, [matchId]: true }));
+
+    // Non-blocking submission to allow UI interactions and room switching
+    (async () => {
+      try { 
+        await onSubmitResult(matchId, claim, screenshotPreview || undefined); 
+        if (targetMatch?.status === 'DISPUTED') setScreenshotPreview(null); 
+      } 
+      catch (err: any) { 
+        setSubmitError(err.message || 'Submission failed'); 
+        setLocalPendingSubmissions(prev => {
+          const next = { ...prev };
+          delete next[matchId];
+          return next;
+        });
+      } 
+      finally { 
+        setIsSubmitting(false); 
+        // Keep in "Uploading/Verifying" state for a few seconds for feedback
+        setTimeout(() => {
+          setLocalPendingSubmissions(prev => {
+            const next = { ...prev };
+            delete next[matchId];
+            return next;
+          });
+        }, 8000);
+      }
+    })();
   };
 
   const handleConfirmStake = async (method: any) => {
@@ -284,7 +333,41 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
             </div>
 
             <div className="space-y-4 pt-4 border-t border-neutral-800">
-              <div className="flex items-center justify-between"><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-neutral-400"><Flame size={16} className="text-amber-400" /><span>Lobby Challenges</span></div><input type="text" placeholder="Search #Code" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="bg-neutral-950 border border-neutral-800 rounded-lg py-1.5 px-3 text-xs text-white" /></div>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-neutral-400">
+                  <Zap size={16} className="text-amber-400" />
+                  <span>Live Battles In Progress</span>
+                </div>
+              </div>
+              {matches.filter(m => ['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(m.status)).length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {matches.filter(m => ['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(m.status)).map(m => (
+                    <div key={m.id} className="p-4 rounded-2xl bg-neutral-900/50 border border-neutral-800 flex flex-col justify-between shadow-lg relative overflow-hidden group">
+                      <div className="absolute top-0 right-0 px-2 py-1 bg-amber-400 text-neutral-950 text-[8px] font-black uppercase rounded-bl-lg animate-pulse">LIVE NOW</div>
+                      <div className="flex items-center gap-2.5 mb-3">
+                        <div className="w-8 h-8 rounded-lg bg-amber-400/10 flex items-center justify-center text-amber-400"><Target size={18} /></div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-bold text-white truncate">{m.gameMode} · {m.map}</div>
+                          <div className="text-[10px] text-neutral-400 truncate">Pot: ₦{m.potAmount.toLocaleString()}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between text-[10px] font-mono">
+                        <div className="flex -space-x-2">
+                           <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(m.creator.codmIgn)}`} className="w-6 h-6 rounded-full border border-neutral-800 bg-neutral-900" alt="" />
+                           {m.opponent && <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(m.opponent.codmIgn)}`} className="w-6 h-6 rounded-full border border-neutral-800 bg-neutral-900" alt="" />}
+                        </div>
+                        <span className="text-neutral-500">#{m.challengeCode}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-6 rounded-2xl bg-neutral-950 border border-dashed border-neutral-800 text-center text-neutral-500 text-[10px] italic">No active battles currently.</div>
+              )}
+            </div>
+
+            <div className="space-y-4 pt-4 border-t border-neutral-800">
+              <div className="flex items-center justify-between"><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-neutral-400"><Flame size={16} className="text-amber-400" /><span>Open Lobby Challenges</span></div><input type="text" placeholder="Search #Code" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="bg-neutral-950 border border-neutral-800 rounded-lg py-1.5 px-3 text-xs text-white" /></div>
               {filteredChallenges.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                   {filteredChallenges.map(m => {
@@ -387,340 +470,437 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
 
       {/* 4. Active Match Tab */}
       {arenaTab === 'active' && (
-        myActiveMatch ? (
-          <div className="relative overflow-hidden rounded-2xl bg-neutral-900 border border-amber-500/40 p-5 sm:p-6 shadow-xl space-y-5 group">
-            <div className="absolute inset-0 z-0 opacity-20"><img src={CODM_IMAGES.matchRoomBg} className="w-full h-full object-cover" alt="" loading="lazy" /><div className="absolute inset-0 bg-neutral-950/80" /></div>
-            
-            <div className="relative z-10 flex flex-wrap items-center justify-between gap-3 pb-3.5 border-b border-neutral-800/80">
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-bold uppercase">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  <span>{myActiveMatch.status.replace(/_/g, ' ')}</span>
+        <div className="space-y-6">
+          {/* Active Matches Multi-Room Selector - Premium Tactical Design */}
+          {myActiveMatches.length > 1 && (
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between px-1">
+                <div className="flex items-center gap-2 text-xs font-black text-white uppercase tracking-widest">
+                  <Zap className="w-4 h-4 text-amber-400" />
+                  <span>Your Active War-Rooms ({myActiveMatches.length})</span>
                 </div>
-                <span className="text-xs font-bold text-white">{myActiveMatch.gameMode}</span>
-                {myActiveMatch.matchType === 'squad' && (
-                  <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-400 text-[10px] font-black uppercase border border-emerald-500/30 flex items-center gap-1">
-                    <Users size={12} />
-                    <span>5v5 Squad ({myActiveMatch.squadData?.slots?.filter(s => s.staked).length || 1}/10 Slots)</span>
-                  </span>
-                )}
+                <span className="text-[10px] text-neutral-500 font-bold">SELECT ROOM TO ENTER</span>
               </div>
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-black border border-neutral-800">
-                  <span className="text-[10px] text-neutral-400 font-mono">CODE:</span>
-                  <span className="text-xs font-black text-amber-400">{myActiveMatch.roomCode || myActiveMatch.challengeCode}</span>
-                  <button onClick={() => copyCode(myActiveMatch.roomCode || myActiveMatch.challengeCode)} className="text-neutral-500 ml-1 hover:text-white"><Copy size={12} /></button>
-                </div>
-                <div className="px-3 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 text-xs font-bold font-mono">
-                  {myActiveMatch.matchType === 'squad' ? `Gross Pot: ₦${myActiveMatch.potAmount.toLocaleString()}` : `Pot: ₦${myActiveMatch.potAmount.toLocaleString()}`}
-                </div>
-              </div>
-            </div>
-
-            <div className="relative z-10 flex lg:hidden rounded-xl bg-neutral-950 p-1 border border-neutral-800">
-              <button onClick={() => setActiveMatchSubTab('game')} className={`flex-1 py-2 text-xs font-black uppercase rounded-lg ${activeMatchSubTab === 'game' ? 'bg-amber-400 text-neutral-950' : 'text-neutral-400'}`}>🎮 Game</button>
-              <button onClick={() => setActiveMatchSubTab('chat')} className={`flex-1 py-2 text-xs font-black uppercase rounded-lg ${activeMatchSubTab === 'chat' ? 'bg-amber-400 text-neutral-950' : 'text-neutral-400'}`}>💬 Chat</button>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 relative z-10">
-              <div className={`lg:col-span-2 space-y-4 ${activeMatchSubTab === 'chat' ? 'hidden lg:block' : 'block'}`}>
-                {/* Exact Payout & Economics Box */}
-                {myActiveMatch.matchType === 'squad' ? (
-                  <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-emerald-950/40 via-neutral-950 to-neutral-900 border-2 border-emerald-500/40 space-y-3.5 shadow-xl animate-in fade-in">
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-500/20 pb-2.5">
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
-                          <Users size={18} />
+              <div className="flex items-center gap-3 overflow-x-auto pb-4 no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0">
+                {myActiveMatches.map(m => {
+                  const isCreator = m.creator.id === currentUser.id;
+                  const myClaim = isCreator ? m.creator.resultClaim : m.opponent?.resultClaim;
+                  const isPending = myClaim && m.status !== 'SETTLED';
+                  
+                  return (
+                    <button
+                      key={m.id}
+                      onClick={() => setSelectedActiveMatchId(m.id)}
+                      className={`px-5 py-4 rounded-3xl border-2 shrink-0 transition-all flex flex-col gap-2 min-w-[180px] text-left relative overflow-hidden group ${
+                        selectedActiveMatchId === m.id 
+                          ? 'bg-amber-400 border-amber-400 text-neutral-950 shadow-2xl shadow-amber-400/20 scale-[1.02]' 
+                          : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:border-neutral-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <div className={`p-2 rounded-xl ${selectedActiveMatchId === m.id ? 'bg-black/10' : 'bg-neutral-800'}`}>
+                          {m.matchType === 'squad' ? <Users size={18} /> : <Zap size={18} />}
                         </div>
-                        <div>
-                          <div className="font-heading font-black text-xs sm:text-sm text-white uppercase tracking-wider">
-                            5v5 Squad Escrow Pool & Exact Payout
+                        {isPending && (
+                          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-blue-500 text-white text-[8px] font-black uppercase tracking-tighter animate-pulse shadow-sm">
+                            <Clock size={10} />
+                            <span>PENDING</span>
                           </div>
-                          <div className="text-[10px] text-neutral-400">
-                            {myActiveMatch.roomCode ? `Private Battle Room Active (#${myActiveMatch.roomCode})` : 'Awaiting 10 Squad Slots to Fill'}
-                          </div>
+                        )}
+                      </div>
+                      
+                      <div className="space-y-0.5">
+                        <div className={`text-[10px] font-black uppercase tracking-widest ${selectedActiveMatchId === m.id ? 'opacity-70' : 'text-neutral-500'}`}>
+                          {m.matchType === 'squad' ? '5v5 Squad' : '1v1 Duel'} #{m.challengeCode}
+                        </div>
+                        <div className="text-sm font-black font-mono tracking-tight truncate">
+                          {m.roomCode ? `#${m.roomCode}` : 'Awaiting Rival'}
                         </div>
                       </div>
-                      <div className="text-right">
-                        <span className="text-[10px] text-neutral-400 block uppercase font-mono">Per-Winner Payout</span>
-                        <span className="text-base sm:text-lg font-black text-emerald-400 font-mono">
-                          ₦{myActiveMatch.winnerPayout.toLocaleString()} <span className="text-[10px] font-sans text-neutral-400 font-normal">/ player</span>
-                        </span>
-                      </div>
-                    </div>
 
-                    {/* 4-Box Squad Economics Grid */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
-                      <div className="p-2.5 rounded-xl bg-neutral-900/90 border border-neutral-800">
-                        <span className="text-[10px] text-neutral-400 block uppercase font-sans">Stake / Player</span>
-                        <span className="font-bold text-white text-sm">₦{myActiveMatch.stakeAmount.toLocaleString()}</span>
+                      <div className={`text-[9px] font-bold mt-1 ${selectedActiveMatchId === m.id ? 'text-black/60' : 'text-emerald-500'}`}>
+                        POT: ₦{m.potAmount.toLocaleString()}
                       </div>
-                      <div className="p-2.5 rounded-xl bg-neutral-900/90 border border-neutral-800">
-                        <span className="text-[10px] text-neutral-400 block uppercase font-sans">Gross Pot (10x)</span>
-                        <span className="font-bold text-amber-400 text-sm">₦{myActiveMatch.potAmount.toLocaleString()}</span>
-                      </div>
-                      <div className="p-2.5 rounded-xl bg-neutral-900/90 border border-neutral-800">
-                        <span className="text-[10px] text-neutral-400 block uppercase font-sans">Squad Fee ({myActiveMatch.platformFeePercentage}%)</span>
-                        <span className="font-bold text-rose-400 text-sm">-₦{myActiveMatch.platformFee.toLocaleString()}</span>
-                      </div>
-                      <div className="p-2.5 rounded-xl bg-emerald-500/15 border-2 border-emerald-400/50 shadow">
-                        <span className="text-[10px] text-emerald-300 block uppercase font-sans font-bold">Winning Squad Pool</span>
-                        <span className="font-black text-emerald-400 text-sm">₦{(myActiveMatch.potAmount - myActiveMatch.platformFee).toLocaleString()}</span>
-                      </div>
-                    </div>
+                      
+                      {selectedActiveMatchId === m.id && (
+                        <div className="absolute bottom-0 left-0 h-1 bg-black/20 w-full" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
-                    <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/30 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs">
-                      <span className="text-emerald-300 font-bold flex items-center gap-1.5">
-                        <Trophy size={15} className="text-amber-400 shrink-0" />
-                        <span>Exact Payout per Winning Player:</span>
-                        <span className="text-emerald-400 font-black text-sm bg-black/60 px-2 py-0.5 rounded border border-emerald-500/40 font-mono">
-                          ₦{myActiveMatch.winnerPayout.toLocaleString()}
-                        </span>
-                        <span className="text-[10px] text-neutral-400 font-normal font-sans">/ player</span>
-                      </span>
-                      <span className="text-[11px] text-neutral-400">
-                        All 5 players on winning squad credited ₦{myActiveMatch.winnerPayout.toLocaleString()} each (₦{((myActiveMatch.winnerPayout || 0) * 5).toLocaleString()} Team Prize Pool)
-                      </span>
+          {myActiveMatch ? (
+            <>
+              <div className="relative overflow-hidden rounded-[2.5rem] bg-neutral-900 border border-amber-500/40 p-5 sm:p-8 shadow-2xl space-y-6 group">
+                <div className="absolute inset-0 z-0 opacity-25">
+                  <img src={CODM_IMAGES.matchRoomBg} className="w-full h-full object-cover scale-110 group-hover:scale-100 transition-transform duration-1000" alt="" loading="lazy" />
+                  <div className="absolute inset-0 bg-gradient-to-b from-neutral-950/90 via-neutral-950/60 to-neutral-950/90" />
+                </div>
+                
+                <div className="relative z-10 flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-neutral-800/80">
+                  <div className="flex items-center gap-4">
+                    <div className="w-14 h-14 rounded-2xl bg-amber-400/10 border border-amber-400/30 flex items-center justify-center text-amber-400 shadow-inner">
+                      {myActiveMatch.matchType === 'squad' ? <Users size={28} /> : <Target size={28} />}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-[10px] font-black uppercase tracking-widest ${
+                          localPendingSubmissions[myActiveMatch.id] || (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim)
+                            ? 'bg-blue-500/20 border-blue-500/50 text-blue-400 animate-pulse'
+                            : 'bg-amber-500/15 border-amber-500/30 text-amber-400'
+                        }`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${
+                            localPendingSubmissions[myActiveMatch.id] ? 'bg-blue-400 animate-ping' : 'bg-emerald-400 animate-pulse'
+                          }`} />
+                          <span>
+                            {localPendingSubmissions[myActiveMatch.id] 
+                              ? 'UPLOADING PROOF...' 
+                              : (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) && myActiveMatch.status !== 'SETTLED'
+                                ? 'AWAITING REFEREE...'
+                                : myActiveMatch.status.replace(/_/g, ' ')}
+                          </span>
+                        </div>
+                        {myActiveMatch.matchType === 'squad' && (
+                          <span className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-black uppercase border border-emerald-500/30">
+                            5v5 BATTLE
+                          </span>
+                        )}
+                      </div>
+                      <h2 className="text-xl font-black text-white font-heading uppercase tracking-tight">{myActiveMatch.gameMode} · {myActiveMatch.map}</h2>
                     </div>
                   </div>
-                ) : (
-                  <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-bold text-amber-400 flex justify-between items-center">
+                  
+                  <div className="flex flex-col sm:items-end gap-2">
                     <div className="flex items-center gap-2">
-                      <Clock size={16} className="animate-pulse" />
-                      <span>{myActiveMatch.roomCode ? `Battle Room Ready (#${myActiveMatch.roomCode})` : 'Awaiting Opponent to Accept'}</span>
+                      <div className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-black/80 border border-neutral-800 shadow-lg">
+                        <span className="text-[10px] text-neutral-500 font-mono font-bold">ROOM CODE:</span>
+                        <span className="text-base font-black text-amber-400 font-mono">{myActiveMatch.roomCode || myActiveMatch.challengeCode}</span>
+                        <button 
+                          onClick={() => copyCode(myActiveMatch.roomCode || myActiveMatch.challengeCode)} 
+                          className="p-1.5 rounded-lg hover:bg-neutral-800 transition-colors text-neutral-400 hover:text-white"
+                        >
+                          <Copy size={14} />
+                        </button>
+                      </div>
                     </div>
-                    <span className="text-emerald-400 font-mono">Winner Payout: ₦{myActiveMatch.winnerPayout.toLocaleString()}</span>
-                  </div>
-                )}
-
-                {/* 5v5 Squad Tactical Roster OR 1v1 Rival Details */}
-                {myActiveMatch && myActiveMatch.matchType === 'squad' && myActiveMatch.squadData ? (
-                  <div className="p-4 sm:p-5 rounded-2xl bg-neutral-950 border border-emerald-500/30 space-y-4">
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-800 pb-3">
-                      <div className="flex items-center gap-2">
-                        <Shield className="w-4 h-4 text-emerald-400" />
-                        <span className="text-xs font-black text-white uppercase tracking-wider font-heading">
-                          5v5 Tactical Squad Roster ({myActiveMatch.squadData.slots.filter(s => s.staked).length}/10 Staked)
-                        </span>
-                      </div>
-                      <span className="text-[10px] text-emerald-400 font-mono font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-                        ₦{myActiveMatch.stakeAmount.toLocaleString()} / SLOT
-                      </span>
-                    </div>
-
-                    {/* Team Alpha (Blue) vs Team Bravo (Red) Columns */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {/* Team Alpha */}
-                      <div className="space-y-2 p-3 rounded-xl bg-blue-950/20 border border-blue-500/30">
-                        <div className="flex justify-between items-center pb-2 border-b border-blue-500/20">
-                          <span className="text-xs font-black text-blue-400 uppercase tracking-wider flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full bg-blue-400" />
-                            <span>Team Alpha</span>
-                          </span>
-                          <span className="text-[10px] font-mono font-bold text-blue-300">
-                            {myActiveMatch.squadData.slots.slice(0, 5).filter(s => s.staked).length}/5 Staked
-                          </span>
-                        </div>
-
-                        <div className="space-y-1.5">
-                          {myActiveMatch.squadData.slots.slice(0, 5).map((slot, idx) => {
-                            const isMe = slot.userId === currentUser.id;
-                            return (
-                              <div key={slot.slotIndex} className={`p-2 rounded-lg border flex items-center justify-between gap-2 text-xs transition-all ${
-                                slot.staked ? 'bg-neutral-900 border-blue-500/30' : 'bg-neutral-950/60 border-dashed border-neutral-800'
-                              }`}>
-                                <div className="flex items-center gap-2 min-w-0 flex-1">
-                                  <span className="text-[10px] font-mono text-neutral-500 w-4 shrink-0">#{idx + 1}</span>
-                                  {slot.staked ? (
-                                    <>
-                                      <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(slot.codmIgn || 'player')}`} alt="" className="w-6 h-6 rounded-md bg-neutral-800 shrink-0 object-cover" />
-                                      <div className="min-w-0 flex-1">
-                                        <div className="font-bold text-white text-[11px] truncate flex items-center gap-1">
-                                          <span>{slot.codmIgn}</span>
-                                          {slot.slotIndex === 0 && <span className="text-[9px] bg-amber-400/20 text-amber-300 px-1 rounded font-normal">Host</span>}
-                                          {isMe && <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1 rounded font-normal">You</span>}
-                                        </div>
-                                        <div className="text-[9px] font-mono text-neutral-400 truncate">UID: {slot.codmUid || 'N/A'}</div>
-                                      </div>
-                                    </>
-                                  ) : (
-                                    <span className="text-neutral-500 text-[11px] italic">Empty Slot · Open</span>
-                                  )}
-                                </div>
-
-                                <div className="shrink-0 flex items-center gap-1">
-                                  {slot.staked ? (
-                                    <>
-                                      <button onClick={() => copyRivalIgn(slot.codmIgn || '')} className="p-1 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white" title="Copy IGN">
-                                        <Copy size={11} />
-                                      </button>
-                                      {isMe && myActiveMatch.status === 'PENDING_OPPONENT_STAKE' && (
-                                        <button onClick={() => onSquadLeave?.(myActiveMatch.id)} className="px-2 py-0.5 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 font-bold text-[9px] border border-rose-500/30 cursor-pointer">
-                                          Leave
-                                        </button>
-                                      )}
-                                    </>
-                                  ) : (
-                                    !myActiveMatch.squadData?.slots?.some(s => s.userId === currentUser.id && s.staked) && (
-                                      <button onClick={() => onSquadJoin?.(myActiveMatch.id, slot.slotIndex, 'ALPHA')} className="px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-black text-[9px] uppercase cursor-pointer transition-all">
-                                        Join
-                                      </button>
-                                    )
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {/* Team Bravo */}
-                      <div className="space-y-2 p-3 rounded-xl bg-rose-950/20 border border-rose-500/30">
-                        <div className="flex justify-between items-center pb-2 border-b border-rose-500/20">
-                          <span className="text-xs font-black text-rose-400 uppercase tracking-wider flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full bg-rose-400" />
-                            <span>Team Bravo</span>
-                          </span>
-                          <span className="text-[10px] font-mono font-bold text-rose-300">
-                            {myActiveMatch.squadData.slots.slice(5, 10).filter(s => s.staked).length}/5 Staked
-                          </span>
-                        </div>
-
-                        <div className="space-y-1.5">
-                          {myActiveMatch.squadData.slots.slice(5, 10).map((slot, idx) => {
-                            const isMe = slot.userId === currentUser.id;
-                            return (
-                              <div key={slot.slotIndex} className={`p-2 rounded-lg border flex items-center justify-between gap-2 text-xs transition-all ${
-                                slot.staked ? 'bg-neutral-900 border-rose-500/30' : 'bg-neutral-950/60 border-dashed border-neutral-800'
-                              }`}>
-                                <div className="flex items-center gap-2 min-w-0 flex-1">
-                                  <span className="text-[10px] font-mono text-neutral-500 w-4 shrink-0">#{idx + 6}</span>
-                                  {slot.staked ? (
-                                    <>
-                                      <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(slot.codmIgn || 'player')}`} alt="" className="w-6 h-6 rounded-md bg-neutral-800 shrink-0 object-cover" />
-                                      <div className="min-w-0 flex-1">
-                                        <div className="font-bold text-white text-[11px] truncate flex items-center gap-1">
-                                          <span>{slot.codmIgn}</span>
-                                          {isMe && <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1 rounded font-normal">You</span>}
-                                        </div>
-                                        <div className="text-[9px] font-mono text-neutral-400 truncate">UID: {slot.codmUid || 'N/A'}</div>
-                                      </div>
-                                    </>
-                                  ) : (
-                                    <span className="text-neutral-500 text-[11px] italic">Empty Slot · Open</span>
-                                  )}
-                                </div>
-
-                                <div className="shrink-0 flex items-center gap-1">
-                                  {slot.staked ? (
-                                    <>
-                                      <button onClick={() => copyRivalIgn(slot.codmIgn || '')} className="p-1 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white" title="Copy IGN">
-                                        <Copy size={11} />
-                                      </button>
-                                      {isMe && myActiveMatch.status === 'PENDING_OPPONENT_STAKE' && (
-                                        <button onClick={() => onSquadLeave?.(myActiveMatch.id)} className="px-2 py-0.5 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 font-bold text-[9px] border border-rose-500/30 cursor-pointer">
-                                          Leave
-                                        </button>
-                                      )}
-                                    </>
-                                  ) : (
-                                    !myActiveMatch.squadData?.slots?.some(s => s.userId === currentUser.id && s.staked) && (
-                                      <button onClick={() => onSquadJoin?.(myActiveMatch.id, slot.slotIndex, 'BRAVO')} className="px-2 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white font-black text-[9px] uppercase cursor-pointer transition-all">
-                                        Join
-                                      </button>
-                                    )
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
+                    <div className="text-right">
+                      <span className="text-[10px] text-neutral-500 font-black uppercase tracking-widest block mb-0.5">Winner Payout</span>
+                      <span className="text-xl font-black text-emerald-400 font-mono tracking-tighter">₦{myActiveMatch.winnerPayout.toLocaleString()}</span>
                     </div>
                   </div>
-                ) : myActiveMatch ? (
-                  /* Rival Player Details & One-Tap Copy Card for Solo 1v1 */
-                  <div className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest flex items-center gap-1.5">
-                        <UserCheck size={14} className="text-amber-400" />
-                        <span>Rival In-Game Search Info ({isCreatorOfActive ? 'Opponent' : 'Host'})</span>
-                      </span>
-                      <span className="text-[10px] text-emerald-400 font-mono font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">ONE-TAP COPY</span>
-                    </div>
-                    
-                    {(() => {
-                      const rival = isCreatorOfActive ? myActiveMatch.opponent : myActiveMatch.creator;
-                      return (
-                        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 rounded-xl bg-neutral-900 border border-neutral-800/80">
-                          <div className="flex items-center gap-3 min-w-0 w-full sm:w-auto">
-                            <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(rival?.codmIgn || 'player')}`} alt="" className="w-10 h-10 rounded-xl bg-neutral-800 shrink-0 object-cover" />
-                            <div className="min-w-0 flex-1">
-                              <div className="text-xs font-bold text-white truncate flex items-center gap-1">
-                                <span>{rival?.codmIgn || 'Awaiting Opponent...'}</span>
-                              </div>
-                              <div className="text-[10px] font-mono text-neutral-400 truncate">
-                                UID: {rival?.codmUid || 'N/A'}
-                              </div>
+                </div>
+              </div>
+
+              <div className="relative z-10 flex lg:hidden rounded-[1.25rem] bg-neutral-950 p-1 border border-neutral-800 shadow-inner">
+                <button onClick={() => setActiveMatchSubTab('game')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${activeMatchSubTab === 'game' ? 'bg-amber-400 text-neutral-950 shadow-md' : 'text-neutral-500'}`}>🎮 Battleground</button>
+                <button onClick={() => setActiveMatchSubTab('chat')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 ${activeMatchSubTab === 'chat' ? 'bg-amber-400 text-neutral-950 shadow-md' : 'text-neutral-500'}`}>
+                  💬 Tactical Chat
+                  <span className="w-2 h-2 rounded-full bg-amber-600 animate-pulse" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 relative z-10">
+                <div className={`lg:col-span-2 space-y-4 ${activeMatchSubTab === 'chat' ? 'hidden lg:block' : 'block'}`}>
+                  {/* Exact Payout & Economics Box */}
+                  {myActiveMatch.matchType === 'squad' ? (
+                    <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-emerald-950/40 via-neutral-950 to-neutral-900 border-2 border-emerald-500/40 space-y-3.5 shadow-xl animate-in fade-in">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-500/20 pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
+                            <Users size={18} />
+                          </div>
+                          <div>
+                            <div className="font-heading font-black text-xs sm:text-sm text-white uppercase tracking-wider">
+                              5v5 Squad Escrow Pool & Exact Payout
+                            </div>
+                            <div className="text-[10px] text-neutral-400">
+                              {myActiveMatch.roomCode ? `Private Battle Room Active (#${myActiveMatch.roomCode})` : 'Awaiting 10 Squad Slots to Fill'}
                             </div>
                           </div>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[10px] text-neutral-400 block uppercase font-mono">Per-Winner Payout</span>
+                          <span className="text-base sm:text-lg font-black text-emerald-400 font-mono">
+                            ₦{myActiveMatch.winnerPayout.toLocaleString()} <span className="text-[10px] font-sans text-neutral-400 font-normal">/ player</span>
+                          </span>
+                        </div>
+                      </div>
 
-                          {rival && (
-                            <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
-                              <button
-                                type="button"
-                                onClick={() => copyRivalIgn(rival.codmIgn)}
-                                className="flex-1 sm:flex-none px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase cursor-pointer flex items-center justify-center gap-1.5 shadow-md transition-all active:scale-95"
-                                title="Copy opponent CODM in-game username"
-                              >
-                                {copiedRivalIgn ? <Check size={14} className="stroke-[3]" /> : <Copy size={14} />}
-                                <span>{copiedRivalIgn ? 'IGN Copied!' : 'Copy IGN'}</span>
-                              </button>
-                              {rival.codmUid && (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
+                        <div className="p-2.5 rounded-xl bg-neutral-900/90 border border-neutral-800">
+                          <span className="text-[10px] text-neutral-400 block uppercase font-sans">Stake / Player</span>
+                          <span className="font-bold text-white text-sm">₦{myActiveMatch.stakeAmount.toLocaleString()}</span>
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-neutral-900/90 border border-neutral-800">
+                          <span className="text-[10px] text-neutral-400 block uppercase font-sans">Gross Pot (10x)</span>
+                          <span className="font-bold text-amber-400 text-sm">₦{myActiveMatch.potAmount.toLocaleString()}</span>
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-neutral-900/90 border border-neutral-800">
+                          <span className="text-[10px] text-neutral-400 block uppercase font-sans">Squad Fee ({myActiveMatch.platformFeePercentage}%)</span>
+                          <span className="font-bold text-rose-400 text-sm">-₦{myActiveMatch.platformFee.toLocaleString()}</span>
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-emerald-500/15 border-2 border-emerald-400/50 shadow">
+                          <span className="text-[10px] text-emerald-300 block uppercase font-sans font-bold">Winning Squad Pool</span>
+                          <span className="font-black text-emerald-400 text-sm">₦{(myActiveMatch.potAmount - myActiveMatch.platformFee).toLocaleString()}</span>
+                        </div>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/30 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs">
+                        <span className="text-emerald-300 font-bold flex items-center gap-1.5">
+                          <Trophy size={15} className="text-amber-400 shrink-0" />
+                          <span>Exact Payout per Winning Player:</span>
+                          <span className="text-emerald-400 font-black text-sm bg-black/60 px-2 py-0.5 rounded border border-emerald-500/40 font-mono">
+                            ₦{myActiveMatch.winnerPayout.toLocaleString()}
+                          </span>
+                          <span className="text-[10px] text-neutral-400 font-normal font-sans">/ player</span>
+                        </span>
+                        <span className="text-[11px] text-neutral-400">
+                          All 5 players on winning squad credited ₦{myActiveMatch.winnerPayout.toLocaleString()} each (₦{((myActiveMatch.winnerPayout || 0) * 5).toLocaleString()} Team Prize Pool)
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-bold text-amber-400 flex justify-between items-center">
+                      <div className="flex items-center gap-2">
+                        <Clock size={16} className="animate-pulse" />
+                        <span>{myActiveMatch.roomCode ? `Battle Room Ready (#${myActiveMatch.roomCode})` : 'Awaiting Opponent to Accept'}</span>
+                      </div>
+                      <span className="text-emerald-400 font-mono">Winner Payout: ₦{myActiveMatch.winnerPayout.toLocaleString()}</span>
+                    </div>
+                  )}
+
+                  {myActiveMatch.matchType === 'squad' && myActiveMatch.squadData ? (
+                    <div className="p-4 sm:p-5 rounded-2xl bg-neutral-950 border border-emerald-500/30 space-y-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-800 pb-3">
+                        <div className="flex items-center gap-2">
+                          <Shield className="w-4 h-4 text-emerald-400" />
+                          <span className="text-xs font-black text-white uppercase tracking-wider font-heading">
+                            5v5 Tactical Squad Roster ({myActiveMatch.squadData.slots.filter(s => s.staked).length}/10 Staked)
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-emerald-400 font-mono font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                          ₦{myActiveMatch.stakeAmount.toLocaleString()} / SLOT
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2 p-3 rounded-xl bg-blue-950/20 border border-blue-500/30">
+                          <div className="flex justify-between items-center pb-2 border-b border-blue-500/20">
+                            <span className="text-xs font-black text-blue-400 uppercase tracking-wider flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-blue-400" />
+                              <span>Team Alpha</span>
+                            </span>
+                            <span className="text-[10px] font-mono font-bold text-blue-300">
+                              {myActiveMatch.squadData.slots.slice(0, 5).filter(s => s.staked).length}/5 Staked
+                            </span>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            {myActiveMatch.squadData.slots.slice(0, 5).map((slot, idx) => {
+                              const isMe = slot.userId === currentUser.id;
+                              return (
+                                <div key={slot.slotIndex} className={`p-2 rounded-lg border flex items-center justify-between gap-2 text-xs transition-all ${
+                                  slot.staked ? 'bg-neutral-900 border-blue-500/30' : 'bg-neutral-950/60 border-dashed border-neutral-800'
+                                }`}>
+                                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                                    <span className="text-[10px] font-mono text-neutral-500 w-4 shrink-0">#{idx + 1}</span>
+                                    {slot.staked ? (
+                                      <>
+                                        <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(slot.codmIgn || 'player')}`} alt="" className="w-6 h-6 rounded-md bg-neutral-800 shrink-0 object-cover" />
+                                        <div className="min-w-0 flex-1">
+                                          <div className="font-bold text-white text-[11px] truncate flex items-center gap-1">
+                                            <span>{slot.codmIgn}</span>
+                                            {slot.slotIndex === 0 && <span className="text-[9px] bg-amber-400/20 text-amber-300 px-1 rounded font-normal">Host</span>}
+                                            {isMe && <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1 rounded font-normal">You</span>}
+                                          </div>
+                                          <div className="text-[9px] font-mono text-neutral-400 truncate">UID: {slot.codmUid || 'N/A'}</div>
+                                        </div>
+                                      </>
+                                    ) : (
+                                      <span className="text-neutral-500 text-[11px] italic">Empty Slot · Open</span>
+                                    )}
+                                  </div>
+                                  <div className="shrink-0 flex items-center gap-1">
+                                    {slot.staked ? (
+                                      <>
+                                        <button onClick={() => copyRivalIgn(slot.codmIgn || '')} className="p-1 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white">
+                                          <Copy size={11} />
+                                        </button>
+                                        {isMe && myActiveMatch.status === 'PENDING_OPPONENT_STAKE' && (
+                                          <button onClick={() => onSquadLeave?.(myActiveMatch.id)} className="px-2 py-0.5 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 font-bold text-[9px] border border-rose-500/30">
+                                            Leave
+                                          </button>
+                                        )}
+                                      </>
+                                    ) : (
+                                      !myActiveMatch.squadData?.slots?.some(s => s.userId === currentUser.id && s.staked) && (
+                                        <button onClick={() => onSquadJoin?.(myActiveMatch.id, slot.slotIndex, 'ALPHA')} className="px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-black text-[9px] uppercase transition-all">
+                                          Join
+                                        </button>
+                                      )
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <div className="space-y-2 p-3 rounded-xl bg-rose-950/20 border border-rose-500/30">
+                          <div className="flex justify-between items-center pb-2 border-b border-rose-500/20">
+                            <span className="text-xs font-black text-rose-400 uppercase tracking-wider flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-rose-400" />
+                              <span>Team Bravo</span>
+                            </span>
+                            <span className="text-[10px] font-mono font-bold text-rose-300">
+                              {myActiveMatch.squadData.slots.slice(5, 10).filter(s => s.staked).length}/5 Staked
+                            </span>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            {myActiveMatch.squadData.slots.slice(5, 10).map((slot, idx) => {
+                              const isMe = slot.userId === currentUser.id;
+                              return (
+                                <div key={slot.slotIndex} className={`p-2 rounded-lg border flex items-center justify-between gap-2 text-xs transition-all ${
+                                  slot.staked ? 'bg-neutral-900 border-rose-500/30' : 'bg-neutral-950/60 border-dashed border-neutral-800'
+                                }`}>
+                                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                                    <span className="text-[10px] font-mono text-neutral-500 w-4 shrink-0">#{idx + 6}</span>
+                                    {slot.staked ? (
+                                      <>
+                                        <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(slot.codmIgn || 'player')}`} alt="" className="w-6 h-6 rounded-md bg-neutral-800 shrink-0 object-cover" />
+                                        <div className="min-w-0 flex-1">
+                                          <div className="font-bold text-white text-[11px] truncate flex items-center gap-1">
+                                            <span>{slot.codmIgn}</span>
+                                            {isMe && <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1 rounded font-normal">You</span>}
+                                          </div>
+                                          <div className="text-[9px] font-mono text-neutral-400 truncate">UID: {slot.codmUid || 'N/A'}</div>
+                                        </div>
+                                      </>
+                                    ) : (
+                                      <span className="text-neutral-500 text-[11px] italic">Empty Slot · Open</span>
+                                    )}
+                                  </div>
+                                  <div className="shrink-0 flex items-center gap-1">
+                                    {slot.staked ? (
+                                      <>
+                                        <button onClick={() => copyRivalIgn(slot.codmIgn || '')} className="p-1 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white">
+                                          <Copy size={11} />
+                                        </button>
+                                        {isMe && myActiveMatch.status === 'PENDING_OPPONENT_STAKE' && (
+                                          <button onClick={() => onSquadLeave?.(myActiveMatch.id)} className="px-2 py-0.5 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 font-bold text-[9px] border border-rose-500/30">
+                                            Leave
+                                          </button>
+                                        )}
+                                      </>
+                                    ) : (
+                                      !myActiveMatch.squadData?.slots?.some(s => s.userId === currentUser.id && s.staked) && (
+                                        <button onClick={() => onSquadJoin?.(myActiveMatch.id, slot.slotIndex, 'BRAVO')} className="px-2 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white font-black text-[9px] uppercase transition-all">
+                                          Join
+                                        </button>
+                                      )
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest flex items-center gap-1.5">
+                          <UserCheck size={14} className="text-amber-400" />
+                          <span>Rival In-Game Search Info ({isCreatorOfActive ? 'Opponent' : 'Host'})</span>
+                        </span>
+                        <span className="text-[10px] text-emerald-400 font-mono font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">ONE-TAP COPY</span>
+                      </div>
+                      
+                      {(() => {
+                        const rival = isCreatorOfActive ? myActiveMatch.opponent : myActiveMatch.creator;
+                        return (
+                          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 rounded-xl bg-neutral-900 border border-neutral-800/80">
+                            <div className="flex items-center gap-3 min-w-0 w-full sm:w-auto">
+                              <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(rival?.codmIgn || 'player')}`} alt="" className="w-10 h-10 rounded-xl bg-neutral-800 shrink-0 object-cover" />
+                              <div className="min-w-0 flex-1">
+                                <div className="text-xs font-bold text-white truncate flex items-center gap-1">
+                                  <span>{rival?.codmIgn || 'Awaiting Opponent...'}</span>
+                                </div>
+                                <div className="text-[10px] font-mono text-neutral-400 truncate">
+                                  UID: {rival?.codmUid || 'N/A'}
+                                </div>
+                              </div>
+                            </div>
+
+                            {rival && (
+                              <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
                                 <button
                                   type="button"
-                                  onClick={() => copyRivalUid(rival.codmUid)}
-                                  className="flex-1 sm:flex-none px-3.5 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-xs uppercase cursor-pointer flex items-center justify-center gap-1.5 border border-neutral-700 transition-all active:scale-95"
-                                  title="Copy opponent CODM UID"
+                                  onClick={() => copyRivalIgn(rival.codmIgn)}
+                                  className="flex-1 sm:flex-none px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase cursor-pointer flex items-center justify-center gap-1.5 shadow-md transition-all active:scale-95"
                                 >
-                                  {copiedRivalUid ? <Check size={14} className="stroke-[3] text-emerald-400" /> : <Copy size={14} />}
-                                  <span>{copiedRivalUid ? 'UID Copied!' : 'Copy UID'}</span>
+                                  {copiedRivalIgn ? <Check size={14} className="stroke-[3]" /> : <Copy size={14} />}
+                                  <span>{copiedRivalIgn ? 'IGN Copied!' : 'Copy IGN'}</span>
                                 </button>
-                              )}
-                            </div>
-                          )}
+                                {rival.codmUid && (
+                                  <button
+                                    type="button"
+                                    onClick={() => copyRivalUid(rival.codmUid)}
+                                    className="flex-1 sm:flex-none px-3.5 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-xs uppercase cursor-pointer flex items-center justify-center gap-1.5 border border-neutral-700 transition-all active:scale-95"
+                                  >
+                                    {copiedRivalUid ? <Check size={14} className="stroke-[3] text-emerald-400" /> : <Copy size={14} />}
+                                    <span>{copiedRivalUid ? 'UID Copied!' : 'Copy UID'}</span>
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  {myActiveMatch.status === 'PENDING_OPPONENT_STAKE' && (
+                    <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 space-y-3">
+                      <div className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest">Share Invite Link</div>
+                      <div className="flex gap-2"><input type="text" readOnly value={`${window.location.origin}/?join=${myActiveMatch.id}`} className="flex-1 bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-xs text-neutral-400" /><button onClick={() => copyInviteLink(myActiveMatch.id)} className="px-4 py-2 bg-amber-400 text-neutral-950 font-black text-[10px] rounded-lg uppercase">Copy Link</button></div>
+                    </div>
+                  )}
+
+                  {['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(myActiveMatch.status) && (
+                    <div className="space-y-4">
+                      {myActiveMatch.roomGeneratedAt && (
+                        <div className="flex items-center justify-between p-3 rounded-xl bg-black border border-neutral-800">
+                          <div className="flex items-center gap-2 text-neutral-400 text-[10px] font-bold uppercase tracking-wider"><Clock size={14} className="text-amber-400" /><span>Match Timer:</span><span className={`font-mono text-xs ${isExpired ? 'text-rose-500' : 'text-amber-400'}`}>{timeLeft}</span></div>
+                          <span className="text-neutral-500 text-[9px] uppercase font-bold tracking-wider">{isExpired ? 'Timer Exceeded (No Auto-Settle)' : 'Active Battle'}</span>
                         </div>
-                      );
-                    })()}
-                  </div>
-                ) : null}
+                      )}
+                      
+                      {myActiveMatch.roomCode && (
+                        <div className="p-5 rounded-2xl bg-amber-500/10 border-2 border-amber-400/40 text-center space-y-2">
+                          <div className="text-[10px] text-neutral-400 uppercase font-mono font-bold tracking-tighter">Private Room #</div>
+                          <div className="flex items-center justify-center gap-3"><span className="text-4xl font-black text-amber-400 font-mono tracking-widest">{myActiveMatch.roomCode}</span><button onClick={() => copyCode(myActiveMatch.roomCode!)} className="p-2 rounded-lg bg-neutral-800 text-white shadow-lg"><Copy size={18} /></button></div>
+                          <p className="text-[10px] text-neutral-400 italic">Enter code in In-Game Multiplayer &gt; Private Match</p>
+                        </div>
+                      )}
 
-                 {myActiveMatch.status === 'PENDING_OPPONENT_STAKE' && (
-                   <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 space-y-3">
-                     <div className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest">Share Invite Link</div>
-                     <div className="flex gap-2"><input type="text" readOnly value={`${window.location.origin}/?join=${myActiveMatch.id}`} className="flex-1 bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-xs text-neutral-400" /><button onClick={() => copyInviteLink(myActiveMatch.id)} className="px-4 py-2 bg-amber-400 text-neutral-950 font-black text-[10px] rounded-lg uppercase cursor-pointer">Copy Link</button></div>
-                   </div>
-                 )}
-
-                 {['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(myActiveMatch.status) && (
-                   <div className="space-y-4">
-                     {myActiveMatch.roomGeneratedAt && (
-                       <div className="flex items-center justify-between p-3 rounded-xl bg-black border border-neutral-800">
-                         <div className="flex items-center gap-2 text-neutral-400 text-[10px] font-bold uppercase tracking-wider"><Clock size={14} className="text-amber-400" /><span>Match Timer:</span><span className={`font-mono text-xs ${isExpired ? 'text-rose-500' : 'text-amber-400'}`}>{timeLeft}</span></div>
-                         <span className="text-neutral-500 text-[9px] uppercase font-bold tracking-wider">{isExpired ? 'Timer Exceeded (No Auto-Settle)' : 'Active Battle'}</span>
-                       </div>
-                     )}
-                     {myActiveMatch.roomCode && (
-                       <div className="p-5 rounded-2xl bg-amber-500/10 border-2 border-amber-400/40 text-center space-y-2">
-                         <div className="text-[10px] text-neutral-400 uppercase font-mono font-bold tracking-tighter">Private Room #</div>
-                         <div className="flex items-center justify-center gap-3"><span className="text-4xl font-black text-amber-400 font-mono tracking-widest">{myActiveMatch.roomCode}</span><button onClick={() => copyCode(myActiveMatch.roomCode!)} className="p-2 rounded-lg bg-neutral-800 text-white shadow-lg"><Copy size={18} /></button></div>
-                         <p className="text-[10px] text-neutral-400 italic">Enter code in In-Game Multiplayer &gt; Private Match</p>
-                       </div>
-                     )}
-
-                     {myActiveMatch.status === 'DISPUTED' ? (
-                       <div className="p-5 rounded-2xl bg-rose-950/40 border-2 border-rose-500/60 space-y-4 animate-in zoom-in-95">
-                         <div className="flex gap-3"><div className="w-10 h-10 rounded-xl bg-rose-500/20 flex items-center justify-center shrink-0"><AlertTriangle className="text-rose-400" /></div><div><div className="text-sm font-black text-white uppercase">Dispute Detected!</div><p className="text-[11px] text-neutral-400">Conflicting scores. Upload a <b>screen recording</b> of your history and game result to resolve.</p></div></div>
+                      {myActiveMatch.status === 'DISPUTED' ? (
+                        <div className="p-5 rounded-2xl bg-rose-950/40 border-2 border-rose-500/60 space-y-4 animate-in zoom-in-95">
+                          <div className="flex gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-rose-500/20 flex items-center justify-center shrink-0">
+                              <AlertTriangle className="text-rose-400" />
+                            </div>
+                            <div>
+                              <div className="text-sm font-black text-white uppercase">Dispute Detected!</div>
+                              <p className="text-[11px] text-neutral-400">Conflicting scores. Upload a <b>screen recording</b> of your history and game result to resolve.</p>
+                            </div>
+                          </div>
+                          
                           <div className="space-y-3">
                             <input 
                               type="file" 
@@ -740,78 +920,94 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                                 } 
                               }} 
                             />
+                            
+                            {/* Dispute Video Guide Player */}
+                            <div className="mt-4 rounded-xl overflow-hidden border-2 border-rose-500/50 bg-black aspect-video relative shadow-2xl">
+                              <iframe
+                                className="w-full h-full"
+                                src="https://www.youtube.com/embed/L8s4zUbMoMo"
+                                title="How to record match results"
+                                frameBorder="0"
+                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                allowFullScreen
+                                loading="eager"
+                              ></iframe>
+                              <div className="absolute top-2 left-2 px-2 py-1 bg-rose-500 text-white text-[9px] font-black uppercase rounded shadow-lg">MANDATORY GUIDE: HOW TO RECORD PROOF</div>
+                            </div>
+
                             {screenshotPreview && (
                               <div className="h-40 rounded-xl overflow-hidden border border-rose-500/50 bg-black">
                                 {screenshotPreview.startsWith('data:video/') ? (
-                                  <video src={screenshotPreview} className="w-full h-full object-contain" controls />
+                                  <video src={screenshotPreview} className="w-full h-full object-contain" controls preload="auto" />
                                 ) : (
                                   <img src={screenshotPreview} className="w-full h-full object-contain" alt="Proof preview" />
                                 )}
                               </div>
                             )}
+
                             <button 
                               onClick={() => handleResultSubmit(myActiveMatch.id)} 
                               disabled={isSubmitting || !screenshotPreview} 
-                              className="w-full py-3 bg-rose-500 text-white font-black rounded-xl text-xs uppercase shadow-xl flex items-center justify-center gap-2"
+                              className="w-full py-3 bg-rose-500 text-white font-black rounded-xl text-xs uppercase shadow-xl flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
                             >
                               {isSubmitting ? (
                                 <>
                                   <RefreshCw size={16} className="animate-spin" />
-                                  <span>Uploading Large File... Please Wait</span>
+                                  <span>Uploading Proof... Keep Browser Open</span>
                                 </>
                               ) : (
                                 <span>Submit Video Proof & Resolve</span>
                               )}
                             </button>
-                            {isSubmitting && <p className="text-[9px] text-center text-neutral-500 animate-pulse uppercase font-black tracking-widest">Do not close browser during upload</p>}
+                            {isSubmitting && <p className="text-[9px] text-center text-neutral-500 animate-pulse uppercase font-black tracking-widest">Upload running in background...</p>}
                           </div>
-                       </div>
-                     ) : (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) ? (
-                       <div className="p-6 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-4 animate-in fade-in">
-                         <div className="flex items-center justify-between border-b border-neutral-800/80 pb-3">
-                           <div className="flex items-center gap-2">
-                             <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
-                             <span className="text-xs font-black text-amber-400 uppercase tracking-widest">
-                               Awaiting Rival Confirmation
-                             </span>
-                           </div>
-                           <span className="text-[10px] font-mono font-bold text-neutral-400">
-                             Pot: ₦{myActiveMatch.potAmount.toLocaleString()}
-                           </span>
-                         </div>
+                        </div>
+                      ) : (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) ? (
+                        <div className="p-6 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-4 animate-in fade-in">
+                          <div className="flex items-center justify-between border-b border-neutral-800/80 pb-3">
+                            <div className="flex items-center gap-2">
+                              <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
+                              <span className="text-xs font-black text-amber-400 uppercase tracking-widest">
+                                Awaiting Rival Confirmation
+                              </span>
+                            </div>
+                            <span className="text-[10px] font-mono font-bold text-neutral-400">
+                              Pot: ₦{myActiveMatch.potAmount.toLocaleString()}
+                            </span>
+                          </div>
 
-                         <div className="p-4 rounded-xl bg-neutral-900/80 border border-neutral-800 space-y-3">
-                           <div className="flex items-center justify-between">
-                             <span className="text-xs text-neutral-400 font-bold uppercase tracking-wider">Your Submitted Outcome:</span>
-                             <span className={`text-xs font-black px-2.5 py-1 rounded-lg border font-mono ${
-                               (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) === 'VICTORY'
-                                 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                                 : (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) === 'DEFEAT'
-                                 ? 'bg-rose-500/10 border-rose-500/30 text-rose-400'
-                                 : 'bg-amber-400/10 border-amber-400/30 text-amber-400'
-                             }`}>
-                               {(isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) === 'VICTORY'
-                                 ? 'I Won 🏆'
-                                 : (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) === 'DEFEAT'
-                                 ? 'I Lost ❌'
-                                 : 'Draw ⚖️'}
-                             </span>
-                           </div>
+                          <div className="p-4 rounded-xl bg-neutral-900/80 border border-neutral-800 space-y-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-neutral-400 font-bold uppercase tracking-wider">Your Submitted Outcome:</span>
+                              <span className={`text-xs font-black px-2.5 py-1 rounded-lg border font-mono ${
+                                (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) === 'VICTORY'
+                                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                                  : (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) === 'DEFEAT'
+                                  ? 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                                  : 'bg-amber-400/10 border-amber-400/30 text-amber-400'
+                              }`}>
+                                {(isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) === 'VICTORY'
+                                  ? 'I Won 🏆'
+                                  : (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) === 'DEFEAT'
+                                  ? 'I Lost ❌'
+                                  : 'Draw ⚖️'}
+                              </span>
+                            </div>
 
-                           <div className="p-3.5 rounded-xl bg-black/60 border border-neutral-800/80 flex items-start gap-3">
-                             <Clock className="w-5 h-5 text-amber-400 shrink-0 mt-0.5 animate-spin" />
-                             <div className="space-y-1 text-xs">
-                               <div className="font-bold text-white">
-                                 Waiting for {isCreatorOfActive ? (myActiveMatch.opponent?.codmIgn || 'Opponent') : myActiveMatch.creator.codmIgn} to confirm...
-                               </div>
-                               <p className="text-neutral-400 text-[11px] leading-relaxed">
-                                 Your result has been registered. The referee system is waiting for your rival to submit on their screen. Once both players submit, the match will resolve and winner payout (₦{myActiveMatch.winnerPayout.toLocaleString()}) will release immediately!
-                               </p>
-                             </div>
-                           </div>
-                         </div>
-                       </div>
-                     ) : (
+                            <div className="p-3.5 rounded-xl bg-black/60 border border-neutral-800/80 flex items-start gap-3">
+                              <Clock className="w-5 h-5 text-amber-400 shrink-0 mt-0.5 animate-spin" />
+                              <div className="space-y-1 text-xs">
+                                <div className="font-bold text-white">
+                                  Waiting for {isCreatorOfActive ? (myActiveMatch.opponent?.codmIgn || 'Opponent') : myActiveMatch.creator.codmIgn} to confirm...
+                                </div>
+                                <p className="text-neutral-400 text-[11px] leading-relaxed">
+                                  Your result has been registered. The referee system is waiting for your rival to submit on their screen. Once both players submit, the match will resolve and winner payout will release immediately!
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
                         <div className="p-5 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-4">
                           {(myActiveMatch.conflictRetries ?? 0) > 0 && (
                             <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-400 flex flex-col gap-1.5 animate-pulse">
@@ -822,77 +1018,106 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                               <p className="text-[10px] text-neutral-400">
                                 Both players submitted different results. You have <strong>{3 - (myActiveMatch.conflictRetries ?? 0)} retries remaining</strong> before mandatory screenshot review. Please confirm the correct outcome.
                               </p>
+                              
+                              {/* Conflict Guide Video Player */}
+                              <div className="mt-4 rounded-xl overflow-hidden border-2 border-rose-500/50 bg-black aspect-video relative shadow-2xl">
+                                <iframe
+                                  className="w-full h-full"
+                                  src="https://www.youtube.com/embed/L8s4zUbMoMo"
+                                  title="How to record match results"
+                                  frameBorder="0"
+                                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                  allowFullScreen
+                                  loading="eager"
+                                ></iframe>
+                                <div className="absolute top-2 left-2 px-2 py-1 bg-rose-500 text-white text-[9px] font-black uppercase rounded shadow-lg">MANDATORY GUIDE: HOW TO RECORD PROOF</div>
+                              </div>
                             </div>
                           )}
-                         {(isCreatorOfActive ? myActiveMatch.opponent?.resultClaim : myActiveMatch.creator.resultClaim) && (
-                           <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-center gap-2.5 animate-in fade-in">
-                             <Sparkles className="w-4 h-4 text-amber-400 shrink-0 animate-pulse" />
-                             <span>
-                               <strong>{isCreatorOfActive ? (myActiveMatch.opponent?.codmIgn || 'Opponent') : myActiveMatch.creator.codmIgn}</strong> declared: <strong className="underline uppercase">
-                                 {(isCreatorOfActive ? myActiveMatch.opponent?.resultClaim : myActiveMatch.creator.resultClaim) === 'VICTORY'
-                                   ? 'I Won 🏆'
-                                   : (isCreatorOfActive ? myActiveMatch.opponent?.resultClaim : myActiveMatch.creator.resultClaim) === 'DEFEAT'
-                                   ? 'I Lost ❌'
-                                   : 'Draw ⚖️'}
-                               </strong>. Select your outcome below to settle!
-                             </span>
-                           </div>
-                         )}
+                          
+                          {(isCreatorOfActive ? myActiveMatch.opponent?.resultClaim : myActiveMatch.creator.resultClaim) && (
+                            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-center gap-2.5 animate-in fade-in">
+                              <Sparkles className="w-4 h-4 text-amber-400 shrink-0 animate-pulse" />
+                              <span>
+                                <strong>{isCreatorOfActive ? (myActiveMatch.opponent?.codmIgn || 'Opponent') : myActiveMatch.creator.codmIgn}</strong> declared: <strong className="underline uppercase">
+                                  {(isCreatorOfActive ? myActiveMatch.opponent?.resultClaim : myActiveMatch.creator.resultClaim) === 'VICTORY'
+                                    ? 'I Won 🏆'
+                                    : (isCreatorOfActive ? myActiveMatch.opponent?.resultClaim : myActiveMatch.creator.resultClaim) === 'DEFEAT'
+                                    ? 'I Lost ❌'
+                                    : 'Draw ⚖️'}
+                                </strong>. Select your outcome below to settle!
+                              </span>
+                            </div>
+                          )}
 
-                         <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-widest text-neutral-400"><span>Match Ended? Confirm Result</span><span className="text-amber-400">Winner: ₦{myActiveMatch.winnerPayout.toLocaleString()}</span></div>
-                         <div className="grid grid-cols-3 gap-2">
-                           {(['VICTORY', 'DEFEAT', 'DRAW'] as const).map(claim => (
-                             <button key={claim} onClick={() => setSelectedClaim(claim)} className={`py-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedClaim === claim ? 'bg-amber-400 text-neutral-950 border-amber-400 shadow-lg' : 'bg-neutral-900 border-neutral-800 text-neutral-400'}`}>{claim === 'VICTORY' ? 'I Won' : claim === 'DEFEAT' ? 'I Lost' : 'Draw'}</button>
-                           ))}
-                         </div>
-                         <button onClick={() => handleResultSubmit(myActiveMatch.id)} disabled={isSubmitting} className="w-full py-3.5 bg-amber-400 text-neutral-950 font-black rounded-xl text-xs uppercase shadow-xl transition-all active:scale-95">{isSubmitting ? 'Confirming...' : `Submit "${selectedClaim}" Confirmation`}</button>
-                       </div>
-                     )}
-                   </div>
-                 )}
+                          <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-widest text-neutral-400">
+                            <span>Match Ended? Confirm Result</span>
+                            <span className="text-amber-400">Winner Payout: ₦{myActiveMatch.winnerPayout.toLocaleString()}</span>
+                          </div>
+                          
+                          <div className="grid grid-cols-3 gap-2">
+                            {(['VICTORY', 'DEFEAT', 'DRAW'] as const).map(claim => (
+                              <button key={claim} onClick={() => setSelectedClaim(claim)} className={`py-3 rounded-xl border text-[10px] font-black uppercase transition-all ${selectedClaim === claim ? 'bg-amber-400 text-neutral-950 border-amber-400 shadow-lg scale-105' : 'bg-neutral-900 border-neutral-800 text-neutral-400'}`}>
+                                {claim === 'VICTORY' ? 'I Won' : claim === 'DEFEAT' ? 'I Lost' : 'Draw'}
+                              </button>
+                            ))}
+                          </div>
+                          
+                          <button 
+                            onClick={() => handleResultSubmit(myActiveMatch.id)} 
+                            disabled={isSubmitting} 
+                            className="w-full py-4 bg-amber-400 text-neutral-950 font-black rounded-xl text-xs uppercase shadow-xl transition-all active:scale-95 disabled:opacity-50"
+                          >
+                            {isSubmitting ? 'Confirming...' : `Submit "${selectedClaim}" Confirmation`}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
-                 {myActiveMatch.status === 'SETTLED' && (
-                   <div className="p-6 rounded-2xl bg-gradient-to-b from-amber-500/20 to-neutral-950 border border-amber-500/40 text-center space-y-4">
-                     <div className="w-12 h-12 rounded-full bg-amber-400/20 border border-amber-400/40 text-amber-400 flex items-center justify-center mx-auto"><Trophy size={24} /></div>
-                     <div className="text-xl font-black text-white uppercase font-heading">{myActiveMatch.winnerIgn?.includes('DRAW') ? 'Result: DRAW' : `Winner: ${myActiveMatch.winnerIgn}`}</div>
-                     <div className="flex justify-center gap-3"><button onClick={() => handleReturnToLobby(myActiveMatch.id)} className="px-5 py-2 bg-amber-400 text-neutral-950 font-black rounded-xl text-[10px] uppercase">Back to Lobby</button><button onClick={() => onDismissMatch(myActiveMatch.id)} className="px-5 py-2 bg-neutral-800 text-white font-bold rounded-xl text-[10px] uppercase">Dismiss</button></div>
-                   </div>
-                 )}
-                 
-                 {myActiveMatch.status === 'ABANDONED' && (
-                   <div className="p-6 rounded-2xl bg-rose-950/20 border border-rose-500/40 text-center space-y-3">
-                     <div className="w-10 h-10 rounded-full bg-rose-500/10 text-rose-500 flex items-center justify-center mx-auto"><AlertTriangle /></div>
-                     <div className="text-sm font-black text-white uppercase">Match Abandoned</div>
-                     <p className="text-[10px] text-neutral-400">Stake refunded minus platform fee.</p>
-                     <div className="flex justify-center gap-2 pt-2"><button onClick={() => handleReturnToLobby(myActiveMatch.id)} className="px-4 py-1.5 bg-amber-400 text-neutral-950 font-bold rounded-lg text-[10px] uppercase">Lobby</button><button onClick={() => onDismissMatch(myActiveMatch.id)} className="px-4 py-1.5 bg-neutral-800 text-white font-bold rounded-lg text-[10px] uppercase">Clear</button></div>
-                   </div>
-                 )}
-              </div>
+                  {myActiveMatch.status === 'SETTLED' && (
+                    <div className="p-6 rounded-2xl bg-gradient-to-b from-amber-500/20 to-neutral-950 border border-amber-500/40 text-center space-y-4">
+                      <div className="w-12 h-12 rounded-full bg-amber-400/20 border border-amber-400/40 text-amber-400 flex items-center justify-center mx-auto"><Trophy size={24} /></div>
+                      <div className="text-xl font-black text-white uppercase font-heading">{myActiveMatch.winnerIgn?.includes('DRAW') ? 'Result: DRAW' : `Winner: ${myActiveMatch.winnerIgn}`}</div>
+                      <div className="flex justify-center gap-3"><button onClick={() => handleReturnToLobby(myActiveMatch.id)} className="px-5 py-2 bg-amber-400 text-neutral-950 font-black rounded-xl text-[10px] uppercase">Back to Lobby</button><button onClick={() => onDismissMatch(myActiveMatch.id)} className="px-5 py-2 bg-neutral-800 text-white font-bold rounded-xl text-[10px] uppercase">Dismiss</button></div>
+                    </div>
+                  )}
+                  
+                  {myActiveMatch.status === 'ABANDONED' && (
+                    <div className="p-6 rounded-2xl bg-rose-950/20 border border-rose-500/40 text-center space-y-3">
+                      <div className="w-10 h-10 rounded-full bg-rose-500/10 text-rose-500 flex items-center justify-center mx-auto"><AlertTriangle /></div>
+                      <div className="text-sm font-black text-white uppercase">Match Abandoned</div>
+                      <p className="text-[10px] text-neutral-400">Stake refunded minus platform fee.</p>
+                      <div className="flex justify-center gap-2 pt-2"><button onClick={() => handleReturnToLobby(myActiveMatch.id)} className="px-4 py-1.5 bg-amber-400 text-neutral-950 font-bold rounded-lg text-[10px] uppercase">Lobby</button><button onClick={() => onDismissMatch(myActiveMatch.id)} className="px-4 py-1.5 bg-neutral-800 text-white font-bold rounded-lg text-[10px] uppercase">Clear</button></div>
+                    </div>
+                  )}
+                </div>
 
-              <div className={`space-y-4 ${activeMatchSubTab === 'game' ? 'hidden lg:block' : 'block'}`}>
-                <div className="p-4 rounded-3xl bg-neutral-900 border border-neutral-800 space-y-3 sticky top-4">
-                  <div className="flex items-center gap-2 pb-1"><MessageCircle size={18} className="text-emerald-400" /><span className="text-xs font-black uppercase tracking-widest text-white">Match Chat</span></div>
-                  <div className="relative h-[550px] rounded-2xl overflow-hidden shadow-inner border border-white/5">
-                    <MatchLobbyChat
-                      matchId={myActiveMatch.id}
-                      currentUser={currentUser}
-                      opponentName={isCreatorOfActive ? (myActiveMatch.opponent?.codmIgn || 'Opponent') : myActiveMatch.creator.codmIgn}
-                      initialMessages={myActiveMatch.chatMessages || []}
-                      isSettled={['SETTLED', 'ABANDONED', 'CANCELLED'].includes(myActiveMatch.status)}
-                    />
+                <div className={`space-y-4 ${activeMatchSubTab === 'game' ? 'hidden lg:block' : 'block'}`}>
+                  <div className="p-4 rounded-3xl bg-neutral-900 border border-neutral-800 space-y-3 sticky top-4">
+                    <div className="flex items-center gap-2 pb-1"><MessageCircle size={18} className="text-emerald-400" /><span className="text-xs font-black uppercase tracking-widest text-white">Match Chat</span></div>
+                    <div className="relative h-[550px] rounded-2xl overflow-hidden shadow-inner border border-white/5">
+                      <MatchLobbyChat
+                        matchId={myActiveMatch.id}
+                        currentUser={currentUser}
+                        opponentName={isCreatorOfActive ? (myActiveMatch.opponent?.codmIgn || 'Opponent') : myActiveMatch.creator.codmIgn}
+                        initialMessages={myActiveMatch.chatMessages || []}
+                        isSettled={['SETTLED', 'ABANDONED', 'CANCELLED'].includes(myActiveMatch.status)}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
+            </>
+          ) : (
+            <div className="p-16 rounded-3xl bg-neutral-900 border border-neutral-800 text-center space-y-4">
+              <div className="w-16 h-16 rounded-2xl bg-neutral-800 text-neutral-500 flex items-center justify-center mx-auto"><Zap size={32} /></div>
+              <div className="text-2xl font-black font-heading text-white uppercase">No Active Battle</div>
+              <p className="text-xs text-neutral-400 max-w-sm mx-auto">You're not currently in a match. Start a new wager or accept a challenge!</p>
+              <button onClick={() => setArenaTab('live')} className="px-8 py-3 bg-amber-400 text-neutral-950 font-black rounded-2xl text-xs uppercase shadow-lg">Browse Live Lobby</button>
             </div>
-          </div>
-        ) : (
-          <div className="p-16 rounded-3xl bg-neutral-900 border border-neutral-800 text-center space-y-4">
-            <div className="w-16 h-16 rounded-2xl bg-neutral-800 text-neutral-500 flex items-center justify-center mx-auto"><Zap size={32} /></div>
-            <div className="text-2xl font-black font-heading text-white uppercase">No Active Battle</div>
-            <p className="text-xs text-neutral-400 max-w-sm mx-auto">You're not currently in a match. Start a new wager or accept a challenge!</p>
-            <button onClick={() => setArenaTab('live')} className="px-8 py-3 bg-amber-400 text-neutral-950 font-black rounded-2xl text-xs uppercase shadow-lg">Browse Live Lobby</button>
-          </div>
-        )
+          )}
+        </div>
       )}
 
       {/* 5. Hosted Bets Tab */}

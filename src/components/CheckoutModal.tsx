@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { createDepositRequest, checkDepositStatus, verifyDepositSession } from '../services/api';
 import { calculateDepositFee } from '../utils/feeCalculator';
-import sessionIdGuideImg from '../assets/images/session_id_guide.png';
+const sessionIdGuideImg = '/assets/aistudio/54A9305C-3D3B-4553-B59D-1507F13A6CDD_66112ba4.png';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -340,10 +340,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                           <button
                             type="button"
                             onClick={() => setShowSessionHelpModal(true)}
-                            className="text-[10px] text-amber-400 hover:text-amber-300 font-black flex items-center gap-1.5 cursor-pointer bg-amber-500/10 px-3 py-1.5 rounded-xl border border-amber-500/30 transition-all active:scale-95 shadow-sm"
+                            className="flex items-center gap-2 px-4 py-2 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase rounded-xl transition-all shadow-lg active:scale-95 cursor-pointer border-b-2 border-amber-600"
                           >
-                            <HelpCircle className="w-3.5 h-3.5" />
-                            <span>HOW TO GET SESSION ID?</span>
+                            <HelpCircle className="w-4 h-4" />
+                            <span>How to get Session ID?</span>
                           </button>
                        </div>
                        

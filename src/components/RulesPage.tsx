@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { Logo } from './Logo';
+import { VideoTutorial } from './VideoTutorial';
 
 interface RulesPageProps {
   onOpenCreateBet: (mode?: string, stake?: number) => void;
@@ -221,6 +222,10 @@ export const RulesPage: React.FC<RulesPageProps> = ({
           </p>
         </div>
       </div>
+      <VideoTutorial 
+        title="Video Tutorial: How to Make Screen Recording Proofs" 
+        description="Follow this guide to ensure your screen recordings are valid and accepted by our forensic review system."
+      />
     </div>
   );
 };

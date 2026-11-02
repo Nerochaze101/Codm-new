@@ -268,7 +268,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     try {
       const res = await fetch('/api/telegram/test-channel-post', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Admin-Id': currentUser.id },
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Id': currentUser.id, 'X-User-Id': currentUser.id },
         body: JSON.stringify({ userId: currentUser.id }),
       });
       const data = await res.json();
@@ -300,7 +300,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
   const loadFeeSettings = async () => {
     try {
       const res = await fetch('/api/admin/fee-settings', {
-        headers: { 'X-Admin-Id': currentUser.id }
+        headers: { 'X-Admin-Id': currentUser.id, 'X-User-Id': currentUser.id }
       });
       const data = await res.json();
       if (data.soloFeePercent) setSoloFeeRate(data.soloFeePercent);
@@ -318,7 +318,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'X-Admin-Id': currentUser.id
+          'X-Admin-Id': currentUser.id,
+          'X-User-Id': currentUser.id
         },
         body: JSON.stringify({
           userId: currentUser.id,
@@ -1732,7 +1733,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                               method: 'POST',
                               headers: { 
                                 'Content-Type': 'application/json',
-                                'X-Admin-Id': currentUser.id
+                                'X-Admin-Id': currentUser.id,
+                                'X-User-Id': currentUser.id
                               },
                               body: JSON.stringify({ userId: currentUser.id, channelId: cid }),
                             });

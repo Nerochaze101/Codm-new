@@ -29,11 +29,12 @@ var pool = new Pool({
     rejectUnauthorized: false
     // Required for Supabase cloud PostgreSQL
   },
-  max: 30,
-  // Expanded for 200+ concurrent deposit submissions
+  max: 100,
+  // Expanded for 1,000+ concurrent users peak
   idleTimeoutMillis: 3e4,
   connectionTimeoutMillis: 15e3,
-  statement_timeout: 1e4
+  statement_timeout: 3e4
+  // Increased to 30s for large video proof analysis
 });
 async function runDatabaseDiagnostics() {
   const result = {
@@ -358,6 +359,27 @@ async function initDatabase() {
       
       INSERT INTO platform_finance (id, total_fees_collected, total_fees_withdrawn) 
       VALUES ('main', 0, 0) ON CONFLICT (id) DO NOTHING;
+
+      -- High Concurrency Performance Indexes
+      CREATE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code);
+      CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+      CREATE INDEX IF NOT EXISTS idx_users_ign ON users(codm_ign);
+      
+      CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status);
+      CREATE INDEX IF NOT EXISTS idx_matches_creator_id ON matches(creator_id);
+      CREATE INDEX IF NOT EXISTS idx_matches_opponent_id ON matches(opponent_id);
+      CREATE INDEX IF NOT EXISTS idx_matches_created_at ON matches(created_at);
+      CREATE INDEX IF NOT EXISTS idx_matches_is_public ON matches(is_public);
+      
+      CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
+      CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions(timestamp);
+      
+      CREATE INDEX IF NOT EXISTS idx_withdrawal_user_id ON withdrawal_requests(user_id);
+      CREATE INDEX IF NOT EXISTS idx_withdrawal_status ON withdrawal_requests(status);
+      
+      CREATE INDEX IF NOT EXISTS idx_deposit_user_id ON deposit_requests(user_id);
+      CREATE INDEX IF NOT EXISTS idx_deposit_status ON deposit_requests(status);
+      CREATE INDEX IF NOT EXISTS idx_deposit_ref ON deposit_requests(payment_reference);
     `);
     const usersCountRes = await client.query("SELECT COUNT(*) FROM users");
     if (parseInt(usersCountRes.rows[0].count, 10) === 0) {
@@ -1117,7 +1139,7 @@ async function sendEmail(to, subject, html) {
   }
 }
 var app = express();
-app.use(express.json({ limit: "200mb" }));
+app.use(express.json({ limit: "250mb" }));
 function escapeSql(val) {
   if (val === null || val === void 0) return "NULL";
   if (typeof val === "number") {
@@ -1438,6 +1460,8 @@ async function getAllMatchesFromDb() {
              chat_messages, room_generated_at, settled_at, is_public, conflict_retries,
              reviewer_id, reviewer_name, mutual_action_data
       FROM matches 
+      WHERE status IN ('PENDING_OPPONENT_STAKE', 'READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED')
+      OR created_at > ${Date.now() - 24 * 60 * 60 * 1e3}
       ORDER BY created_at DESC 
       LIMIT 100
     `);
@@ -1705,8 +1729,9 @@ async function requireAdminAuth(req, res, next) {
   if (req.path === "/claim-admin" || req.path === "/claim-admin/") {
     return next();
   }
-  const userId = req.headers["x-admin-id"] || req.headers["x-user-id"] || req.body?.adminUserId || req.body?.userId || req.query?.adminUserId || req.query?.userId;
-  if (!userId) {
+  const userId = req.headers["x-admin-id"] || req.headers["x-user-id"] || req.headers["authorization"]?.replace("Bearer ", "") || req.body?.adminUserId || req.body?.userId || req.query?.adminUserId || req.query?.userId;
+  if (!userId || userId === "null" || userId === "undefined" || userId === "") {
+    console.warn(`[Admin Auth] Blocked request for ${req.path}: Missing ID in headers/body/query.`);
     return res.status(403).json({ error: "Forbidden: Missing admin authentication credentials" });
   }
   const user = await getUserFromDb(String(userId));
@@ -5003,15 +5028,6 @@ var TELEGRAM_PUBLIC_CHANNEL_ID = (process.env.TELEGRAM_PUBLIC_CHANNEL_ID || "").
 var TELEGRAM_REVIEW_GROUP_ID = (process.env.TELEGRAM_REVIEW_GROUP_ID || "").trim();
 async function sendMatchDisputeVideoToTelegram(match, playerIgn, videoBase64) {
   try {
-    if (!TELEGRAM_BOT_TOKEN) {
-      console.warn("[Telegram Bot] Cannot send dispute video: TELEGRAM_BOT_TOKEN not configured.");
-      return;
-    }
-    const targetGroupId = TELEGRAM_REVIEW_GROUP_ID || TELEGRAM_PUBLIC_CHANNEL_ID;
-    if (!targetGroupId) {
-      console.warn("[Telegram Bot] Cannot send dispute video: TELEGRAM_REVIEW_GROUP_ID not configured.");
-      return;
-    }
     const matches = videoBase64.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.*)$/);
     if (!matches || matches.length < 3) {
       console.error("[Telegram Bot] Invalid video data format");
@@ -5020,9 +5036,32 @@ async function sendMatchDisputeVideoToTelegram(match, playerIgn, videoBase64) {
     const mimeType = matches[1];
     const base64Content = matches[2];
     const buffer = Buffer.from(base64Content, "base64");
-    const fileSizeMb = buffer.length / (1024 * 1024);
-    console.log(`[Telegram Bot] Preparing dispute video for Match #${match.challengeCode} (${playerIgn}). Size: ${fileSizeMb.toFixed(2)} MB`);
-    const messageText = `\u{1F6A8} <b>MATCH DISPUTE VIDEO SUBMITTED</b> \u{1F6A8}
+    return await sendTelegramVideo(match, playerIgn, buffer, mimeType);
+  } catch (err) {
+    console.error("\u274C [Telegram Bot] Critical exception during video upload:", err.message);
+  }
+}
+async function sendMatchDisputeVideoToTelegramFromFile(match, playerIgn, filePath, mimeType = "video/mp4") {
+  try {
+    const buffer = fs.readFileSync(filePath);
+    return await sendTelegramVideo(match, playerIgn, buffer, mimeType);
+  } catch (err) {
+    console.error("\u274C [Telegram Bot] Critical exception during file-based video upload:", err.message);
+  }
+}
+async function sendTelegramVideo(match, playerIgn, buffer, mimeType) {
+  if (!TELEGRAM_BOT_TOKEN) {
+    console.warn("[Telegram Bot] Cannot send dispute video: TELEGRAM_BOT_TOKEN not configured.");
+    return;
+  }
+  const targetGroupId = TELEGRAM_REVIEW_GROUP_ID || TELEGRAM_PUBLIC_CHANNEL_ID;
+  if (!targetGroupId) {
+    console.warn("[Telegram Bot] Cannot send dispute video: TELEGRAM_REVIEW_GROUP_ID not configured.");
+    return;
+  }
+  const fileSizeMb = buffer.length / (1024 * 1024);
+  console.log(`[Telegram Bot] Preparing dispute video for Match #${match.challengeCode} (${playerIgn}). Size: ${fileSizeMb.toFixed(2)} MB`);
+  const messageText = `\u{1F6A8} <b>MATCH DISPUTE VIDEO SUBMITTED</b> \u{1F6A8}
 
 \u{1F464} <b>Gladiator:</b> ${playerIgn}
 \u{1F3F7}\uFE0F <b>Match Code:</b> #${match.challengeCode}
@@ -5035,52 +5074,49 @@ async function sendMatchDisputeVideoToTelegram(match, playerIgn, videoBase64) {
 
 \u{1F50D} <b>Search Tag:</b> <code>#DISPUTE_${match.challengeCode}</code>
 #Dispute #${match.challengeCode} #${playerIgn.replace(/\s+/g, "")}`;
-    if (fileSizeMb > 49.5) {
-      console.warn(`[Telegram Bot] Video exceeds 50MB limit (${fileSizeMb.toFixed(2)}MB). Sending notification only.`);
-      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: targetGroupId,
-          text: messageText + `
+  if (fileSizeMb > 49.5) {
+    console.warn(`[Telegram Bot] Video exceeds 50MB limit (${fileSizeMb.toFixed(2)}MB). Sending notification only.`);
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: targetGroupId,
+        text: messageText + `
 
 \u26A0\uFE0F <b>SYSTEM NOTICE:</b> Video file was too large for Telegram upload (${fileSizeMb.toFixed(2)} MB). Please review this match forensic recording directly on the OpsSTAKE Admin Dashboard.`,
-          parse_mode: "HTML"
-        })
-      });
-      return;
-    }
-    const formData = new FormData();
-    formData.append("chat_id", targetGroupId);
-    formData.append("caption", messageText);
-    formData.append("parse_mode", "HTML");
-    const blob = new Blob([buffer], { type: mimeType });
-    const extension = mimeType.split("/")[1] || "mp4";
-    formData.append("video", blob, `dispute_${match.challengeCode}_${playerIgn.replace(/\s+/g, "_")}.${extension}`);
-    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo`, {
-      method: "POST",
-      body: formData
+        parse_mode: "HTML"
+      })
     });
-    const data = await res.json();
-    if (!data.ok) {
-      console.error(`\u274C [Telegram Bot] Video upload FAILED: ${data.description}`);
-      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: targetGroupId,
-          text: messageText + `
+    return;
+  }
+  const formData = new FormData();
+  formData.append("chat_id", targetGroupId);
+  formData.append("caption", messageText);
+  formData.append("parse_mode", "HTML");
+  const blob = new Blob([buffer], { type: mimeType });
+  const extension = mimeType.split("/")[1] || "mp4";
+  formData.append("video", blob, `dispute_${match.challengeCode}_${playerIgn.replace(/\s+/g, "_")}.${extension}`);
+  const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo`, {
+    method: "POST",
+    body: formData
+  });
+  const data = await res.json();
+  if (!data.ok) {
+    console.error(`\u274C [Telegram Bot] Video upload FAILED: ${data.description}`);
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: targetGroupId,
+        text: messageText + `
 
 \u274C <b>UPLOAD FAILED:</b> ${data.description}
 Please review proof on Admin Dashboard.`,
-          parse_mode: "HTML"
-        })
-      });
-    } else {
-      console.log(`\u2705 [Telegram Bot] Dispute video for Match #${match.challengeCode} posted successfully to review group.`);
-    }
-  } catch (err) {
-    console.error("\u274C [Telegram Bot] Critical exception during video upload:", err.message);
+        parse_mode: "HTML"
+      })
+    });
+  } else {
+    console.log(`\u2705 [Telegram Bot] Dispute video for Match #${match.challengeCode} posted successfully to review group.`);
   }
 }
 async function postMatchToPublicChannel(match, origin) {
@@ -6999,10 +7035,20 @@ app.post("/api/matches/:id/submit-result", rateLimitMiddleware(15, 6e4), secureS
         timestamp: Date.now()
       });
       if (isVideo) {
-        setImmediate(() => {
-          sendMatchDisputeVideoToTelegram(match, playerIgn, screenshotBase64).catch(
-            (err) => console.error("[Telegram Bot] Background video upload error:", err.message)
-          );
+        const tempPath = `/tmp/dispute_${match.id}_${Date.now()}.mp4`;
+        const base64Data = screenshotBase64.split(",")[1];
+        fs.writeFileSync(tempPath, Buffer.from(base64Data, "base64"));
+        setImmediate(async () => {
+          try {
+            await sendMatchDisputeVideoToTelegramFromFile(match, playerIgn, tempPath);
+          } catch (err) {
+            console.error("[Telegram Bot] Background video upload error:", err.message);
+          } finally {
+            try {
+              fs.unlinkSync(tempPath);
+            } catch {
+            }
+          }
         });
       }
       resolveWinner = null;
@@ -8466,6 +8512,7 @@ export {
   sanitizeMatchForPublic,
   sanitizePublicPlayerProfile,
   sendMatchDisputeVideoToTelegram,
+  sendMatchDisputeVideoToTelegramFromFile,
   sendTelegramMatchAcceptedAlert,
   sendTelegramMatchSettledAlert,
   sendTelegramSquadSlotJoinedAlert,

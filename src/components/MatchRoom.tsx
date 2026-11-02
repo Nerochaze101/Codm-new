@@ -7,6 +7,8 @@ import {
 } from 'lucide-react';
 import { StakePaymentModal } from './StakePaymentModal';
 import { MatchLobbyChat } from './MatchLobbyChat';
+import { VideoTutorial } from './VideoTutorial';
+import { DisputeResolutionModal } from './DisputeResolutionModal';
 import { sendMutualAction } from '../services/api';
 
 interface MatchRoomProps {
@@ -1026,8 +1028,7 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                 </p>
               </div>
             ) : match.status === 'DISPUTED' || match.resubmissionNotice || (isCreator ? match.creator.resubmissionRequested : match.opponent?.resubmissionRequested) ? (
-              /* CONFLICT DETECTED OR RESUBMISSION REQUESTED - SCREENSHOT REQUIRED */
-              <div className="p-5 rounded-2xl bg-rose-950/40 border-2 border-rose-500/60 space-y-4">
+              <DisputeResolutionModal match={match} onClose={() => {}}>
                 <div className="flex items-start gap-3">
                   <div className="p-2 rounded-xl bg-rose-500/20 text-rose-400 shrink-0">
                     <AlertTriangle className="w-6 h-6" />
@@ -1136,25 +1137,7 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                     </div>
                   )}
 
-                  {/* Persistent Hardcoded Video Guide for Conflict Resolution - Moved ABOVE preview for instant visibility */}
-                  <div className="p-4 rounded-2xl bg-black/80 border border-sky-500/40 space-y-2 text-left animate-in fade-in duration-300 shadow-xl">
-                    <div className="flex items-center gap-2 text-sky-400 font-bold text-xs uppercase tracking-wide">
-                      <Film className="w-4 h-4" />
-                      <span>Instant Video Tutorial: How to Record Your Screen</span>
-                    </div>
-                    <p className="text-[11px] text-neutral-400 leading-relaxed italic">
-                      Watch this guide instantly to ensure your evidence is valid for referee review.
-                    </p>
-                    <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-neutral-800 bg-black mt-2 shadow-2xl">
-                      <iframe
-                        src="https://www.youtube.com/embed/L8s4zUbMoMo?autoplay=0&rel=0"
-                        title="How to make a screen recording of your winning"
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                        allowFullScreen
-                        className="w-full h-full border-0"
-                      />
-                    </div>
-                  </div>
+                  </DisputeResolutionModal>
 
                   {screenshotPreview && (
                     <div className="h-56 rounded-xl overflow-hidden border-2 border-emerald-500/50 relative bg-black shadow-2xl animate-in zoom-in-95">

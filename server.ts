@@ -154,7 +154,7 @@ async function sendEmail(to: string, subject: string, html: string) {
 }
 
 const app = express();
-app.use(express.json({ limit: '200mb' }));
+app.use(express.json({ limit: '250mb' })); // Increased for multiple concurrent 4K screen records
 
 // Extend Express Request to include adminUser from middleware
 declare global {
@@ -659,6 +659,8 @@ async function getAllMatchesFromDb(): Promise<Match[]> {
              chat_messages, room_generated_at, settled_at, is_public, conflict_retries,
              reviewer_id, reviewer_name, mutual_action_data
       FROM matches 
+      WHERE status IN ('PENDING_OPPONENT_STAKE', 'READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED')
+      OR created_at > ${Date.now() - 24 * 60 * 60 * 1000}
       ORDER BY created_at DESC 
       LIMIT 100
     `);
@@ -959,12 +961,16 @@ async function requireAdminAuth(req: any, res: any, next: any) {
   const userId =
     req.headers['x-admin-id'] ||
     req.headers['x-user-id'] ||
+    req.headers['authorization']?.replace('Bearer ', '') ||
     req.body?.adminUserId ||
     req.body?.userId ||
     req.query?.adminUserId ||
     req.query?.userId;
 
-  if (!userId) {
+  if (!userId || userId === 'null' || userId === 'undefined' || userId === '') {
+    // If headers/body/query are missing, try to find userId in the referral code or other identifiers if applicable
+    // But for admin auth, we strictly need the ID.
+    console.warn(`[Admin Auth] Blocked request for ${req.path}: Missing ID in headers/body/query.`);
     return res.status(403).json({ error: 'Forbidden: Missing admin authentication credentials' });
   }
 
@@ -4856,93 +4862,104 @@ const TELEGRAM_REVIEW_GROUP_ID = (process.env.TELEGRAM_REVIEW_GROUP_ID || '').tr
  */
 export async function sendMatchDisputeVideoToTelegram(match: Match, playerIgn: string, videoBase64: string) {
   try {
-    if (!TELEGRAM_BOT_TOKEN) {
-      console.warn('[Telegram Bot] Cannot send dispute video: TELEGRAM_BOT_TOKEN not configured.');
-      return;
-    }
-
-    const targetGroupId = TELEGRAM_REVIEW_GROUP_ID || TELEGRAM_PUBLIC_CHANNEL_ID;
-    if (!targetGroupId) {
-      console.warn('[Telegram Bot] Cannot send dispute video: TELEGRAM_REVIEW_GROUP_ID not configured.');
-      return;
-    }
-
-    // Extract raw base64 data
     const matches = videoBase64.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.*)$/);
     if (!matches || matches.length < 3) {
       console.error('[Telegram Bot] Invalid video data format');
       return;
     }
-    
     const mimeType = matches[1];
     const base64Content = matches[2];
     const buffer = Buffer.from(base64Content, 'base64');
-    const fileSizeMb = buffer.length / (1024 * 1024);
-
-    console.log(`[Telegram Bot] Preparing dispute video for Match #${match.challengeCode} (${playerIgn}). Size: ${fileSizeMb.toFixed(2)} MB`);
-
-    const messageText = 
-      `🚨 <b>MATCH DISPUTE VIDEO SUBMITTED</b> 🚨\n\n` +
-      `👤 <b>Gladiator:</b> ${playerIgn}\n` +
-      `🏷️ <b>Match Code:</b> #${match.challengeCode}\n` +
-      `🎮 <b>Mode:</b> ${match.gameMode}\n` +
-      `🗺️ <b>Map:</b> ${match.map}\n` +
-      `💰 <b>Pot Amount:</b> <b>₦${match.potAmount.toLocaleString()}</b>\n` +
-      `📦 <b>File Size:</b> ${fileSizeMb.toFixed(2)} MB\n\n` +
-      `📹 <i>This player has uploaded a screen recording of their history and game result for manual referee review.</i>\n\n` +
-      `🔍 <b>Search Tag:</b> <code>#DISPUTE_${match.challengeCode}</code>\n` +
-      `#Dispute #${match.challengeCode} #${playerIgn.replace(/\s+/g, '')}`;
-
-    if (fileSizeMb > 49.5) {
-      console.warn(`[Telegram Bot] Video exceeds 50MB limit (${fileSizeMb.toFixed(2)}MB). Sending notification only.`);
-      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: targetGroupId,
-          text: messageText + `\n\n⚠️ <b>SYSTEM NOTICE:</b> Video file was too large for Telegram upload (${fileSizeMb.toFixed(2)} MB). Please review this match forensic recording directly on the OpsSTAKE Admin Dashboard.`,
-          parse_mode: 'HTML',
-        }),
-      });
-      return;
-    }
-
-    // Create FormData for file upload
-    const formData = new FormData();
-    formData.append('chat_id', targetGroupId);
-    formData.append('caption', messageText);
-    formData.append('parse_mode', 'HTML');
-    
-    // Convert Buffer to Blob/File for fetch
-    const blob = new Blob([buffer], { type: mimeType });
-    const extension = mimeType.split('/')[1] || 'mp4';
-    formData.append('video', blob, `dispute_${match.challengeCode}_${playerIgn.replace(/\s+/g, '_')}.${extension}`);
-
-    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo`, {
-      method: 'POST',
-      body: formData,
-    });
-
-    const data: any = await res.json();
-    if (!data.ok) {
-      console.error(`❌ [Telegram Bot] Video upload FAILED: ${data.description}`);
-      // Fallback to text message if video upload fails
-      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: targetGroupId,
-          text: messageText + `\n\n❌ <b>UPLOAD FAILED:</b> ${data.description}\nPlease review proof on Admin Dashboard.`,
-          parse_mode: 'HTML',
-        }),
-      });
-    } else {
-      console.log(`✅ [Telegram Bot] Dispute video for Match #${match.challengeCode} posted successfully to review group.`);
-    }
+    return await sendTelegramVideo(match, playerIgn, buffer, mimeType);
   } catch (err: any) {
     console.error('❌ [Telegram Bot] Critical exception during video upload:', err.message);
   }
 }
+
+export async function sendMatchDisputeVideoToTelegramFromFile(match: Match, playerIgn: string, filePath: string, mimeType: string = 'video/mp4') {
+  try {
+    const buffer = fs.readFileSync(filePath);
+    return await sendTelegramVideo(match, playerIgn, buffer, mimeType);
+  } catch (err: any) {
+    console.error('❌ [Telegram Bot] Critical exception during file-based video upload:', err.message);
+  }
+}
+
+async function sendTelegramVideo(match: Match, playerIgn: string, buffer: Buffer, mimeType: string) {
+  if (!TELEGRAM_BOT_TOKEN) {
+    console.warn('[Telegram Bot] Cannot send dispute video: TELEGRAM_BOT_TOKEN not configured.');
+    return;
+  }
+
+  const targetGroupId = TELEGRAM_REVIEW_GROUP_ID || TELEGRAM_PUBLIC_CHANNEL_ID;
+  if (!targetGroupId) {
+    console.warn('[Telegram Bot] Cannot send dispute video: TELEGRAM_REVIEW_GROUP_ID not configured.');
+    return;
+  }
+
+  const fileSizeMb = buffer.length / (1024 * 1024);
+  console.log(`[Telegram Bot] Preparing dispute video for Match #${match.challengeCode} (${playerIgn}). Size: ${fileSizeMb.toFixed(2)} MB`);
+
+  const messageText = 
+    `🚨 <b>MATCH DISPUTE VIDEO SUBMITTED</b> 🚨\n\n` +
+    `👤 <b>Gladiator:</b> ${playerIgn}\n` +
+    `🏷️ <b>Match Code:</b> #${match.challengeCode}\n` +
+    `🎮 <b>Mode:</b> ${match.gameMode}\n` +
+    `🗺️ <b>Map:</b> ${match.map}\n` +
+    `💰 <b>Pot Amount:</b> <b>₦${match.potAmount.toLocaleString()}</b>\n` +
+    `📦 <b>File Size:</b> ${fileSizeMb.toFixed(2)} MB\n\n` +
+    `📹 <i>This player has uploaded a screen recording of their history and game result for manual referee review.</i>\n\n` +
+    `🔍 <b>Search Tag:</b> <code>#DISPUTE_${match.challengeCode}</code>\n` +
+    `#Dispute #${match.challengeCode} #${playerIgn.replace(/\s+/g, '')}`;
+
+  if (fileSizeMb > 49.5) {
+    console.warn(`[Telegram Bot] Video exceeds 50MB limit (${fileSizeMb.toFixed(2)}MB). Sending notification only.`);
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: targetGroupId,
+        text: messageText + `\n\n⚠️ <b>SYSTEM NOTICE:</b> Video file was too large for Telegram upload (${fileSizeMb.toFixed(2)} MB). Please review this match forensic recording directly on the OpsSTAKE Admin Dashboard.`,
+        parse_mode: 'HTML',
+      }),
+    });
+    return;
+  }
+
+  // Create FormData for file upload
+  const formData = new FormData();
+  formData.append('chat_id', targetGroupId);
+  formData.append('caption', messageText);
+  formData.append('parse_mode', 'HTML');
+  
+  // Convert Buffer to Blob/File for fetch
+  const blob = new Blob([buffer], { type: mimeType });
+  const extension = mimeType.split('/')[1] || 'mp4';
+  formData.append('video', blob, `dispute_${match.challengeCode}_${playerIgn.replace(/\s+/g, '_')}.${extension}`);
+
+  const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  const data: any = await res.json();
+  if (!data.ok) {
+    console.error(`❌ [Telegram Bot] Video upload FAILED: ${data.description}`);
+    // Fallback to text message if video upload fails
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: targetGroupId,
+        text: messageText + `\n\n❌ <b>UPLOAD FAILED:</b> ${data.description}\nPlease review proof on Admin Dashboard.`,
+        parse_mode: 'HTML',
+      }),
+    });
+  } else {
+    console.log(`✅ [Telegram Bot] Dispute video for Match #${match.challengeCode} posted successfully to review group.`);
+  }
+}
+
 
 
 /**
@@ -7197,10 +7214,18 @@ app.post('/api/matches/:id/submit-result', rateLimitMiddleware(15, 60000), secur
 
       // If it's a video, automatically dispatch to Telegram Review Group for instant admin visibility
       if (isVideo) {
-        setImmediate(() => {
-          sendMatchDisputeVideoToTelegram(match, playerIgn, screenshotBase64).catch(err => 
-            console.error('[Telegram Bot] Background video upload error:', err.message)
-          );
+        const tempPath = `/tmp/dispute_${match.id}_${Date.now()}.mp4`;
+        const base64Data = screenshotBase64.split(',')[1];
+        fs.writeFileSync(tempPath, Buffer.from(base64Data, 'base64'));
+
+        setImmediate(async () => {
+          try {
+            await sendMatchDisputeVideoToTelegramFromFile(match, playerIgn, tempPath);
+          } catch (err: any) {
+            console.error('[Telegram Bot] Background video upload error:', err.message);
+          } finally {
+            try { fs.unlinkSync(tempPath); } catch {}
+          }
         });
       }
 
