@@ -53,7 +53,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
   // Automated OPay SMS deposit tracking
   const [depositReqId, setDepositReqId] = useState<string | null>(null);
-  const [activePaymentRef, setActivePaymentRef] = useState<string>(reference);
+  const [activePaymentRef, setActivePaymentRef] = useState<string>(() => reference || `OPS-${Date.now().toString(36).toUpperCase()}`);
   const [autoConfirmed, setAutoConfirmed] = useState<boolean>(false);
   const [sessionInput, setSessionInput] = useState<string>("");
   const [showSessionHelpModal, setShowSessionHelpModal] = useState<boolean>(false);
@@ -70,13 +70,18 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       setAutoConfirmed(false);
       setVerificationStep('Awaiting payment transfer...');
 
+      const initialRef = reference || `OPS-${Date.now().toString(36).toUpperCase()}`;
+      setActivePaymentRef(initialRef);
+
       // Create pending deposit request in DB if customer ID provided
       if (customer.id && amount >= 100) {
         createDepositRequest(customer.id, amount)
           .then((res) => {
             if (isMounted && res.deposit) {
               setDepositReqId(res.deposit.id);
-              setActivePaymentRef(res.deposit.paymentReference);
+              if (res.deposit.paymentReference) {
+                setActivePaymentRef(res.deposit.paymentReference);
+              }
             }
           })
           .catch((err) => {
@@ -89,7 +94,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [isOpen, customer.id, amount]);
+  }, [isOpen, customer.id, amount, reference]);
 
   // Countdown timer
   useEffect(() => {
@@ -306,6 +311,34 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                     <div className="flex items-center justify-between py-1">
                       <span className="text-neutral-400 font-mono">Account Name:</span>
                       <span className="font-bold text-white text-right">Quadri Abdulsalam</span>
+                    </div>
+
+                    <div className="flex items-center justify-between py-2 px-3 rounded-xl bg-neutral-900 border border-neutral-800">
+                      <div className="min-w-0 pr-2">
+                        <span className="text-[10px] uppercase text-neutral-400 block font-mono">Payment / Session Reference</span>
+                        <span className="text-xs font-mono font-bold text-amber-400 select-all truncate block">{activePaymentRef}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(activePaymentRef);
+                          setCopiedRef(true);
+                          setTimeout(() => setCopiedRef(false), 2000);
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-mono text-xs flex items-center gap-1.5 cursor-pointer shrink-0 transition-all active:scale-95"
+                      >
+                        {copiedRef ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            <span className="text-emerald-400">Copied</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Copy Ref</span>
+                          </>
+                        )}
+                      </button>
                     </div>
 
                     <div className="flex items-center justify-between py-1 text-xs">

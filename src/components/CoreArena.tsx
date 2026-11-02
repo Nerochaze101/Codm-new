@@ -14,6 +14,8 @@ import { MatchLobbyChat } from './MatchLobbyChat';
 import { requestNotificationPermission, getNotificationPermission, isIOS, isStandalone } from '../services/notificationService';
 import { IOSNotificationGuideModal } from './IOSNotificationGuideModal';
 import { playShotgunSound } from '../hooks/useSound';
+import { VideoTutorial } from './VideoTutorial';
+import { uploadMatchVideoWithProgress } from '../services/api';
 
 const CardBackground = () => (
   <div className="absolute inset-0 z-0 opacity-10">
@@ -80,6 +82,46 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   const [dismissedMatchIds, setDismissedMatchIds] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('codm_dismissed_matches') || '[]'); } catch { return []; }
   });
+
+  const [videoUploadProgress, setVideoUploadProgress] = useState<number>(0);
+  const [isUploadingVideo, setIsUploadingVideo] = useState<boolean>(false);
+  const [videoUploadMatchId, setVideoUploadMatchId] = useState<string | null>(null);
+  const [videoUploadStatus, setVideoUploadStatus] = useState<'idle' | 'uploading' | 'pending_review' | 'failed'>('idle');
+  const [videoUploadError, setVideoUploadError] = useState<string | null>(null);
+
+  const handleVideoUpload = async (matchId: string, file: File) => {
+    if (!file) return;
+    if (file.size > 200 * 1024 * 1024) {
+      setVideoUploadError('File size exceeds 200MB limit. Please compress or record a shorter clip.');
+      return;
+    }
+    setVideoUploadError(null);
+    setIsUploadingVideo(true);
+    setVideoUploadMatchId(matchId);
+    setVideoUploadProgress(0);
+    setVideoUploadStatus('uploading');
+
+    try {
+      await uploadMatchVideoWithProgress(
+        matchId,
+        file,
+        currentUser.id,
+        currentUser.codmIgn,
+        (percent) => {
+          setVideoUploadProgress(percent);
+        }
+      );
+      setVideoUploadProgress(100);
+      setVideoUploadStatus('pending_review');
+      if (onRefresh) await onRefresh();
+    } catch (err: any) {
+      console.error('Video upload failed:', err);
+      setVideoUploadStatus('failed');
+      setVideoUploadError('Video upload failed: ' + (err.message || 'Please try again.'));
+    } finally {
+      setIsUploadingVideo(false);
+    }
+  };
 
   const activeStatuses = ['PENDING_OPPONENT_STAKE', 'OPPONENT_STAKED_AWAITING_CREATOR', 'READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'];
   const myActiveMatches = matches.filter(m => {
@@ -245,6 +287,70 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
           <div className="flex items-center gap-2">
             <button onClick={async () => { if (isIOS() && !isStandalone()) setShowIOSGuideModal(true); else await requestNotificationPermission(); setShowNotificationPrompt(false); }} className="px-4 py-2 bg-amber-400 text-neutral-950 font-black text-xs uppercase rounded-xl">Enable</button>
             <button onClick={() => setShowNotificationPrompt(false)} className="p-2 text-neutral-500 hover:text-white"><X size={18} /></button>
+          </div>
+        </div>
+      )}
+
+      {/* Background Video Proof Upload Notification Bar */}
+      {isUploadingVideo && (
+        <div className="p-4 rounded-2xl bg-sky-950/80 border-2 border-sky-500/60 shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in">
+          <div className="flex items-center gap-3 min-w-0 w-full sm:w-auto">
+            <div className="w-10 h-10 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center shrink-0">
+              <Upload className="w-5 h-5 animate-bounce" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-black text-white uppercase tracking-wider">
+                  Screen Recording Uploading in Background
+                </span>
+                <span className="text-xs font-mono font-black text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded border border-sky-500/30">
+                  {videoUploadProgress}%
+                </span>
+              </div>
+              <p className="text-[11px] text-neutral-400 truncate">
+                Dispatching to referee Telegram review group. You can switch tabs or join new battles freely.
+              </p>
+            </div>
+          </div>
+          <div className="w-full sm:w-48 bg-neutral-900 h-2.5 rounded-full overflow-hidden shrink-0 border border-sky-500/40">
+            <div
+              className="h-full bg-gradient-to-r from-sky-500 to-sky-300 transition-all duration-300 shadow-lg"
+              style={{ width: `${videoUploadProgress}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {videoUploadStatus === 'pending_review' && !isUploadingVideo && (
+        <div className="p-4 rounded-2xl bg-emerald-950/80 border-2 border-emerald-500/60 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-xs font-black text-emerald-300 uppercase tracking-wide">
+                Video Dispatched to Referee Queue (Pending Review)
+              </div>
+              <p className="text-[11px] text-neutral-400">
+                Your screen recording was sent to referees in Telegram. Funds remain frozen in escrow until review completes.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <a
+              href="https://t.me/+I5vcFF4RXwJkMWVk"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black text-xs uppercase rounded-xl transition-all shadow"
+            >
+              Telegram Review Group
+            </a>
+            <button
+              onClick={() => setVideoUploadStatus('idle')}
+              className="p-2 text-neutral-500 hover:text-white"
+            >
+              <X size={16} />
+            </button>
           </div>
         </div>
       )}
@@ -897,69 +1003,117 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                             </div>
                             <div>
                               <div className="text-sm font-black text-white uppercase">Dispute Detected!</div>
-                              <p className="text-[11px] text-neutral-400">Conflicting scores. Upload a <b>screen recording</b> of your history and game result to resolve.</p>
+                              <p className="text-[11px] text-neutral-400">
+                                Conflicting claims submitted. Upload a <b>screen recording</b> of your history and match outcome for referee inspection.
+                              </p>
                             </div>
                           </div>
-                          
-                          <div className="space-y-3">
-                            <input 
-                              type="file" 
-                              accept="video/*" 
-                              className="w-full text-xs text-neutral-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:bg-rose-500 file:text-white cursor-pointer" 
-                              onChange={e => { 
-                                const f = e.target.files?.[0]; 
-                                if(f){ 
-                                  if (f.size > 150 * 1024 * 1024) {
-                                    alert('Video too large (Limit: 150MB). Please use a shorter recording or lower resolution.');
-                                    e.target.value = '';
-                                    return;
-                                  }
-                                  const r=new FileReader(); 
-                                  r.onload=()=>setScreenshotPreview(r.result as string); 
-                                  r.readAsDataURL(f); 
-                                } 
-                              }} 
-                            />
-                            
-                            {/* Dispute Video Guide Player */}
-                            <div className="mt-4 rounded-xl overflow-hidden border-2 border-rose-500/50 bg-black aspect-video relative shadow-2xl">
-                              <iframe
-                                className="w-full h-full"
-                                src="https://www.youtube.com/embed/L8s4zUbMoMo"
-                                title="How to record match results"
-                                frameBorder="0"
-                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                                allowFullScreen
-                                loading="eager"
-                              ></iframe>
-                              <div className="absolute top-2 left-2 px-2 py-1 bg-rose-500 text-white text-[9px] font-black uppercase rounded shadow-lg">MANDATORY GUIDE: HOW TO RECORD PROOF</div>
+
+                          {/* Mandatory Video Guide Player (Embedded Instantly) */}
+                          <VideoTutorial
+                            title="Mandatory Video Guide: How to Screen Record Proof"
+                            description="Follow this tutorial to record your match history and end-game victory/defeat scoreboard. Proofs are evaluated by human referees."
+                          />
+
+                          {/* Background Screen Recording Video Upload */}
+                          <div className="p-4 rounded-xl bg-neutral-900 border border-neutral-800 space-y-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-black uppercase text-sky-400 flex items-center gap-1.5">
+                                <Upload className="w-4 h-4" />
+                                <span>Upload Screen Recording (Video)</span>
+                              </span>
+                              <span className="text-[10px] font-mono text-neutral-400">MP4, MOV, WebM (Max 200MB)</span>
                             </div>
 
-                            {screenshotPreview && (
-                              <div className="h-40 rounded-xl overflow-hidden border border-rose-500/50 bg-black">
-                                {screenshotPreview.startsWith('data:video/') ? (
-                                  <video src={screenshotPreview} className="w-full h-full object-contain" controls preload="auto" />
-                                ) : (
-                                  <img src={screenshotPreview} className="w-full h-full object-contain" alt="Proof preview" />
-                                )}
+                            <input
+                              type="file"
+                              accept="video/*"
+                              disabled={isUploadingVideo}
+                              className="w-full text-xs text-neutral-400 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:bg-sky-500 file:text-white file:font-black file:text-xs cursor-pointer disabled:opacity-50"
+                              onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                if (f) {
+                                  handleVideoUpload(myActiveMatch.id, f);
+                                }
+                              }}
+                            />
+
+                            {isUploadingVideo && (
+                              <div className="p-3 rounded-lg bg-sky-950/60 border border-sky-500/40 space-y-2 animate-pulse">
+                                <div className="flex items-center justify-between text-[10px] font-black uppercase text-sky-300">
+                                  <span>Streaming to Referee Telegram Queue...</span>
+                                  <span className="font-mono">{videoUploadProgress}%</span>
+                                </div>
+                                <div className="w-full h-2 bg-neutral-950 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-sky-400 transition-all duration-300"
+                                    style={{ width: `${videoUploadProgress}%` }}
+                                  />
+                                </div>
+                                <p className="text-[10px] text-neutral-400 italic">
+                                  Uploading in background. You can minimize or navigate other tabs while upload completes.
+                                </p>
                               </div>
                             )}
 
-                            <button 
-                              onClick={() => handleResultSubmit(myActiveMatch.id)} 
-                              disabled={isSubmitting || !screenshotPreview} 
-                              className="w-full py-3 bg-rose-500 text-white font-black rounded-xl text-xs uppercase shadow-xl flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
-                            >
-                              {isSubmitting ? (
-                                <>
-                                  <RefreshCw size={16} className="animate-spin" />
-                                  <span>Uploading Proof... Keep Browser Open</span>
-                                </>
-                              ) : (
-                                <span>Submit Video Proof & Resolve</span>
-                              )}
-                            </button>
-                            {isSubmitting && <p className="text-[9px] text-center text-neutral-500 animate-pulse uppercase font-black tracking-widest">Upload running in background...</p>}
+                            {videoUploadStatus === 'pending_review' && (
+                              <div className="p-3 rounded-lg bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-xs flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                                  <span>Evidence Received! Status: <strong>Pending Referee Review</strong>.</span>
+                                </div>
+                                <a
+                                  href="https://t.me/+I5vcFF4RXwJkMWVk"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-2.5 py-1 bg-emerald-500 text-neutral-950 font-black text-[10px] uppercase rounded-lg hover:bg-emerald-400 shrink-0"
+                                >
+                                  Telegram Group
+                                </a>
+                              </div>
+                            )}
+
+                            {videoUploadError && (
+                              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs flex items-center gap-2">
+                                <AlertTriangle className="w-4 h-4 shrink-0" />
+                                <span>{videoUploadError}</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Screenshot Fallback Upload */}
+                          <div className="p-3.5 rounded-xl bg-neutral-900/60 border border-neutral-800 space-y-2">
+                            <span className="text-[10px] font-bold uppercase text-neutral-400 block">
+                              Or Upload Scoreboard Screenshot:
+                            </span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="w-full text-xs text-neutral-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-neutral-800 file:text-neutral-200 file:text-xs cursor-pointer"
+                              onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                if (f) {
+                                  const r = new FileReader();
+                                  r.onload = () => setScreenshotPreview(r.result as string);
+                                  r.readAsDataURL(f);
+                                }
+                              }}
+                            />
+                            {screenshotPreview && (
+                              <div className="h-36 rounded-xl overflow-hidden border border-neutral-800 bg-black mt-2">
+                                <img src={screenshotPreview} className="w-full h-full object-contain" alt="Scoreboard preview" />
+                              </div>
+                            )}
+                            {screenshotPreview && (
+                              <button
+                                onClick={() => handleResultSubmit(myActiveMatch.id)}
+                                disabled={isSubmitting}
+                                className="w-full py-2.5 bg-rose-500 hover:bg-rose-400 text-white font-black rounded-xl text-xs uppercase shadow transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                              >
+                                {isSubmitting ? <RefreshCw size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
+                                <span>Submit Screenshot Proof</span>
+                              </button>
+                            )}
                           </div>
                         </div>
                       ) : (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) ? (

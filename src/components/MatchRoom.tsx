@@ -9,7 +9,7 @@ import { StakePaymentModal } from './StakePaymentModal';
 import { MatchLobbyChat } from './MatchLobbyChat';
 import { VideoTutorial } from './VideoTutorial';
 import { DisputeResolutionModal } from './DisputeResolutionModal';
-import { sendMutualAction } from '../services/api';
+import { sendMutualAction, uploadMatchVideoWithProgress } from '../services/api';
 
 interface MatchRoomProps {
   match: Match;
@@ -55,6 +55,40 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
   const [paymentRole, setPaymentRole] = useState<'opponent' | 'creator'>('opponent');
   const [isReadingFile, setIsReadingFile] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [videoUploadStatus, setVideoUploadStatus] = useState<'idle' | 'uploading' | 'pending_review' | 'failed'>('idle');
+
+  const handleVideoDisputeUpload = async (file: File) => {
+    if (!file) return;
+    if (file.size > 200 * 1024 * 1024) {
+      setSubmitError('Video too large (Limit: 200MB). Please use a shorter recording or lower resolution.');
+      return;
+    }
+    setSubmitError(null);
+    setIsReadingFile(true);
+    setUploadProgress(0);
+    setVideoUploadStatus('uploading');
+
+    try {
+      await uploadMatchVideoWithProgress(
+        match.id,
+        file,
+        currentUser.id,
+        currentUser.codmIgn,
+        (percent) => {
+          setUploadProgress(percent);
+        }
+      );
+      setUploadProgress(100);
+      setVideoUploadStatus('pending_review');
+      if (onRefreshMatch) await onRefreshMatch();
+    } catch (err: any) {
+      console.error('Video upload failed:', err);
+      setVideoUploadStatus('failed');
+      setSubmitError('Video upload failed: ' + (err.message || 'Please try again.'));
+    } finally {
+      setIsReadingFile(false);
+    }
+  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -980,7 +1014,7 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                 </div>
                 <div className="relative w-full aspect-video rounded-xl overflow-hidden border border-neutral-800 bg-black mt-1">
                   <iframe
-                    src="https://www.youtube.com/embed/L8s4zUbMoMo"
+                    src="https://www.youtube.com/embed/L8s4zUbMoMo?autoplay=1&rel=0&mute=1"
                     title="How to make a screen recording of your winning"
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                     allowFullScreen
@@ -1028,9 +1062,9 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                 </p>
               </div>
             ) : match.status === 'DISPUTED' || match.resubmissionNotice || (isCreator ? match.creator.resubmissionRequested : match.opponent?.resubmissionRequested) ? (
-              <DisputeResolutionModal match={match} onClose={() => {}}>
+              <div className="p-6 rounded-2xl bg-neutral-900 border-2 border-rose-500/60 space-y-5 animate-in zoom-in-95">
                 <div className="flex items-start gap-3">
-                  <div className="p-2 rounded-xl bg-rose-500/20 text-rose-400 shrink-0">
+                  <div className="p-2.5 rounded-xl bg-rose-500/20 text-rose-400 shrink-0">
                     <AlertTriangle className="w-6 h-6" />
                   </div>
                   <div className="space-y-2 flex-1">
@@ -1054,23 +1088,103 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                     </div>
 
                     <p className="text-xs text-neutral-300">
-                      The <strong>₦{match.potAmount.toLocaleString()}</strong> pot is held safely in escrow. Please upload your post-match CODM scoreboard screenshot proof to resolve the conflict and release your winnings.
+                      The <strong>₦{match.potAmount.toLocaleString()}</strong> pot is held safely in escrow. Please upload your post-match screen recording or scoreboard screenshot to resolve the conflict and release your winnings.
                     </p>
-
-                    {/* Anti-Cheat & Forensic System Standards */}
-                    <div className="p-3 rounded-xl bg-neutral-900/90 border border-neutral-800 text-[11px] text-neutral-400 space-y-1">
-                      <div className="font-bold text-neutral-300 uppercase tracking-widest text-[9px]">Proof Verification Standards:</div>
-                      <div className="space-y-0.5 text-neutral-400">
-                        <div>· Must be a full-screen <strong>landscape</strong> mobile screenshot (16:9 to 20:9 phone display).</div>
-                        <div>· Room Code #{match.roomCode || match.challengeCode} and victory/defeat scoreboard must be clearly visible.</div>
-                        <div>· System logic automatically verifies image headers and flags synthetic AI-generated 1:1 images.</div>
-                      </div>
-                    </div>
                   </div>
                 </div>
 
-                <div className="space-y-3 pt-2 border-t border-rose-500/20">
-                  <div className="flex flex-col sm:flex-row items-center gap-2 flex-wrap">
+                {/* Mandatory Video Guide Player (Embedded Instantly) */}
+                <VideoTutorial
+                  title="Mandatory Video Guide: How to Screen Record Proof"
+                  description="Follow this video guide to record your match history and end-game victory scoreboard. Your video evidence is streamed directly to referees."
+                />
+
+                {/* Proof Upload Options */}
+                <div className="space-y-4 pt-3 border-t border-rose-500/20">
+                  {/* Option 1: Screen Recording Video (Background Streaming) */}
+                  <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black uppercase text-sky-400 flex items-center gap-1.5">
+                        <Film className="w-4 h-4" />
+                        <span>Upload Screen Recording (Video)</span>
+                      </span>
+                      <span className="text-[10px] font-mono text-neutral-400">MP4, MOV, WebM (Max 200MB)</span>
+                    </div>
+
+                    <input
+                      type="file"
+                      id="videoUploadInputMatchRoom"
+                      accept="video/*"
+                      disabled={isReadingFile}
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleVideoDisputeUpload(file);
+                      }}
+                    />
+
+                    <button
+                      type="button"
+                      disabled={isReadingFile}
+                      onClick={() => document.getElementById('videoUploadInputMatchRoom')?.click()}
+                      className="w-full py-3 bg-sky-600 hover:bg-sky-500 text-white text-xs font-black rounded-xl transition-all shadow-lg cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide disabled:opacity-50"
+                    >
+                      {isReadingFile ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                      <span>{isReadingFile ? 'Uploading to Telegram...' : 'Choose Screen Recording File'}</span>
+                    </button>
+
+                    {isReadingFile && (
+                      <div className="p-3.5 rounded-xl bg-sky-950/60 border border-sky-500/40 space-y-2 animate-pulse">
+                        <div className="flex items-center justify-between text-[10px] font-black uppercase text-sky-300">
+                          <span>Streaming to Referee Telegram Queue...</span>
+                          <span className="font-mono">{uploadProgress}%</span>
+                        </div>
+                        <div className="w-full h-2 bg-neutral-900 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-sky-400 transition-all duration-300"
+                            style={{ width: `${uploadProgress}%` }}
+                          />
+                        </div>
+                        <p className="text-[10px] text-neutral-400 italic">
+                          Uploading in background without freezing your UI. You can minimize or navigate freely.
+                        </p>
+                      </div>
+                    )}
+
+                    {(videoUploadStatus === 'pending_review' || match.reviewStatus === 'PENDING_REVIEW') && (
+                      <div className="p-3.5 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-xs flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                          <span>Video Received! Status: <strong>Pending Referee Review</strong>.</span>
+                        </div>
+                        <a
+                          href="https://t.me/+I5vcFF4RXwJkMWVk"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3 py-1.5 bg-emerald-500 text-neutral-950 font-black text-[10px] uppercase rounded-lg hover:bg-emerald-400 shrink-0"
+                        >
+                          Telegram Group
+                        </a>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Option 2: Scoreboard Screenshot */}
+                  <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black uppercase text-neutral-300 flex items-center gap-1.5">
+                        <Upload className="w-4 h-4" />
+                        <span>Upload Scoreboard Screenshot</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={useSampleVictoryScreenshot}
+                        className="text-[10px] text-amber-400 hover:underline font-mono"
+                      >
+                        Use Demo Scoreboard
+                      </button>
+                    </div>
+
                     <input
                       type="file"
                       ref={fileInputRef}
@@ -1078,100 +1192,46 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                       onChange={handleFileUpload}
                       className="hidden"
                     />
-                    <input
-                      type="file"
-                      id="videoUploadInput"
-                      accept="video/*"
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          const reader = new FileReader();
-                          reader.onload = () => {
-                            setScreenshotPreview(reader.result as string);
-                          };
-                          reader.readAsDataURL(file);
-                        }
-                      }}
-                      className="hidden"
-                    />
+
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      className="px-4 py-2 bg-rose-500 hover:bg-rose-400 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2"
+                      className="w-full py-2.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2"
                     >
                       <Upload className="w-4 h-4" />
-                      <span>{isReadingFile ? 'Reading...' : 'Upload Scoreboard Screenshot'}</span>
+                      <span>Select Scoreboard Image</span>
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => document.getElementById('videoUploadInput')?.click()}
-                      className="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2"
-                    >
-                      <Film className="w-4 h-4" />
-                      <span>{isReadingFile ? 'Processing...' : 'Upload Screen Record (Video)'}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={useSampleVictoryScreenshot}
-                      className="px-3.5 py-2 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs font-bold rounded-xl transition-colors cursor-pointer whitespace-nowrap"
-                    >
-                      Use Demo Scoreboard
-                    </button>
-                  </div>
 
-                  {isReadingFile && (
-                    <div className="p-4 rounded-xl bg-sky-500/10 border border-sky-500/30 space-y-3 animate-pulse">
-                      <div className="flex items-center justify-between text-[10px] font-black text-sky-400 uppercase tracking-widest">
-                        <span>Background Processing Evidence...</span>
-                        <span>{uploadProgress}%</span>
+                    {screenshotPreview && (
+                      <div className="space-y-3 pt-2">
+                        <div className="h-44 rounded-xl overflow-hidden border-2 border-emerald-500/50 relative bg-black shadow-xl">
+                          <img
+                            src={screenshotPreview}
+                            alt="Scoreboard Preview"
+                            className="w-full h-full object-contain"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleResultSubmit(myClaim || 'VICTORY')}
+                          disabled={isSubmitting}
+                          className="w-full py-3 bg-rose-500 hover:bg-rose-400 text-white font-black rounded-xl text-xs uppercase shadow transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                        >
+                          {isSubmitting ? (
+                            <>
+                              <RefreshCw className="w-4 h-4 animate-spin" />
+                              <span>Submitting Proof...</span>
+                            </>
+                          ) : (
+                            <>
+                              <ShieldCheck className="w-4 h-4" />
+                              <span>Submit Screenshot Proof</span>
+                            </>
+                          )}
+                        </button>
                       </div>
-                      <div className="w-full h-1.5 bg-sky-950 rounded-full overflow-hidden">
-                        <div 
-                          className="h-full bg-sky-500 transition-all duration-300" 
-                          style={{ width: `${uploadProgress}%` }}
-                        />
-                      </div>
-                      <p className="text-[10px] text-neutral-400 italic">
-                        Processing large screen recording in background. Please wait for completion.
-                      </p>
-                    </div>
-                  )}
-
-                  </DisputeResolutionModal>
-
-                  {screenshotPreview && (
-                    <div className="h-56 rounded-xl overflow-hidden border-2 border-emerald-500/50 relative bg-black shadow-2xl animate-in zoom-in-95">
-                      <img
-                        src={screenshotPreview}
-                        alt="Scoreboard Preview"
-                        className="w-full h-full object-contain"
-                      />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
-                      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full bg-emerald-500 text-black text-[10px] font-black uppercase tracking-widest shadow-lg flex items-center gap-1.5">
-                        <CheckCircle2 size={12} />
-                        <span>PROOF READY FOR REVIEW</span>
-                      </div>
-                    </div>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={() => handleResultSubmit(myClaim || 'VICTORY')}
-                    disabled={isSubmitting || !screenshotPreview}
-                    className="w-full py-3.5 bg-rose-500 hover:bg-rose-400 text-white font-black rounded-xl text-xs sm:text-sm transition-all shadow-lg cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2 uppercase tracking-wide"
-                  >
-                    {isSubmitting ? (
-                      <>
-                        <Sparkles className="w-4 h-4 animate-spin" />
-                        <span>Referee Verifying Screenshot...</span>
-                      </>
-                    ) : (
-                      <>
-                        <ShieldCheck className="w-4 h-4" />
-                        <span>Submit Scoreboard Proof & Resolve Dispute</span>
-                      </>
                     )}
-                  </button>
+                  </div>
                 </div>
               </div>
             ) : myClaim ? (

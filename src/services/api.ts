@@ -897,7 +897,51 @@ export async function unbanAccount(adminUserId: string, targetUserId: string) {
   return await parseResponse(res);
 }
 
+export function uploadMatchVideoWithProgress(
+  matchId: string,
+  file: File,
+  playerId: string,
+  playerIgn: string,
+  onProgress?: (percent: number) => void
+): Promise<{ success: boolean; status: string; match: Match; message?: string }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const formData = new FormData();
+    formData.append('video', file);
+    formData.append('playerId', playerId);
+    formData.append('playerIgn', playerIgn);
 
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && onProgress) {
+        const percent = Math.round((event.loaded / event.total) * 100);
+        onProgress(percent);
+      }
+    };
 
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const res = JSON.parse(xhr.responseText);
+          resolve(res);
+        } catch {
+          resolve({ success: true, status: 'PENDING_REVIEW' } as any);
+        }
+      } else {
+        try {
+          const errData = JSON.parse(xhr.responseText);
+          reject(new Error(errData.error || errData.message || 'Upload failed'));
+        } catch {
+          reject(new Error(`Upload failed with status ${xhr.status}`));
+        }
+      }
+    };
 
+    xhr.onerror = () => {
+      reject(new Error('Network error during video upload.'));
+    };
+
+    xhr.open('POST', `/api/matches/${matchId}/upload-video`);
+    xhr.send(formData);
+  });
+}
 

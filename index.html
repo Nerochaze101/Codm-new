@@ -2,6 +2,42 @@
 <html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // AI Studio preview environment: suppress Vite HMR WebSocket errors & protect against sandboxed iframe modal blocks
+      (function() {
+        if (typeof window !== 'undefined') {
+          window.addEventListener('unhandledrejection', function(event) {
+            if (event && event.reason) {
+              var msg = event.reason.message || String(event.reason);
+              var stack = event.reason.stack || '';
+              if (msg.includes('WebSocket') || stack.includes('@vite/client') || msg.includes('vite:ws')) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+              }
+            }
+          });
+          window.addEventListener('error', function(event) {
+            if (event) {
+              var msg = event.message || '';
+              var file = event.filename || '';
+              if (msg.includes('WebSocket') || file.includes('@vite/client')) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+              }
+            }
+          });
+          // Safe alert fallback in sandboxed iframes
+          var origAlert = window.alert;
+          window.alert = function(msg) {
+            try {
+              if (origAlert) origAlert.call(window, msg);
+            } catch (_) {
+              console.warn('[Notice]', msg);
+            }
+          };
+        }
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>OpsSTAKE – Tactical Mobile Shooter Esports Escrow Arena</title>
     <meta name="description" content="Secure 1v1 tactical mobile shooter wagering platform with automated escrow and AI result verification. Stake, battle, and win rewards in the official OpsSTAKE arena." />
