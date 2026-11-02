@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { createDepositRequest, checkDepositStatus, verifyDepositSession } from '../services/api';
 import { calculateDepositFee } from '../utils/feeCalculator';
+import sessionIdGuideImg from '../assets/images/session_id_guide.png';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -336,16 +337,26 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   </p>
 
                   
-                  {!showSessionPrompt ? (
+                  <div className="flex flex-col gap-2.5 pt-1">
                     <button
                       type="button"
-                      onClick={() => setShowSessionPrompt(true)}
-                      className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs uppercase tracking-wider cursor-pointer transition-all shadow-xl flex items-center justify-center gap-2"
+                      onClick={() => setShowSessionHelpModal(true)}
+                      className="w-full py-2.5 bg-gradient-to-r from-sky-950 to-blue-950 hover:from-sky-900 hover:to-blue-900 border border-sky-500/40 text-sky-300 font-bold rounded-xl text-xs uppercase tracking-wider cursor-pointer transition-all flex items-center justify-center gap-2 shadow"
                     >
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>I Have Made the Transfer</span>
+                      <HelpCircle className="w-4 h-4 text-sky-400" />
+                      <span>📸 How To Get Your Session ID (Receipt Guide)</span>
                     </button>
-                  ) : (
+
+                    {!showSessionPrompt ? (
+                      <button
+                        type="button"
+                        onClick={() => setShowSessionPrompt(true)}
+                        className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black rounded-xl text-xs uppercase tracking-wider cursor-pointer transition-all shadow-xl flex items-center justify-center gap-2"
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>I Have Made the Transfer</span>
+                      </button>
+                    ) : (
                     <div className="space-y-3 pt-2 border-t border-neutral-800 animate-in fade-in duration-200">
                       <div>
                         <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
@@ -401,6 +412,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                       </div>
                     </div>
                   )}
+                  </div>
 
                 </div>
               </div>
@@ -440,7 +452,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
             <div className="rounded-2xl overflow-hidden border border-neutral-800 bg-black shadow-inner">
               <img
-                src="/assets/aistudio/54A9305C-3D3B-4553-B59D-1507F13A6CDD_66112ba4.png"
+                src={sessionIdGuideImg}
                 alt="How to get Session ID from transaction receipt"
                 className="w-full h-auto object-contain max-h-[60vh] mx-auto"
               />
