@@ -138,54 +138,82 @@ export const DisputesPage: React.FC<DisputesPageProps> = ({ currentUser, matches
                   </div>
                 </div>
 
-                <div className="p-5 rounded-2xl bg-gradient-to-br from-sky-950/60 to-neutral-900 border border-sky-500/30 space-y-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-sky-500/20 border border-sky-500/40 text-sky-400 flex items-center justify-center shrink-0">
-                      <Send className="w-5 h-5" />
+                <div className="p-6 rounded-3xl bg-gradient-to-br from-sky-950/80 via-neutral-900 to-sky-950/60 border-2 border-sky-500/50 space-y-5 shadow-2xl animate-in fade-in">
+                  <div className="flex items-center gap-3 border-b border-sky-500/20 pb-4">
+                    <div className="w-12 h-12 rounded-2xl bg-sky-500/20 border border-sky-500/40 text-sky-400 flex items-center justify-center shrink-0 shadow-lg">
+                      <Send className="w-6 h-6 animate-pulse" />
                     </div>
                     <div>
-                      <h4 className="text-sm font-black text-white uppercase font-heading">
-                        Telegram Bot /dispute Command
+                      <h4 className="text-base font-black text-white uppercase font-heading tracking-wide">
+                        Automated Telegram Bot Evidence Gateway
                       </h4>
-                      <p className="text-xs text-neutral-400">
-                        Click below to open the Telegram Bot with preloaded <code className="text-sky-400 font-mono">/dispute {activeMatch.id}</code> command.
+                      <p className="text-xs text-neutral-300">
+                        Room Code: <code className="text-sky-300 font-mono font-bold bg-sky-500/20 px-2 py-0.5 rounded border border-sky-500/30">{activeMatch.roomCode || activeMatch.challengeCode}</code>
                       </p>
                     </div>
                   </div>
 
+                  {/* Step-by-Step Instructions */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div className="p-3.5 rounded-2xl bg-neutral-950/80 border border-neutral-800 space-y-1">
+                      <div className="font-bold text-sky-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <span className="w-5 h-5 rounded-full bg-sky-500/20 text-sky-300 flex items-center justify-center text-[10px] font-mono">1</span>
+                        <span>Launch Telegram Bot</span>
+                      </div>
+                      <p className="text-[11px] text-neutral-400 leading-normal">
+                        Tap the button below. It opens Telegram directly to <b>@OpsStakeBot</b> preloaded with <code className="text-sky-300 font-mono">/dispute {activeMatch.roomCode || activeMatch.challengeCode}</code>.
+                      </p>
+                    </div>
+
+                    <div className="p-3.5 rounded-2xl bg-neutral-950/80 border border-neutral-800 space-y-1">
+                      <div className="font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <span className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-300 flex items-center justify-center text-[10px] font-mono">2</span>
+                        <span>Upload Screen Recording</span>
+                      </div>
+                      <p className="text-[11px] text-neutral-400 leading-normal">
+                        Attach and send your video clip in the Telegram bot chat. The bot automatically dispatches it to referees for quick resolution.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Primary Pre-filled Deep Link Action Button */}
                   <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
                     <a
-                      href={`https://t.me/${telegramBotUsername}?start=dispute_${activeMatch.id}`}
+                      href={`https://t.me/${telegramBotUsername}?start=dispute_${encodeURIComponent(activeMatch.roomCode || activeMatch.challengeCode)}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="w-full sm:flex-1 py-3.5 bg-sky-500 hover:bg-sky-400 text-neutral-950 text-xs font-black rounded-xl transition-all shadow-lg cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide"
+                      className="w-full sm:flex-1 py-4 px-6 bg-gradient-to-r from-sky-500 to-sky-400 hover:from-sky-400 hover:to-sky-300 text-neutral-950 text-xs sm:text-sm font-black rounded-2xl transition-all shadow-xl shadow-sky-500/20 cursor-pointer flex items-center justify-center gap-2.5 uppercase tracking-wider active:scale-[0.98]"
                     >
-                      <MessageSquare className="w-4 h-4" />
-                      <span>Open Telegram Bot & Send /dispute</span>
+                      <MessageSquare className="w-5 h-5 fill-neutral-950" />
+                      <span>Launch Telegram Bot (/dispute {activeMatch.roomCode || activeMatch.challengeCode})</span>
+                      <ExternalLink className="w-4 h-4 ml-1 opacity-80" />
                     </a>
 
                     <button
                       type="button"
-                      onClick={() => handleCopyCommand(`/dispute ${activeMatch.id}`, activeMatch.id)}
-                      className="w-full sm:w-auto px-4 py-3.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs font-bold rounded-xl border border-neutral-700 transition-all cursor-pointer flex items-center justify-center gap-2 font-mono"
+                      onClick={() => handleCopyCommand(`/dispute ${activeMatch.roomCode || activeMatch.challengeCode}`, activeMatch.id)}
+                      className="w-full sm:w-auto px-5 py-4 bg-neutral-900 hover:bg-neutral-800 text-white text-xs font-bold rounded-2xl border border-neutral-700 transition-all cursor-pointer flex items-center justify-center gap-2 font-mono shrink-0"
                     >
                       {copiedCode === activeMatch.id ? (
                         <>
-                          <Check className="w-4 h-4 text-emerald-400" />
-                          <span className="text-emerald-400">Copied Command!</span>
+                          <Check className="w-4 h-4 text-emerald-400 stroke-[3]" />
+                          <span className="text-emerald-400">Command Copied!</span>
                         </>
                       ) : (
                         <>
                           <Copy className="w-4 h-4 text-neutral-400" />
-                          <span>Copy /dispute {activeMatch.id.slice(0, 8)}</span>
+                          <span>Copy Command</span>
                         </>
                       )}
                     </button>
                   </div>
 
-                  <p className="text-[11px] text-neutral-400 leading-relaxed italic">
-                    Once the Telegram bot receives your video upload, it automatically forwards it to the official referee review queue for rapid escrow settlement.
-                  </p>
+                  <div className="p-3 rounded-xl bg-sky-500/10 border border-sky-500/20 text-[11px] text-sky-200 flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-sky-400 shrink-0" />
+                    <span>
+                      Escrow protected. Once your video is received in Telegram, referees evaluate it and settle winnings.
+                    </span>
+                  </div>
                 </div>
               </div>
             )}

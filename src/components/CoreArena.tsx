@@ -1026,14 +1026,14 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                                   Telegram Bot /dispute Command
                                 </h4>
                                 <p className="text-[11px] text-neutral-400">
-                                  Launch Telegram Bot with <code className="text-sky-400 font-mono">/dispute {myActiveMatch.id}</code> to upload screen recording.
+                                  Launch Telegram Bot with <code className="text-sky-400 font-mono">/dispute {myActiveMatch.roomCode || myActiveMatch.challengeCode}</code> to upload screen recording.
                                 </p>
                               </div>
                             </div>
 
                             <div className="flex flex-col sm:flex-row items-center gap-3 pt-1">
                               <a
-                                href={`https://t.me/OpsStakeBot?start=dispute_${myActiveMatch.id}`}
+                                href={`https://t.me/OpsStakeBot?start=dispute_${encodeURIComponent(myActiveMatch.roomCode || myActiveMatch.challengeCode)}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="w-full sm:flex-1 py-3 bg-sky-500 hover:bg-sky-400 text-neutral-950 text-xs font-black rounded-xl transition-all shadow-lg cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide"
@@ -1044,7 +1044,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
 
                               <button
                                 type="button"
-                                onClick={() => copyCode(`/dispute ${myActiveMatch.id}`)}
+                                onClick={() => copyCode(`/dispute ${myActiveMatch.roomCode || myActiveMatch.challengeCode}`)}
                                 className="w-full sm:w-auto px-4 py-3 bg-neutral-800 hover:bg-neutral-700 text-white text-xs font-bold rounded-xl border border-neutral-700 transition-all cursor-pointer flex items-center justify-center gap-2 font-mono"
                               >
                                 {copiedCode ? (
@@ -1055,7 +1055,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                                 ) : (
                                   <>
                                     <Copy className="w-4 h-4 text-neutral-400" />
-                                    <span>Copy /dispute {myActiveMatch.id.slice(0, 8)}</span>
+                                    <span>Copy /dispute {myActiveMatch.roomCode || myActiveMatch.challengeCode}</span>
                                   </>
                                 )}
                               </button>

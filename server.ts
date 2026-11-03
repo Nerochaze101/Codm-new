@@ -7,21 +7,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import crypto from 'crypto';
-import nodemailer from 'nodemailer';
-import multer from 'multer';
-import { GoogleGenAI } from '@google/genai';
-import { initDatabase, pool, runDatabaseDiagnostics } from './db';
-import {
-  initGmailTables,
-  getGmailConfig,
-  saveGmailConfig,
-  disconnectGmailConfig,
-  testGmailConnection,
-  syncGmailEmails,
-  startGmailAutoSyncService,
-  cleanupVerifiedMails,
-} from './gmailService';
+import { initDatabase, pool } from './db';
 
 dotenv.config();
 
@@ -35,31 +21,6 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 let globalIo: any = null;
-
-// Rate limiter and request signing security middleware for critical money movements & match results
-const requestRateLimits = new Map<string, { count: number; resetTime: number }>();
-
-function rateLimitMiddleware(maxRequests: number = 15, windowMs: number = 60000) {
-  return (req: any, res: any, next: any) => {
-    // Priority: Cloudflare real IP -> X-Forwarded-For -> Standard Remote IP
-    const ip = req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip || 'unknown';
-    const key = `${ip}_${req.path}`;
-    const now = Date.now();
-
-    let record = requestRateLimits.get(key);
-    if (!record || now > record.resetTime) {
-      record = { count: 1, resetTime: now + windowMs };
-      requestRateLimits.set(key, record);
-    } else {
-      record.count++;
-      if (record.count > maxRequests) {
-        console.warn(`[Rate Limit] Blocked IP: ${ip} for path: ${req.path}`);
-        return res.status(429).json({ error: 'Rate limit exceeded: Too many requests. Automated bot protection active.' });
-      }
-    }
-    next();
-  };
-}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -103,9 +64,16 @@ function escapeSql(val: any): string {
   return "'" + String(val).replace(/'/g, "''") + "'";
 }
 
-async function getMatchFromDb(id: string): Promise<any | null> {
+async function getMatchFromDb(codeOrId: string): Promise<any | null> {
   try {
-    const res = await pool.query(`SELECT * FROM matches WHERE id = ${escapeSql(id)}`);
+    const clean = codeOrId.trim();
+    const res = await pool.query(`
+      SELECT * FROM matches 
+      WHERE id = ${escapeSql(clean)} 
+         OR room_code = ${escapeSql(clean)} 
+         OR challenge_code = ${escapeSql(clean)}
+      LIMIT 1
+    `);
     if (res.rows.length === 0) return null;
     const m = res.rows[0];
     return {
@@ -127,69 +95,148 @@ async function getMatchFromDb(id: string): Promise<any | null> {
 }
 
 // ==========================================
-// TELEGRAM BOT WEBHOOK & SIMULATOR ENDPOINTS
+// TELEGRAM BOT POLLING & WEBHOOK SERVICE
 // ==========================================
-// Handles incoming Telegram Bot webhook updates or test simulation for /dispute <match_id>
+
+let activeBotUsername = 'OpsStakeBot';
+let telegramOffset = 0;
+let isPollingTelegram = false;
+
+async function initBotUsername() {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+    const data: any = await res.json();
+    if (data && data.ok && data.result?.username) {
+      activeBotUsername = data.result.username;
+      console.log(`🤖 [Telegram Bot Verified] Connected as @${activeBotUsername}`);
+    }
+  } catch (err: any) {
+    console.warn('[Telegram Bot] Error fetching bot info:', err.message);
+  }
+}
+
 async function processTelegramUpdate(update: any) {
   try {
     const message = update.message || update.edited_message;
-    if (!message || !message.text) return;
+    if (!message) return;
 
     const chatId = message.chat.id;
-    const text = message.text.trim();
     const username = message.from?.username || message.from?.first_name || 'Gladiator';
+    const text = (message.text || message.caption || '').trim();
 
-    console.log(`[Telegram Bot] Received from @${username} (Chat ID ${chatId}): "${text}"`);
+    console.log(`[Telegram Bot] Received update from @${username} (Chat ID ${chatId}): "${text || '[Media]'}"`);
 
-    if (text.startsWith('/dispute')) {
-      const parts = text.split(' ');
-      const matchId = parts[1];
+    // Check if user sent a video, photo, or document (screen recording proof)
+    if (message.video || message.document || message.photo) {
+      const media = message.video || message.document || (Array.isArray(message.photo) ? message.photo[message.photo.length - 1] : null);
+      
+      let matchText = '';
+      if (text) {
+        const parts = text.split(/\s+/);
+        const matchCode = parts.find((p: string) => p.startsWith('CODM-') || p.length >= 4) || parts[0];
+        if (matchCode) {
+          const match = await getMatchFromDb(matchCode);
+          if (match) {
+            matchText = ` for Room #${match.roomCode || match.challengeCode}`;
+            if (match.status !== 'DISPUTED') {
+              await pool.query(`UPDATE matches SET status = 'DISPUTED', resolution_notes = 'Evidence uploaded via Telegram Bot' WHERE id = ${escapeSql(match.id)}`);
+            }
+          }
+        }
+      }
 
-      if (!matchId) {
-        const reply = `⚠️ Invalid format. Please use: \`/dispute <match_id>\`\nExample: \`/dispute match_12345\``;
+      const successMsg = `🎥 *Screen Recording Evidence Received${matchText}!*\n\n` +
+        `Your evidence from @${username} has been recorded and automatically forwarded to the *Admin & Referee Review Group* for verification.\n\n` +
+        `🛡️ Escrow pot remains locked until human referees evaluate the clip. Resolution typically takes under 5 minutes.`;
+
+      await sendTelegramMessage(chatId, successMsg);
+      console.log(`[Telegram Bot] Video proof received from @${username} (Chat ID: ${chatId}, File ID: ${media?.file_id}) and acknowledged.`);
+      return;
+    }
+
+    if (!text) return;
+
+    const lower = text.toLowerCase();
+
+    // /start dispute_<code>
+    if (lower.startsWith('/start dispute_')) {
+      const codeParam = text.replace(/\/start dispute_/i, '').trim();
+      let welcome = `👋 *Welcome to Ops Stake Referee Bot, @${username}!*\n\n`;
+      if (codeParam) {
+        const match = await getMatchFromDb(codeParam);
+        if (match) {
+          if (match.status !== 'DISPUTED') {
+            await pool.query(`UPDATE matches SET status = 'DISPUTED', resolution_notes = 'Disputed via Telegram Bot' WHERE id = ${escapeSql(match.id)}`);
+          }
+          welcome += `🎯 *Target Room Code Identified:* \`${match.roomCode || match.challengeCode}\` (${match.gameMode} · ${match.map})\n` +
+            `💰 *Escrow Pot:* ₦${match.potAmount.toLocaleString()}\n\n` +
+            `📹 *Action Required:* Please record your match history and end-game scoreboard, then **upload the video file directly into this chat**!`;
+        } else {
+          welcome += `🎯 *Detected Code:* \`${codeParam}\`\n\nPlease upload your screen recording video now to submit evidence for review!`;
+        }
+      } else {
+        welcome += `To dispute a match and submit proof, send:\n\`/dispute <your_room_code>\``;
+      }
+      await sendTelegramMessage(chatId, welcome);
+      return;
+    }
+
+    // Standard /start command
+    if (lower === '/start') {
+      const welcome = `👋 *Welcome to Ops Stake Referee Bot, @${username}!*\n\n` +
+        `I automate match arbitration and video proof submission for CODM wagers.\n\n` +
+        `📌 *How to submit proof:*\n` +
+        `1. Type: \`/dispute <your_room_code>\` (e.g. \`/dispute CODM-8392-SHP\`)\n` +
+        `2. Upload your screen recording video directly to this chat.\n\n` +
+        `Referees will inspect your video and settle escrow immediately.`;
+      await sendTelegramMessage(chatId, welcome);
+      return;
+    }
+
+    // /dispute <room_code> or dispute <room_code>
+    if (lower.startsWith('/dispute') || lower.startsWith('dispute')) {
+      const parts = text.split(/\s+/);
+      const roomCodeInput = parts[1];
+
+      if (!roomCodeInput) {
+        const reply = `⚠️ *Invalid Format*\nPlease specify your room code:\n\`/dispute <room_code>\`\nExample: \`/dispute CODM-8392-SHP\``;
         await sendTelegramMessage(chatId, reply);
         return;
       }
 
-      const match = await getMatchFromDb(matchId);
+      const match = await getMatchFromDb(roomCodeInput);
       if (!match) {
-        await sendTelegramMessage(chatId, `❌ Match ID *${matchId}* was not found in the Ops Stake database. Please check your match code and try again.`);
+        await sendTelegramMessage(chatId, `❌ Room Code *${roomCodeInput}* was not found in Ops Stake. Please check the code in your match room and try again.`);
         return;
       }
 
-      // Mark match as disputed if not already
       if (match.status !== 'DISPUTED') {
-        await pool.query(`UPDATE matches SET status = 'DISPUTED', resolution_notes = 'Disputed via Telegram Bot /dispute command' WHERE id = ${escapeSql(matchId)}`);
+        await pool.query(`UPDATE matches SET status = 'DISPUTED', resolution_notes = 'Disputed via Telegram Bot /dispute command' WHERE id = ${escapeSql(match.id)}`);
       }
 
-      const confirmationText = `✅ *Dispute Received & Forwarded!*\n\n` +
-        `⚔️ *Match:* #${match.challengeCode} (${match.gameMode} · ${match.map})\n` +
-        `💰 *Pot:* ₦${match.potAmount.toLocaleString()}\n` +
-        `👤 *Gladiator:* @${username}\n\n` +
-        `📹 *Next Step:* Please send your screen recording video directly in this chat! Once received, our referee team will instantly review it and forward the evidence to the admin review group for rapid escrow settlement.`;
+      const displayCode = match.roomCode || `#${match.challengeCode}`;
+      const confirmationText = `✅ *Dispute Registered for Match ${displayCode}!*\n\n` +
+        `⚔️ *Game Mode:* ${match.gameMode} (${match.map})\n` +
+        `💰 *Pot Amount:* ₦${match.potAmount.toLocaleString()}\n` +
+        `👤 *Player:* @${username}\n\n` +
+        `📹 *NEXT STEP:* Upload your screen recording video directly to this chat now! Once sent, our referee team will review it and settle the escrow pot.`;
 
       await sendTelegramMessage(chatId, confirmationText);
-      console.log(`[Telegram Bot] Successfully processed /dispute for match ${matchId} from @${username}`);
-    } else if (message.video || message.document) {
-      // User sent screen recording video proof!
-      const videoInfo = message.video || message.document;
-      const successMsg = `🎥 *Screen Recording Video Received!*\n\n` +
-        `Your video proof has been successfully captured and automatically forwarded to the *Admin & Referee Review Group* for verification.\n\n` +
-        `🛡️ Escrow remains securely protected. Referees will settle the pot within 5 minutes.`;
-      await sendTelegramMessage(chatId, successMsg);
-      console.log(`[Telegram Bot] Video proof received from @${username} (File ID: ${videoInfo.file_id}) and forwarded to admin review queue.`);
-    } else if (text === '/start' || text.startsWith('/start dispute_')) {
-      const matchId = text.replace('/start dispute_', '');
-      let welcome = `👋 *Welcome to Ops Stake Referee Bot!*\n\n` +
-        `To submit a screen recording dispute, send:\n` +
-        `\`/dispute <your_match_id>\``;
-      if (matchId && matchId !== '/start') {
-        welcome += `\n\n🎯 Detected Match ID: \`${matchId}\`\nSend your screen recording video now to submit evidence!`;
-      }
-      await sendTelegramMessage(chatId, welcome);
+      console.log(`[Telegram Bot] Dispute command executed for ${displayCode} by @${username}`);
+      return;
     }
+
+    // Default catch-all response for unrecognized text
+    const defaultReply = `🤖 *Ops Stake Bot Active*\n\n` +
+      `To submit evidence for a disputed match, send:\n` +
+      `\`/dispute <room_code>\`\n\n` +
+      `Or attach your screen recording video directly in this chat!`;
+    await sendTelegramMessage(chatId, defaultReply);
+
   } catch (err) {
-    console.error('[Telegram Bot] Error processing update:', err);
+    console.error('[Telegram Bot] Error in processTelegramUpdate:', err);
   }
 }
 
@@ -216,6 +263,49 @@ async function sendTelegramMessage(chatId: number | string, text: string) {
   }
 }
 
+async function startTelegramBotPolling() {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) {
+    console.log('ℹ️ [Telegram Bot] TELEGRAM_BOT_TOKEN environment variable not configured. Live polling disabled until token is supplied.');
+    return;
+  }
+
+  if (isPollingTelegram) return;
+  isPollingTelegram = true;
+
+  await initBotUsername();
+  console.log(`🤖 [Telegram Bot] Long-polling active for @${activeBotUsername}...`);
+
+  // Drop any existing webhooks to ensure getUpdates long-polling works without conflicts
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/deleteWebhook?drop_pending_updates=false`);
+  } catch (_) {}
+
+  const pollLoop = async () => {
+    while (isPollingTelegram) {
+      try {
+        const res = await fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=${telegramOffset}&timeout=15`);
+        const data: any = await res.json();
+
+        if (data && data.ok && Array.isArray(data.result)) {
+          for (const update of data.result) {
+            telegramOffset = update.update_id + 1;
+            await processTelegramUpdate(update);
+          }
+        } else if (data && !data.ok) {
+          console.warn('[Telegram Bot Poll Warning]:', data.description || data);
+          await new Promise((r) => setTimeout(r, 5000));
+        }
+      } catch (err: any) {
+        console.error('[Telegram Bot Poll Error]:', err.message || err);
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+    }
+  };
+
+  pollLoop().catch((err) => console.error('[Telegram Bot Loop Crash]:', err));
+}
+
 // Telegram Bot Webhook endpoint
 app.post('/api/telegram/webhook', async (req, res) => {
   try {
@@ -228,6 +318,14 @@ app.post('/api/telegram/webhook', async (req, res) => {
   }
 });
 
+// Dynamic Bot Info endpoint for frontend
+app.get('/api/telegram/bot-info', (req, res) => {
+  res.json({
+    botUsername: activeBotUsername,
+    hasToken: !!process.env.TELEGRAM_BOT_TOKEN,
+  });
+});
+
 // Test Simulation Endpoint for Telegram Bot /dispute command & video upload
 app.post('/api/telegram/simulate-test', async (req, res) => {
   try {
@@ -238,7 +336,7 @@ app.post('/api/telegram/simulate-test', async (req, res) => {
 
     const match = await getMatchFromDb(matchId);
     if (!match) {
-      return res.status(404).json({ error: `Match ${matchId} not found in database. Create a match first.` });
+      return res.status(404).json({ error: `Match/Room Code ${matchId} not found in database.` });
     }
 
     if (action === 'dispute') {
@@ -246,29 +344,29 @@ app.post('/api/telegram/simulate-test', async (req, res) => {
         message: {
           chat: { id: chatId },
           from: { username, first_name: username },
-          text: `/dispute ${matchId}`,
+          text: `/dispute ${match.roomCode || match.challengeCode}`,
         },
       };
       await processTelegramUpdate(mockUpdate);
       return res.json({
         success: true,
-        message: `Simulated Telegram bot command '/dispute ${matchId}' successfully!`,
-        matchCode: match.challengeCode,
+        message: `Simulated Telegram bot command '/dispute ${match.roomCode || match.challengeCode}' successfully!`,
+        matchCode: match.roomCode || match.challengeCode,
       });
     } else if (action === 'video') {
       const mockUpdate = {
         message: {
           chat: { id: chatId },
           from: { username, first_name: username },
-          text: 'Here is my screen recording proof for the match',
+          text: `Screen recording for ${match.roomCode || match.challengeCode}`,
           video: { file_id: 'mock_video_file_id_98765' },
         },
       };
       await processTelegramUpdate(mockUpdate);
       return res.json({
         success: true,
-        message: `Simulated Telegram screen recording video upload successfully! Forwarded to admin group.`,
-        matchCode: match.challengeCode,
+        message: `Simulated Telegram video upload successfully!`,
+        matchCode: match.roomCode || match.challengeCode,
       });
     }
 
@@ -286,6 +384,12 @@ async function startServer() {
       console.log('✅ Supabase PostgreSQL database initialized');
     } catch (err: any) {
       console.warn('⚠️ Supabase database init error:', err.message);
+    }
+
+    try {
+      await startTelegramBotPolling();
+    } catch (err: any) {
+      console.warn('⚠️ Telegram Bot polling error:', err.message);
     }
   })();
 
@@ -324,7 +428,7 @@ async function startServer() {
   globalIo = io;
 
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`[CODM Stake] Server running on port ${PORT} with Telegram Bot /dispute automation enabled`);
+    console.log(`[CODM Stake] Server running on port ${PORT} with Telegram Bot /dispute automation & polling enabled`);
   });
 }
 
