@@ -2878,7 +2878,7 @@ app.post("/api/deposits/create", async (req, res) => {
     res.status(500).json({ error: err.message || "Failed to create deposit request" });
   }
 });
-app.get("/api/deposits/:id/status", async (req, res) => {
+app.get("/api/deposits/:id/status", rateLimitMiddleware(1, 6e4), async (req, res) => {
   try {
     const { id } = req.params;
     const depRes = await pool.query(`SELECT * FROM deposit_requests WHERE id = ${escapeSql(id)}`);
@@ -2947,17 +2947,29 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
         AND (
           subject ILIKE '%' || ${escapeSql(cleanRef)} || '%'
           OR body ILIKE '%' || ${escapeSql(cleanRef)} || '%'
-          OR subject ILIKE '%' || ${escapeSql(dep.payment_reference)} || '%'
-          OR body ILIKE '%' || ${escapeSql(dep.payment_reference)} || '%'
         )
       ORDER BY created_at DESC LIMIT 5
     `);
     if (emailsRes.rows.length === 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({
-        error: "We could not confirm a matching bank transfer for this reference yet. If you recently transferred the funds, please allow a moment and try again."
+        error: "We could not confirm a matching bank transfer for this session ID. If you recently transferred the funds, please allow a moment and try again."
       });
     }
+
+    // Amount check: Parse amount from email body (very naive, assumes number is present)
+    const emailBody = emailsRes.rows[0].body;
+    const amountMatch = emailBody.match(/(\d{1,3}(?:,\d{3})*(?:\.\d+)?)/);
+    if (amountMatch) {
+      const amountInEmail = parseFloat(amountMatch[1].replace(/,/g, ''));
+      if (Math.abs(amountInEmail - parseFloat(dep.amount)) > 1) { // 1 Naira tolerance
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+            error: `Amount mismatch: Request was for ₦${parseFloat(dep.amount).toLocaleString()}, but transaction was for ₦${amountInEmail.toLocaleString()}. Payment not fulfilled.`
+        });
+      }
+    }
+
     const matchedEmail = emailsRes.rows[0];
     const baseDepositAmount = parseFloat(dep.amount);
     const expectedTransfer = baseDepositAmount + 15.5;
@@ -4853,7 +4865,7 @@ app.post("/api/msksksnuwje/test-cashout", async (req, res) => {
   }
 });
 var activeWithdrawalLocks = /* @__PURE__ */ new Set();
-app.post("/api/users/:id/withdraw", rateLimitMiddleware(10, 6e4), secureSignatureMiddleware, async (req, res) => {
+app.post("/api/users/:id/withdraw", rateLimitMiddleware(1, 6e4), secureSignatureMiddleware, async (req, res) => {
   const userId = req.params.id;
   if (activeWithdrawalLocks.has(userId)) {
     return res.status(429).json({ error: "A withdrawal is currently in progress for this account. Please wait a moment." });
@@ -4863,12 +4875,23 @@ app.post("/api/users/:id/withdraw", rateLimitMiddleware(10, 6e4), secureSignatur
   if (!numAmount || numAmount <= 0) {
     return res.status(400).json({ error: "Invalid withdrawal amount" });
   }
+  if (numAmount < 5000) {
+    return res.status(400).json({ error: "Minimum withdrawal amount is 5,000" });
+  }
   activeWithdrawalLocks.add(userId);
   const client = await pool.connect();
   let user = null;
   const txId = `tx_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
   try {
     await client.query("BEGIN");
+    
+    // Check for existing pending withdrawals
+    const pendingWdRes = await client.query(`SELECT id FROM withdrawal_requests WHERE user_id = ${escapeSql(userId)} AND status = 'pending'`);
+    if (pendingWdRes.rows.length > 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "You already have a pending withdrawal request." });
+    }
+
     const userLockRes = await client.query(`SELECT * FROM users WHERE id = ${escapeSql(userId)} FOR UPDATE`);
     if (userLockRes.rows.length === 0) {
       await client.query("ROLLBACK");
@@ -5154,8 +5177,8 @@ async function postMatchToPublicChannel(match, origin) {
       console.warn("[Telegram Bot] Public channel ID is invalid or not configured. Skipping post.");
       return;
     }
-    const baseOrigin = (origin || "").replace(/\/$/, "");
-    const matchUrl = `${baseOrigin || "https://ops-stake.app"}/?join=${match.id}`;
+    const baseOrigin = (origin || process.env.APP_URL || "https://opsstake.online").replace(/\/$/, "");
+    const matchUrl = `${baseOrigin}/?join=${match.id}`;
     const isSquad = match.matchType === "squad" || Boolean(match.squadData);
     let messageText = "";
     let buttonLabel = "\u{1F3AE} ACCEPT WAGER NOW";
@@ -5666,7 +5689,7 @@ async function handleTelegramCallbackQuery(cq) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ callback_query_id: cq.id, text: "\u2705 Channel verified! Account linked successfully." })
         });
-        const appUrl = (process.env.APP_URL || "https://ops-stake.app").replace(/\/$/, "");
+        const appUrl = (process.env.APP_URL || "https://opsstake.online").replace(/\/$/, "");
         await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -5829,7 +5852,7 @@ async function handleTelegramMessage(message) {
           });
         }
         console.log(`✅ [Telegram Bot] User ${user.codmIgn} (${user.id}) automatically linked to Chat ID ${chatId}!`);
-        const appUrl = (process.env.APP_URL || "https://ops-stake.app").replace(/\/$/, "");
+        const appUrl = (process.env.APP_URL || "https://opsstake.online").replace(/\/$/, "");
         await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -6051,7 +6074,7 @@ async function handleTelegramMessage(message) {
   if (text === "/matches" || text === "/wagers" || text === "/squads") {
     const allMatches = await getAllMatchesFromDb();
     const openMatches = allMatches.filter((m) => m.status === "PENDING_OPPONENT_STAKE");
-    const appUrl = (process.env.APP_URL || "https://ops-stake.app").replace(/\/$/, "");
+    const appUrl = (process.env.APP_URL || "https://opsstake.online").replace(/\/$/, "");
     if (openMatches.length === 0) {
       await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: "POST",
@@ -7259,6 +7282,9 @@ function computeMatchConflictReasons(match) {
 app.post("/api/matches/:id/submit-result", rateLimitMiddleware(15, 6e4), secureSignatureMiddleware, async (req, res) => {
   const match = await getMatchFromDb(req.params.id);
   if (!match) return res.status(404).json({ error: "Match not found" });
+  if (match.status === "SETTLED" || match.status === "DISPUTED") {
+    return res.status(400).json({ error: "Match already settled or under dispute. No further dispute actions allowed." });
+  }
   const { playerId, claim, screenshotBase64 } = req.body;
   if (!["VICTORY", "DEFEAT", "DRAW"].includes(claim)) {
     return res.status(400).json({ error: "Claim must be VICTORY, DEFEAT, or DRAW" });

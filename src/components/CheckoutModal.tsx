@@ -313,34 +313,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                       <span className="font-bold text-white text-right">Quadri Abdulsalam</span>
                     </div>
 
-                    <div className="flex items-center justify-between py-2 px-3 rounded-xl bg-neutral-900 border border-neutral-800">
-                      <div className="min-w-0 pr-2">
-                        <span className="text-[10px] uppercase text-neutral-400 block font-mono">Payment / Session Reference</span>
-                        <span className="text-xs font-mono font-bold text-amber-400 select-all truncate block">{activePaymentRef}</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          navigator.clipboard.writeText(activePaymentRef);
-                          setCopiedRef(true);
-                          setTimeout(() => setCopiedRef(false), 2000);
-                        }}
-                        className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-mono text-xs flex items-center gap-1.5 cursor-pointer shrink-0 transition-all active:scale-95"
-                      >
-                        {copiedRef ? (
-                          <>
-                            <Check className="w-3.5 h-3.5 text-emerald-400" />
-                            <span className="text-emerald-400">Copied</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3.5 h-3.5" />
-                            <span>Copy Ref</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-
                     <div className="flex items-center justify-between py-1 text-xs">
                       <span className="text-neutral-400 font-mono">Wallet Credit:</span>
                       <span className="font-bold text-white font-mono">₦{amount.toLocaleString()}</span>
