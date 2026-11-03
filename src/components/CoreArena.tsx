@@ -337,14 +337,16 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <a
-              href="https://t.me/+I5vcFF4RXwJkMWVk"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black text-xs uppercase rounded-xl transition-all shadow"
-            >
-              Telegram Review Group
-            </a>
+            {(currentUser.role === 'admin' || currentUser.role === 'moderator') && (
+              <a
+                href="https://t.me/+I5vcFF4RXwJkMWVk"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black text-xs uppercase rounded-xl transition-all shadow"
+              >
+                Telegram Review Group
+              </a>
+            )}
             <button
               onClick={() => setVideoUploadStatus('idle')}
               className="p-2 text-neutral-500 hover:text-white"

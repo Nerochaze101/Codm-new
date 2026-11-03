@@ -129,6 +129,60 @@ export const ReferralPage: React.FC<ReferralPageProps> = ({ currentUser, onNavig
          </div>
       </section>
 
+      {/* 2.5 RECRUITED GLADIATORS LIST */}
+      <section className="bg-neutral-900 border border-neutral-800 rounded-[2.5rem] p-8 sm:p-10 shadow-2xl space-y-6">
+        <div className="flex items-center gap-3 border-b border-neutral-800 pb-6">
+          <div className="w-12 h-12 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
+            <Users size={24} />
+          </div>
+          <div>
+            <h3 className="text-2xl font-black text-white uppercase tracking-tighter">Recruited Gladiators</h3>
+            <p className="text-xs text-neutral-400">Successfully converted soldiers synced to your handshake protocol (Top 10).</p>
+          </div>
+        </div>
+
+        {(!currentUser.referrals || currentUser.referrals.length === 0) ? (
+          <div className="py-12 px-6 rounded-2xl bg-black/40 border border-neutral-800/80 text-center space-y-3">
+            <div className="w-14 h-14 rounded-2xl bg-neutral-900 border border-neutral-800 flex items-center justify-center text-neutral-500 mx-auto">
+              <Users size={28} />
+            </div>
+            <div className="text-sm font-bold text-white uppercase tracking-wide">No Recruits Detected</div>
+            <p className="text-xs text-neutral-500 max-w-md mx-auto leading-relaxed">
+              When gladiators register using your deployment link, they will appear here in your battalion list.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-2xl border border-neutral-800 bg-black/40">
+            <table className="w-full text-left text-xs font-mono-nums">
+              <thead className="bg-neutral-950/80 text-[10px] uppercase font-mono text-neutral-400 border-b border-neutral-800">
+                <tr>
+                  <th className="p-4">Referred Username (IGN)</th>
+                  <th className="p-4">Date Joined</th>
+                  <th className="p-4 text-right">Synchronization Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-neutral-800/60 text-neutral-300">
+                {currentUser.referrals.slice(0, 10).map((ref) => (
+                  <tr key={ref.id} className="hover:bg-neutral-800/40 transition-colors">
+                    <td className="p-4 font-bold text-white">
+                      {ref.codmIgn}
+                    </td>
+                    <td className="p-4 text-neutral-400">
+                      {new Date(ref.createdAt).toLocaleDateString()} {new Date(ref.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </td>
+                    <td className="p-4 text-right">
+                      <span className="px-2 py-1 rounded bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[10px] font-black uppercase tracking-widest">
+                        SYNCED
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
       {/* 3. REFERRAL EARNINGS HISTORY */}
       <section className="bg-neutral-900 border border-neutral-800 rounded-[2.5rem] p-8 sm:p-10 shadow-2xl space-y-6">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-neutral-800 pb-6">

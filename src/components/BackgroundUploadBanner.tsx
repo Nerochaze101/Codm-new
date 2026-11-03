@@ -5,6 +5,7 @@ interface BackgroundUploadBannerProps {
   isUploading: boolean;
   progress: number;
   status: 'idle' | 'uploading' | 'pending_review' | 'failed';
+  isAdminOrModerator: boolean;
   onDismiss: () => void;
 }
 
@@ -12,6 +13,7 @@ export const BackgroundUploadBanner: React.FC<BackgroundUploadBannerProps> = ({
   isUploading,
   progress,
   status,
+  isAdminOrModerator,
   onDismiss,
 }) => {
   if (!isUploading && status !== 'pending_review') return null;
@@ -63,14 +65,16 @@ export const BackgroundUploadBanner: React.FC<BackgroundUploadBannerProps> = ({
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <a
-              href="https://t.me/+I5vcFF4RXwJkMWVk"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black text-xs uppercase rounded-xl transition-all shadow"
-            >
-              Telegram Review Group
-            </a>
+            {isAdminOrModerator && (
+              <a
+                href="https://t.me/+I5vcFF4RXwJkMWVk"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 font-black text-xs uppercase rounded-xl transition-all shadow"
+              >
+                Telegram Review Group
+              </a>
+            )}
             <button
               onClick={onDismiss}
               className="p-2 text-neutral-400 hover:text-white cursor-pointer"

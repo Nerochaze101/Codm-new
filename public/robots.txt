@@ -1,0 +1,13 @@
+User-agent: *
+Allow: /
+Allow: /arena
+Disallow: /profile/
+Disallow: /admin/
+Disallow: /msksksnuwje/
+Disallow: /api/
+Disallow: /settings/
+Disallow: /wallet/
+Disallow: /withdraw/
+Disallow: /deposit/
+
+Sitemap: https://opsstake.online/sitemap.xml

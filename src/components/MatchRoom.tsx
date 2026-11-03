@@ -997,15 +997,17 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                 </p>
               </div>
 
-              <div className="p-3 rounded-lg bg-neutral-950/80 border border-sky-500/30 space-y-1 sm:col-span-2">
-                <div className="font-bold text-sky-400 flex items-center justify-between">
-                  <span>5. Admin Evidence Group</span>
-                  <a href="https://t.me/+I5vcFF4RXwJkMWVk" target="_blank" rel="noopener noreferrer" className="text-[10px] bg-sky-500 text-black px-2 py-0.5 rounded font-black hover:bg-sky-400">Join Telegram</a>
+              {(currentUser.role === 'admin' || currentUser.role === 'moderator') && (
+                <div className="p-3 rounded-lg bg-neutral-950/80 border border-sky-500/30 space-y-1 sm:col-span-2">
+                  <div className="font-bold text-sky-400 flex items-center justify-between">
+                    <span>5. Admin Evidence Group</span>
+                    <a href="https://t.me/+I5vcFF4RXwJkMWVk" target="_blank" rel="noopener noreferrer" className="text-[10px] bg-sky-500 text-black px-2 py-0.5 rounded font-black hover:bg-sky-400">Join Telegram</a>
+                  </div>
+                  <p className="text-neutral-300 text-xs leading-relaxed">
+                    Join the official Telegram group for instant evidence review: <a href="https://t.me/+I5vcFF4RXwJkMWVk" target="_blank" rel="noopener noreferrer" className="text-sky-400 underline font-mono">https://t.me/+I5vcFF4RXwJkMWVk</a>
+                  </p>
                 </div>
-                <p className="text-neutral-300 text-xs leading-relaxed">
-                  Join the official Telegram group for instant evidence review: <a href="https://t.me/+I5vcFF4RXwJkMWVk" target="_blank" rel="noopener noreferrer" className="text-sky-400 underline font-mono">https://t.me/+I5vcFF4RXwJkMWVk</a>
-                </p>
-              </div>
+              )}
 
               <div className="p-3 rounded-lg bg-black/60 border border-amber-500/30 space-y-2 sm:col-span-2">
                 <div className="font-bold text-amber-400 flex items-center gap-2">
@@ -1157,14 +1159,16 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                           <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
                           <span>Video Received! Status: <strong>Pending Referee Review</strong>.</span>
                         </div>
-                        <a
-                          href="https://t.me/+I5vcFF4RXwJkMWVk"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="px-3 py-1.5 bg-emerald-500 text-neutral-950 font-black text-[10px] uppercase rounded-lg hover:bg-emerald-400 shrink-0"
-                        >
-                          Telegram Group
-                        </a>
+                        {(currentUser.role === 'admin' || currentUser.role === 'moderator') && (
+                          <a
+                            href="https://t.me/+I5vcFF4RXwJkMWVk"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-3 py-1.5 bg-emerald-500 text-neutral-950 font-black text-[10px] uppercase rounded-lg hover:bg-emerald-400 shrink-0"
+                          >
+                            Telegram Group
+                          </a>
+                        )}
                       </div>
                     )}
                   </div>

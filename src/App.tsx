@@ -778,6 +778,7 @@ function MainApp() {
         isUploading={globalUploading}
         progress={globalProgress}
         status={globalUploadStatus}
+        isAdminOrModerator={currentUser.role === 'admin' || currentUser.role === 'moderator'}
         onDismiss={() => {
           setGlobalUploadStatus('idle');
           localStorage.setItem('codm_global_upload_status', 'idle');

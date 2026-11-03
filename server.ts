@@ -1228,6 +1228,17 @@ async function getUserFromDb(idOrEmail) {
       timestamp: parseInt(t.timestamp, 10),
       matchId: t.match_id || void 0
     }));
+
+    const refListRes = await pool.query(
+      `SELECT id, codm_ign, created_at FROM users WHERE referred_by = $1 ORDER BY created_at DESC LIMIT 10`,
+      [r.id]
+    );
+    const referrals = refListRes.rows.map(row => ({
+      id: row.id,
+      codmIgn: row.codm_ign,
+      createdAt: parseInt(row.created_at, 10)
+    }));
+
     return {
       id: r.id,
       username: r.username || r.codm_ign,
@@ -1258,7 +1269,8 @@ async function getUserFromDb(idOrEmail) {
       flaggedWithUserId: r.flagged_with_user_id || void 0,
       flagMatches: r.flag_matches ? typeof r.flag_matches === "string" ? JSON.parse(r.flag_matches) : r.flag_matches : void 0,
       conflictStrikes: parseInt(r.conflict_strikes || 0, 10),
-      transactions
+      transactions,
+      referrals
     };
   } catch (err) {
     console.error(`Error loading user ${idOrEmail} from DB:`, err);
@@ -1282,6 +1294,17 @@ async function getUserByEmailOrIgn(identifier) {
       timestamp: parseInt(t.timestamp, 10),
       matchId: t.match_id || void 0
     }));
+
+    const refListRes = await pool.query(
+      `SELECT id, codm_ign, created_at FROM users WHERE referred_by = $1 ORDER BY created_at DESC LIMIT 10`,
+      [r.id]
+    );
+    const referrals = refListRes.rows.map(row => ({
+      id: row.id,
+      codmIgn: row.codm_ign,
+      createdAt: parseInt(row.created_at, 10)
+    }));
+
     const user = {
       id: r.id,
       username: r.username || r.codm_ign,
@@ -1312,7 +1335,8 @@ async function getUserByEmailOrIgn(identifier) {
       flaggedWithUserId: r.flagged_with_user_id || void 0,
       flagMatches: r.flag_matches ? typeof r.flag_matches === "string" ? JSON.parse(r.flag_matches) : r.flag_matches : void 0,
       conflictStrikes: parseInt(r.conflict_strikes || 0, 10),
-      transactions
+      transactions,
+      referrals
     };
     return { user, passwordHash: r.password_hash || "" };
   } catch (err) {

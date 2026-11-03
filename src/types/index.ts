@@ -7,6 +7,12 @@ export interface Transaction {
   matchId?: string;
 }
 
+export interface UserReferral {
+  id: string;
+  codmIgn: string;
+  createdAt: number;
+}
+
 export interface UserProfile {
   id: string;
   username: string;
@@ -37,6 +43,7 @@ export interface UserProfile {
   flagReason?: string;
   conflictStrikes?: number;
   transactions: Transaction[];
+  referrals?: UserReferral[];
 }
 
 export interface SystemAiDetection {
