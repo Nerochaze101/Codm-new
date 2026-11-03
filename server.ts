@@ -1451,6 +1451,30 @@ async function getMatchFromDb(id) {
     return null;
   }
 }
+async function getMatchByCodeOrId(codeOrId) {
+  if (!codeOrId) return null;
+  const clean = String(codeOrId).trim().replace(/^#/, "");
+  try {
+    const res = await pool.query(
+      `SELECT id FROM matches 
+       WHERE id = $1 
+          OR room_code = $1 
+          OR challenge_code = $1 
+          OR LOWER(room_code) = LOWER($1) 
+          OR LOWER(challenge_code) = LOWER($1) 
+          OR LOWER(room_code) = LOWER('CODM-' || $1)
+          OR REPLACE(LOWER(room_code), '#', '') = LOWER($1)
+          OR REPLACE(LOWER(challenge_code), '#', '') = LOWER($1)
+       LIMIT 1`,
+      [clean]
+    );
+    if (res.rows.length === 0) return null;
+    return await getMatchFromDb(res.rows[0].id);
+  } catch (err) {
+    console.error("Error getting match by code or ID:", err);
+    return null;
+  }
+}
 async function getAllMatchesFromDb() {
   try {
     const res = await pool.query(`
@@ -5577,14 +5601,43 @@ async function handleTelegramMessage(message) {
   if (!message || !message.chat) return;
   const chatId = String(message.chat.id);
   const text = (message.text || "").trim();
+  const caption = (message.caption || "").trim();
+  const fullContent = text || caption;
   const from = message.from || {};
   const telegramUsername = from.username || "";
   const senderName = from.first_name ? `${from.first_name} ${from.last_name || ""}`.trim() : telegramUsername || "Gladiator";
-  const logPrefix = message.chat.type === "group" || message.chat.type === "supergroup" ? `[Telegram Bot] \u{1F465} Group "${message.chat.title || "Untitled"}" (ID: ${chatId})` : `[Telegram Bot] \u{1F464} Private User (${chatId})`;
-  console.log(`${logPrefix} @${telegramUsername || "anon"}: "${text || "[Media/Other]"}"`);
+  const logPrefix = message.chat.type === "group" || message.chat.type === "supergroup" ? `[Telegram Bot] 👥 Group "${message.chat.title || "Untitled"}" (ID: ${chatId})` : `[Telegram Bot] 👤 Private User (${chatId})`;
+  console.log(`${logPrefix} @${telegramUsername || "anon"}: "${fullContent || "[Media Attachment]"}"`);
+
+  // Handle /start command (both link_ account linking and dispute_ deep links)
   if (text.startsWith("/start")) {
     const parts = text.split(/\s+/);
     const rawPayload = parts.length > 1 ? parts[1].trim() : "";
+
+    // 1. Deep Link for Dispute: /start dispute_<roomCode>
+    if (rawPayload.startsWith("dispute_")) {
+      const roomCode = rawPayload.replace(/^dispute_/, "").trim();
+      const match = await getMatchByCodeOrId(roomCode);
+      if (match) {
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: `🚨 <b>DISPUTE REGISTRATION FOR MATCH #${match.roomCode || match.challengeCode}</b>\n\n` +
+              `🎮 <b>Mode:</b> ${match.gameMode} | 🗺️ <b>Map:</b> ${match.map}\n` +
+              `💰 <b>Escrow Pot:</b> <b>₦${match.potAmount.toLocaleString()}</b>\n\n` +
+              `📹 <b>UPLOAD YOUR SCREEN RECORDING NOW:</b>\n` +
+              `Please send/upload your CODM screen recording video file directly into this chat.\n` +
+              `You can also include caption: <code>/dispute ${match.roomCode || match.challengeCode}</code>`,
+            parse_mode: "HTML"
+          })
+        });
+        return;
+      }
+    }
+
+    // 2. Deep Link for Account Linking: /start link_<userId>
     const targetUserId = rawPayload.replace(/^link_/, "").trim();
     if (targetUserId) {
       let user = await getUserFromDb(targetUserId);
@@ -5610,22 +5663,20 @@ async function handleTelegramMessage(message) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               chat_id: chatId,
-              text: `\u{1F4E2} <b>MANDATORY CHANNEL SUBSCRIPTION REQUIRED!</b> \u{1F4E2}
-
-Hello <b>${user.codmIgn || user.username}</b>!
-To link your Telegram account and receive instant match room codes, escrow wagers, and payout alerts, you must join our official live updates channel: <b>${channelName}</b>.
-
-<b>How to complete linking:</b>
-1. Tap <b>'\u{1F4E2} 1. JOIN CHANNEL NOW'</b> below
-2. Join the channel, then return here and tap <b>'\u2705 2. I HAVE JOINED (FINISH LINKING)'</b>`,
+              text: `📢 <b>MANDATORY CHANNEL SUBSCRIPTION REQUIRED!</b> 📢\n\n` +
+                `Hello <b>${user.codmIgn || user.username}</b>!\n` +
+                `To link your Telegram account and receive instant match room codes, escrow wagers, and payout alerts, you must join our official live updates channel: <b>${channelName}</b>.\n\n` +
+                `<b>How to complete linking:</b>\n` +
+                `1. Tap <b>'📢 1. JOIN CHANNEL NOW'</b> below\n` +
+                `2. Join the channel, then return here and tap <b>'✅ 2. I HAVE JOINED (FINISH LINKING)'</b>`,
               parse_mode: "HTML",
               reply_markup: {
                 inline_keyboard: [
                   [
-                    { text: "\u{1F4E2} 1. JOIN CHANNEL NOW", url: `https://t.me/${channelName.replace("@", "")}` }
+                    { text: "📢 1. JOIN CHANNEL NOW", url: `https://t.me/${channelName.replace("@", "")}` }
                   ],
                   [
-                    { text: "\u2705 2. I HAVE JOINED (FINISH LINKING)", callback_data: `verify_link_${user.id}` }
+                    { text: "✅ 2. I HAVE JOINED (FINISH LINKING)", callback_data: `verify_link_${user.id}` }
                   ]
                 ]
               }
@@ -5649,35 +5700,31 @@ To link your Telegram account and receive instant match room codes, escrow wager
             codmIgn: user.codmIgn
           });
         }
-        console.log(`\u2705 [Telegram Bot] User ${user.codmIgn} (${user.id}) automatically linked to Chat ID ${chatId}!`);
+        console.log(`✅ [Telegram Bot] User ${user.codmIgn} (${user.id}) automatically linked to Chat ID ${chatId}!`);
         const appUrl = (process.env.APP_URL || "https://ops-stake.app").replace(/\/$/, "");
         await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             chat_id: chatId,
-            text: `\u{1F3AE} <b>OPS STAKE \xB7 TELEGRAM LINKED SUCCESSFULLY!</b> \u{1F3AE}
-
-\u2705 Welcome, <b>${user.codmIgn || user.username}</b>!
-Your Telegram account has been <b>automatically connected</b> to your OPS STAKE profile.
-
-\u{1F512} <b>Linked Profile Details:</b>
-\u2022 CODM IGN: <b>${user.codmIgn}</b>
-\u2022 Chat ID: <code>${chatId}</code>
-\u2022 Current Balance: <b>\u20A6${Number(user.balance || 0).toLocaleString()}</b>
-
-\u{1F514} <b>What you will receive here in real-time:</b>
-\u2694\uFE0F Instant alert when a rival accepts your wagers
-\u{1F511} In-game CODM room codes as soon as matches deploy
-\u{1F3C6} Wager result confirmations & instant payout alerts
-\u26A0\uFE0F Match conflict notifications & referee status updates
-
-\u{1F680} <i>You are ready for battle! Return to the arena to deploy or accept challenges.</i>`,
+            text: `🎮 <b>OPS STAKE · TELEGRAM LINKED SUCCESSFULLY!</b> 🎮\n\n` +
+              `✅ Welcome, <b>${user.codmIgn || user.username}</b>!\n` +
+              `Your Telegram account has been <b>automatically connected</b> to your OPS STAKE profile.\n\n` +
+              `🔒 <b>Linked Profile Details:</b>\n` +
+              `• CODM IGN: <b>${user.codmIgn}</b>\n` +
+              `• Chat ID: <code>${chatId}</code>\n` +
+              `• Current Balance: <b>₦${Number(user.balance || 0).toLocaleString()}</b>\n\n` +
+              `🔔 <b>What you will receive here in real-time:</b>\n` +
+              `⚔️ Instant alert when a rival accepts your wagers\n` +
+              `🔑 In-game CODM room codes as soon as matches deploy\n` +
+              `🏆 Wager result confirmations & instant payout alerts\n` +
+              `⚠️ Match conflict notifications & referee status updates\n\n` +
+              `🚀 <i>You are ready for battle! Return to the arena to deploy or accept challenges.</i>`,
             parse_mode: "HTML",
             reply_markup: {
               inline_keyboard: [
                 [
-                  { text: "\u2694\uFE0F OPEN ARENA NOW", url: `${appUrl}/arena` }
+                  { text: "⚔️ OPEN ARENA NOW", url: `${appUrl}/arena` }
                 ]
               ]
             }
@@ -5691,21 +5738,170 @@ Your Telegram account has been <b>automatically connected</b> to your OPS STAKE 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: chatId,
-        text: `\u{1F44B} <b>Welcome to OPS STAKE Tactical Bot!</b>
-
-Your Telegram Chat ID: <code>${chatId}</code>
-
-\u{1F517} <b>How to Link Your Account:</b>
-1. Open <b>OPS STAKE</b> in your browser
-2. Go to <b>Profile</b> > <b>Bot Comms</b>
-3. Tap <b>"1-Tap Connect Bot"</b> to link automatically!
-
-Or copy your Chat ID <code>${chatId}</code> and paste it in your profile.`,
+        text: `👋 <b>Welcome to OPS STAKE Tactical Bot!</b>\n\n` +
+          `Your Telegram Chat ID: <code>${chatId}</code>\n\n` +
+          `🔗 <b>How to Link Your Account:</b>\n` +
+          `1. Open <b>OPS STAKE</b> in your browser\n` +
+          `2. Go to <b>Profile</b> > <b>Bot Comms</b>\n` +
+          `3. Tap <b>"1-Tap Connect Bot"</b> to link automatically!\n\n` +
+          `Or copy your Chat ID <code>${chatId}</code> and paste it in your profile.`,
         parse_mode: "HTML"
       })
     });
     return;
   }
+
+  // Handle /dispute command OR media attachments (video, document, photo) for disputes
+  const isVideoOrMedia = Boolean(message.video || message.document || message.photo || message.animation);
+  const isDisputeCommand = fullContent.toLowerCase().startsWith("/dispute");
+
+  if (isDisputeCommand || isVideoOrMedia) {
+    let matchCode = "";
+    
+    // Extract match code from message text or caption
+    const parts = fullContent.split(/\s+/);
+    const dispIdx = parts.findIndex((p) => p.toLowerCase().startsWith("/dispute"));
+    if (dispIdx !== -1 && parts.length > dispIdx + 1) {
+      matchCode = parts[dispIdx + 1].trim();
+    } else {
+      const codeMatch = fullContent.match(/(?:CODM-[0-9]+-[A-Za-z]+|CHALLENGE-[0-9]+|match_[0-9_a-z]+)/i);
+      if (codeMatch) {
+        matchCode = codeMatch[0];
+      }
+    }
+
+    let match = await getMatchByCodeOrId(matchCode);
+
+    // If no code extracted, search DB for user's active/disputed match
+    if (!match) {
+      const userRes = await pool.query(`SELECT id, codm_ign FROM users WHERE telegram_chat_id = ${escapeSql(chatId)} LIMIT 1`);
+      const user = userRes.rows[0];
+      if (user) {
+        const mRes = await pool.query(
+          `SELECT id FROM matches 
+           WHERE (creator_id = $1 OR opponent_id = $1) 
+             AND status IN ('DISPUTED', 'SUBMITTING_RESULTS', 'READY_TO_PLAY', 'IN_PROGRESS')
+           ORDER BY created_at DESC LIMIT 1`,
+          [user.id]
+        );
+        if (mRes.rows.length > 0) {
+          match = await getMatchFromDb(mRes.rows[0].id);
+        }
+      }
+    }
+
+    // If /dispute command was sent with an unknown match code
+    if (isDisputeCommand && !match && matchCode) {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: `⚠️ <b>Match code <code>${matchCode}</code> not found!</b>\n\nPlease check your match room code in the Arena and try again (e.g. <code>/dispute CODM-5175-SHI</code>).`,
+          parse_mode: "HTML"
+        })
+      });
+      return;
+    }
+
+    if (match) {
+      const userRes = await pool.query(`SELECT id, codm_ign FROM users WHERE telegram_chat_id = ${escapeSql(chatId)} LIMIT 1`);
+      const playerIgn = userRes.rows[0]?.codm_ign || senderName;
+
+      // Link chat ID automatically if user exists
+      if (userRes.rows[0]?.id) {
+        await pool.query(`UPDATE users SET telegram_chat_id = ${escapeSql(chatId)} WHERE id = ${escapeSql(userRes.rows[0].id)}`);
+      }
+
+      if (isVideoOrMedia) {
+        // Forward video or media proof to Admin Review Group
+        const reviewGroupId = TELEGRAM_REVIEW_GROUP_ID || TELEGRAM_PUBLIC_CHANNEL_ID;
+        if (reviewGroupId) {
+          try {
+            await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/forwardMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                chat_id: reviewGroupId,
+                from_chat_id: chatId,
+                message_id: message.message_id
+              })
+            });
+
+            const alertText = `🚨 <b>MATCH DISPUTE VIDEO RECEIVED (Telegram Bot)</b> 🚨\n\n` +
+              `👤 <b>Player:</b> ${playerIgn} (@${telegramUsername || "anon"})\n` +
+              `🏷️ <b>Match Code:</b> #${match.roomCode || match.challengeCode}\n` +
+              `🎮 <b>Mode:</b> ${match.gameMode} | Map: ${match.map}\n` +
+              `💰 <b>Pot Amount:</b> <b>₦${match.potAmount.toLocaleString()}</b>\n` +
+              `🔍 <b>Search Tag:</b> <code>#DISPUTE_${match.roomCode || match.challengeCode}</code>`;
+
+            await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                chat_id: reviewGroupId,
+                text: alertText,
+                parse_mode: "HTML"
+              })
+            });
+          } catch (fwdErr) {
+            console.error("[Telegram Bot] Error forwarding dispute video:", fwdErr.message);
+          }
+        }
+
+        // Update match status to DISPUTED in database
+        match.status = "DISPUTED";
+        match.resolutionNotes = `Screen recording dispute proof submitted via Telegram Bot by ${playerIgn}. Awaiting referee review. Pot ₦${match.potAmount.toLocaleString()} locked.`;
+        match.chatMessages = match.chatMessages || [];
+        match.chatMessages.push({
+          id: `msg_${Date.now()}_tg_dispute`,
+          senderId: "SYSTEM",
+          senderName: "CODM Referee Bot",
+          text: `📹 ${playerIgn} submitted dispute screen recording video via Telegram Bot. Escrow pot locked for referee review.`,
+          timestamp: Date.now()
+        });
+
+        await saveMatchToDb(match);
+
+        if (globalIo) {
+          globalIo.emit("matchUpdated", match);
+          globalIo.to(match.id).emit("matchUpdated", match);
+        }
+
+        // Send confirmation back to user
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: `✅ <b>DISPUTE SCREEN RECORDING RECEIVED!</b>\n\n` +
+              `Your video proof for Match <b>#${match.roomCode || match.challengeCode}</b> has been received and escalated to the OpsSTAKE Admin Referee Team for priority review.\n\n` +
+              `🔒 The escrow pot (<b>₦${match.potAmount.toLocaleString()}</b>) remains securely locked until review completes.\n` +
+              `You will be notified right here in Telegram as soon as the referee adjudicates the result!`,
+            parse_mode: "HTML"
+          })
+        });
+        return;
+      } else {
+        // User sent /dispute command without attaching media
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: `🚨 <b>DISPUTE INITIATED FOR MATCH #${match.roomCode || match.challengeCode}</b>\n\n` +
+              `🎮 <b>Mode:</b> ${match.gameMode} | Map: ${match.map}\n` +
+              `💰 <b>Escrow Pot:</b> <b>₦${match.potAmount.toLocaleString()}</b>\n\n` +
+              `📹 <b>UPLOAD SCREEN RECORDING PROOF NOW:</b>\n` +
+              `Please send or upload your screen recording video file directly into this chat to complete your dispute submission.`,
+            parse_mode: "HTML"
+          })
+        });
+        return;
+      }
+    }
+  }
+
   if (text === "/status" || text === "/myid") {
     const userRes = await pool.query(`SELECT id, username, codm_ign, balance FROM users WHERE telegram_chat_id = ${escapeSql(chatId)} LIMIT 1`);
     const linkedUser = userRes.rows[0];
@@ -5714,17 +5910,16 @@ Or copy your Chat ID <code>${chatId}</code> and paste it in your profile.`,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: chatId,
-        text: `\u{1F916} <b>OPS STAKE BOT STATUS</b>
-
-\u2022 Chat ID: <code>${chatId}</code>
-\u2022 Username: @${telegramUsername || "N/A"}
-` + (linkedUser ? `\u2022 Linked Account: <b>${linkedUser.codm_ign}</b> (Balance: \u20A6${Number(linkedUser.balance || 0).toLocaleString()})
-\u2022 Status: \u{1F7E2} <b>ACTIVE & CONNECTED</b>` : `\u2022 Status: \u26AA <b>NOT LINKED</b> (Use 1-Tap Connect in OPS STAKE)`),
+        text: `🤖 <b>OPS STAKE BOT STATUS</b>\n\n` +
+          `• Chat ID: <code>${chatId}</code>\n` +
+          `• Username: @${telegramUsername || "N/A"}\n` +
+          (linkedUser ? `• Linked Account: <b>${linkedUser.codm_ign}</b> (Balance: ₦${Number(linkedUser.balance || 0).toLocaleString()})\n• Status: 🟢 <b>ACTIVE & CONNECTED</b>` : `• Status: ⚪ <b>NOT LINKED</b> (Use 1-Tap Connect in OPS STAKE)`),
         parse_mode: "HTML"
       })
     });
     return;
   }
+
   if (text === "/matches" || text === "/wagers" || text === "/squads") {
     const allMatches = await getAllMatchesFromDb();
     const openMatches = allMatches.filter((m) => m.status === "PENDING_OPPONENT_STAKE");
@@ -5735,46 +5930,38 @@ Or copy your Chat ID <code>${chatId}</code> and paste it in your profile.`,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: chatId,
-          text: `\u2694\uFE0F <b>NO OPEN WAGERS RIGHT NOW</b>
-
-Be the first to host a 1v1 duel or 5v5 Squad battle in the Arena!`,
+          text: `⚔️ <b>NO OPEN WAGERS RIGHT NOW</b>\n\nBe the first to host a 1v1 duel or 5v5 Squad battle in the Arena!`,
           parse_mode: "HTML",
           reply_markup: {
             inline_keyboard: [[
-              { text: "\u2694\uFE0F CREATE WAGER IN ARENA", url: `${appUrl}/arena` }
+              { text: "⚔️ CREATE WAGER IN ARENA", url: `${appUrl}/arena` }
             ]]
           }
         })
       });
       return;
     }
-    let summaryText = `\u2694\uFE0F <b>LIVE OPEN WAGERS (${openMatches.length})</b> \u2694\uFE0F
-
-`;
+    let summaryText = `⚔️ <b>LIVE OPEN WAGERS (${openMatches.length})</b> ⚔️\n\n`;
     for (const m of openMatches.slice(0, 5)) {
       const isSq = m.matchType === "squad" || Boolean(m.squadData);
       if (isSq) {
         const slotsFilled = m.squadData?.slots ? m.squadData.slots.filter((s) => s.staked).length : 1;
-        summaryText += `\u{1F6E1}\uFE0F <b>5v5 Squad #${m.challengeCode}</b>
-\u2022 Stake / Player: \u20A6${m.stakeAmount.toLocaleString()}
-\u2022 10 Players Gross Pot: \u20A6${m.potAmount.toLocaleString()}
-\u2022 Squad Fee: ${m.platformFeePercentage || 5}%
-\u2022 Exact Win Payout: <b>\u20A6${m.winnerPayout.toLocaleString()} / winner</b> (\u20A6${((m.winnerPayout || 0) * 5).toLocaleString()} Team Pool)
-\u2022 Open Slots: <b>${10 - slotsFilled}/10 open</b>
-\u2022 Host: ${m.creator.codmIgn}
-
-`;
+        summaryText += `🛡️ <b>5v5 Squad #${m.challengeCode}</b>\n` +
+          `• Stake / Player: ₦${m.stakeAmount.toLocaleString()}\n` +
+          `• 10 Players Gross Pot: ₦${m.potAmount.toLocaleString()}\n` +
+          `• Squad Fee: ${m.platformFeePercentage || 5}%\n` +
+          `• Exact Win Payout: <b>₦${m.winnerPayout.toLocaleString()} / winner</b> (₦${((m.winnerPayout || 0) * 5).toLocaleString()} Team Pool)\n` +
+          `• Open Slots: <b>${10 - slotsFilled}/10 open</b>\n` +
+          `• Host: ${m.creator.codmIgn}\n\n`;
       } else {
-        summaryText += `\u{1F525} <b>1v1 Duel #${m.challengeCode}</b>
-\u2022 Stake: \u20A6${m.stakeAmount.toLocaleString()}
-\u2022 Pot: \u20A6${m.potAmount.toLocaleString()}
-\u2022 Winner Payout: <b>\u20A6${m.winnerPayout.toLocaleString()}</b>
-\u2022 Host: ${m.creator.codmIgn}
-
-`;
+        summaryText += `🔥 <b>1v1 Duel #${m.challengeCode}</b>\n` +
+          `• Stake: ₦${m.stakeAmount.toLocaleString()}\n` +
+          `• Pot: ₦${m.potAmount.toLocaleString()}\n` +
+          `• Winner Payout: <b>₦${m.winnerPayout.toLocaleString()}</b>\n` +
+          `• Host: ${m.creator.codmIgn}\n\n`;
       }
     }
-    summaryText += `\u{1F680} <i>Tap the button below to view all and join the battlefield!</i>`;
+    summaryText += `🚀 <i>Tap the button below to view all and join the battlefield!</i>`;
     await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -5784,7 +5971,7 @@ Be the first to host a 1v1 duel or 5v5 Squad battle in the Arena!`,
         parse_mode: "HTML",
         reply_markup: {
           inline_keyboard: [[
-            { text: "\u{1F3AE} ENTER LIVE ARENA", url: `${appUrl}/arena` }
+            { text: "🎮 ENTER LIVE ARENA", url: `${appUrl}/arena` }
           ]]
         }
       })
@@ -5854,13 +6041,18 @@ app.post("/api/telegram/unlink", async (req, res) => {
   res.json({ success: true, message: "Telegram account unlinked successfully", user: updatedUser });
 });
 app.post("/api/telegram/webhook", async (req, res) => {
-  const update = req.body;
-  if (update?.message) {
-    handleTelegramMessage(update.message).catch((err) => {
-      console.error("[Telegram Webhook Error]:", err.message);
-    });
+  try {
+    const update = req.body;
+    if (update?.message) {
+      await handleTelegramMessage(update.message);
+    } else if (update?.callback_query) {
+      await handleTelegramCallbackQuery(update.callback_query);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[Telegram Webhook Exception]:", err.message);
+    res.status(500).json({ ok: false, error: err.message });
   }
-  res.json({ ok: true });
 });
 app.post("/api/telegram/test-channel-post", async (req, res) => {
   const { channelId } = req.body;
