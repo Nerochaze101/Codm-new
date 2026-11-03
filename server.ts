@@ -318,6 +318,7 @@ async function initDatabase() {
       ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS balance_deducted BOOLEAN DEFAULT false;
       ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS webhook_received BOOLEAN DEFAULT false;
       ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS webhook_payload JSONB;
+      ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS transfer_reference VARCHAR(255);
 
       CREATE TABLE IF NOT EXISTS opay_sms_alerts (
         id VARCHAR(255) PRIMARY KEY,
@@ -3978,6 +3979,65 @@ app.post("/api/flutterwave/webhook", async (req, res) => {
       } else {
         console.warn(`\u26A0\uFE0F [Flutterwave Webhook] Target user not identified for payment ref ${txRef}`);
       }
+    } else if (payload?.event === "transfer.completed") {
+      const trfData = payload.data || {};
+      const trfRef = trfData.reference || String(trfData.id || "");
+      const trfStatus = (trfData.status || "").toUpperCase();
+      console.log(`\u{1F514} [Flutterwave Webhook] Transfer event: Ref: ${trfRef}, Status: ${trfStatus}`);
+
+      if (trfStatus === "FAILED") {
+        const wdRes = await pool.query(`
+          SELECT * FROM withdrawal_requests 
+          WHERE (transfer_reference = ${escapeSql(trfRef)} OR remark LIKE ${escapeSql("%" + trfRef + "%")} OR id = ${escapeSql(trfRef)})
+            AND status != 'rejected'
+          LIMIT 1
+        `);
+        if (wdRes.rows.length > 0) {
+          const wd = wdRes.rows[0];
+          const failReason = trfData.complete_message || "Transfer failed at destination bank";
+          const refundAmount = parseFloat(wd.amount) + 50;
+
+          await pool.query(`
+            UPDATE withdrawal_requests 
+            SET status = 'rejected',
+                rejection_reason = ${escapeSql(failReason)},
+                webhook_received = true,
+                webhook_payload = ${escapeSql(JSON.stringify(payload))}
+            WHERE id = ${escapeSql(wd.id)}
+          `);
+
+          if (wd.balance_deducted === true) {
+            await pool.query(`
+              UPDATE users 
+              SET balance = balance + ${escapeSql(refundAmount)} 
+              WHERE id = ${escapeSql(wd.user_id)}
+            `);
+            await pool.query(`
+              UPDATE platform_finance 
+              SET total_fees_collected = GREATEST(0, total_fees_collected - 40) 
+              WHERE id = 'main'
+            `);
+            const refundTxId = `tx_ref_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+            const refundDesc = `\u21A9\uFE0F Automatic Refund: \u20A6${parseFloat(wd.amount).toLocaleString()} (+ \u20A650 fee) returned [Gateway failure: ${failReason}]`;
+            await pool.query(`
+              INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
+              VALUES (${escapeSql(refundTxId)}, ${escapeSql(wd.user_id)}, 'ESCROW_REFUND', ${escapeSql(refundAmount)}, ${escapeSql(refundDesc)}, ${Date.now()})
+            `);
+            console.log(`\u2705 [Flutterwave Webhook] Refunded \u20A6${refundAmount} to user ${wd.user_id} due to failed transfer.`);
+          }
+        }
+      } else if (trfStatus === "SUCCESSFUL") {
+        await pool.query(`
+          UPDATE withdrawal_requests 
+          SET status = 'completed',
+              webhook_received = true,
+              processed_at = ${Date.now()},
+              webhook_payload = ${escapeSql(JSON.stringify(payload))}
+          WHERE (transfer_reference = ${escapeSql(trfRef)} OR id = ${escapeSql(trfRef)})
+            AND status != 'completed'
+        `);
+        console.log(`\u2705 [Flutterwave Webhook] Marked withdrawal request ${trfRef} as completed.`);
+      }
     }
     return res.status(200).json({ status: "success" });
   } catch (err) {
@@ -4902,10 +4962,9 @@ app.post("/api/msksksnuwje/test-cashout", async (req, res) => {
         response: data,
         ipNotice: data.message?.includes("IP Whitelisting") || data.message?.includes("administrator") || data.status === "error" ? {
           requiresIpWhitelistOrApproval: true,
-          serverIpv4: "34.34.246.104",
-          secondaryIpv4: "34.34.246.124",
-          serverIpv6: "2600:1900:0:4a03::e00",
-          instructions: "In your Flutterwave Dashboard, go to Settings -> Security / API Keys -> Whitelisted IP addresses, and add 34.34.246.104. Also check your email (nerochazeagent@gmail.com) for Flutterwave transfer approval or IP alert."
+          serverIpv4: "34.34.246.125",
+          alternativeIps: ["34.34.246.104", "34.34.246.124"],
+          instructions: "In your Flutterwave Dashboard (dashboard.flutterwave.com), go to Settings -> Security / API Keys -> IP Whitelist, and add 34.34.246.125. Also ensure 'Transfers' is enabled on your live account settings or check your email (nerochazeagent@gmail.com) for transfer authorization."
         } : void 0
       });
     } catch (err) {
@@ -4970,39 +5029,62 @@ app.post("/api/msksksnuwje/test-cashout", async (req, res) => {
   }
 });
 var activeWithdrawalLocks = /* @__PURE__ */ new Set();
-app.post("/api/users/:id/withdraw", rateLimitMiddleware(1, 6e4), secureSignatureMiddleware, async (req, res) => {
+app.post("/api/users/:id/withdraw", rateLimitMiddleware(5, 6e4), secureSignatureMiddleware, async (req, res) => {
   const userId = req.params.id;
+
+  // 1. Authorization check: prevent unauthorized third-party withdrawals
+  if (!await isUserOrAdmin(req, userId)) {
+    return res.status(403).json({ error: "Unauthorized: You cannot initiate a withdrawal from another user's wallet." });
+  }
+
+  // 2. Prevent parallel race condition / double-spending
   if (activeWithdrawalLocks.has(userId)) {
     return res.status(429).json({ error: "A withdrawal is currently in progress for this account. Please wait a moment." });
   }
+
   const { amount, bankName = "", accountNumber = "", accountName = "", bankCode = "", gateway = "flutterwave" } = req.body;
   const numAmount = Number(amount);
-  if (!numAmount || numAmount <= 0) {
+
+  // 3. Amount validation: Minimum ₦100, maximum ₦1,000,000, must be positive finite number
+  if (!Number.isFinite(numAmount) || numAmount <= 0) {
     return res.status(400).json({ error: "Invalid withdrawal amount" });
   }
-  if (numAmount < 5000) {
-    return res.status(400).json({ error: "Minimum withdrawal amount is 5,000" });
+  if (numAmount < 100) {
+    return res.status(400).json({ error: "Minimum withdrawal amount is ₦100" });
   }
+  if (numAmount > 1000000) {
+    return res.status(400).json({ error: "Maximum single withdrawal amount is ₦1,000,000" });
+  }
+
   activeWithdrawalLocks.add(userId);
   const client = await pool.connect();
-  let user = null;
   const txId = `tx_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+
   try {
     await client.query("BEGIN");
-    
-    // Check for existing pending withdrawals
+
+    // 4. Check for existing pending withdrawals
     const pendingWdRes = await client.query(`SELECT id FROM withdrawal_requests WHERE user_id = ${escapeSql(userId)} AND status = 'pending'`);
     if (pendingWdRes.rows.length > 0) {
-        await client.query("ROLLBACK");
-        return res.status(400).json({ error: "You already have a pending withdrawal request." });
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "You already have a pending withdrawal request in progress. Please wait for it to complete." });
     }
 
+    // 5. Lock user row FOR UPDATE to prevent concurrent race conditions
     const userLockRes = await client.query(`SELECT * FROM users WHERE id = ${escapeSql(userId)} FOR UPDATE`);
     if (userLockRes.rows.length === 0) {
       await client.query("ROLLBACK");
       return res.status(404).json({ error: "User not found" });
     }
     const userRow = userLockRes.rows[0];
+
+    // 6. Security check: banned users cannot withdraw funds
+    if (userRow.role === "banned") {
+      await client.query("ROLLBACK");
+      return res.status(403).json({ error: "Account Banned: Withdrawals are locked for this account." });
+    }
+
+    // 7. Balance check (₦50 fee = ₦10 gateway + ₦40 admin platform fee)
     const currentBalance = parseFloat(userRow.balance || 0);
     const totalDeduction = numAmount + 50;
     if (totalDeduction > currentBalance) {
@@ -5011,29 +5093,37 @@ app.post("/api/users/:id/withdraw", rateLimitMiddleware(1, 6e4), secureSignature
         error: `Insufficient balance (includes \u20A650 withdrawal fee). Available: \u20A6${currentBalance.toLocaleString()}`
       });
     }
-    await client.query(`
-      UPDATE users 
-      SET bank_name = COALESCE(${escapeSql(bankName || null)}, bank_name),
-          account_number = COALESCE(${escapeSql(accountNumber || null)}, account_number),
-          account_name = COALESCE(${escapeSql(accountName || null)}, account_name)
-      WHERE id = ${escapeSql(userId)}
-    `);
+
+    // 8. Sanitize and validate recipient bank details
     const cleanBank = (bankName || userRow.bank_name || "").trim();
-    const cleanAccNum = (accountNumber || userRow.account_number || "").trim();
+    const cleanAccNum = (accountNumber || userRow.account_number || "").trim().replace(/\D/g, "");
     const cleanAccName = (accountName || userRow.account_name || "").trim();
-    await client.query(`
-      UPDATE users SET balance = balance - ${escapeSql(totalDeduction)} WHERE id = ${escapeSql(userId)}
-    `);
-    await updatePlatformFinance(40);
-    const wdId = `wd_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
-    const userIgn = userRow.codm_ign || userRow.username || "Gladiator";
-    const remark = `CODM-${userIgn.slice(0, 10).toUpperCase()}-${cleanAccNum.slice(-4)}`;
+
+    if (!cleanBank) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Bank name is required" });
+    }
+    if (!cleanAccNum || cleanAccNum.length !== 10) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Account number must be exactly 10 digits" });
+    }
+    if (!cleanAccName) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Account name is required" });
+    }
+
     const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || "";
     const flwCode = getFlutterwaveBankCode(cleanBank, bankCode);
+    const transferRef = `FLW_WD_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
+
     let transferResponse = null;
     let transferSuccess = false;
+    let transferErrorMessage = "";
+
+    // 9. Call Flutterwave Transfers API
     if (flwSecret && !flwSecret.startsWith("FLWSECK_TEST-xxxx")) {
       try {
+        console.log(`[Withdrawal] Calling Flutterwave: \u20A6${numAmount} to ${cleanAccNum} (${cleanBank} / code ${flwCode})...`);
         const trfRes = await fetch("https://api.flutterwave.com/v3/transfers", {
           method: "POST",
           headers: {
@@ -5044,31 +5134,81 @@ app.post("/api/users/:id/withdraw", rateLimitMiddleware(1, 6e4), secureSignature
             account_bank: flwCode,
             account_number: cleanAccNum,
             amount: numAmount,
-            narration: `CodStakes Payout to ${cleanAccName}`,
+            narration: `OpsSTAKE Cashout to ${cleanAccName}`.slice(0, 50),
             currency: "NGN",
-            reference: `FLW_INSTANT_${Date.now()}_${Math.floor(1e3 + Math.random() * 9e3)}`,
-            beneficiary_name: cleanAccName
+            reference: transferRef,
+            beneficiary_name: cleanAccName,
+            debit_currency: "NGN"
           })
         });
         transferResponse = await trfRes.json();
+        console.log("[Withdrawal] Flutterwave response:", transferResponse);
+
         if (transferResponse.status === "success" || transferResponse.status === "pending") {
           transferSuccess = true;
+        } else {
+          transferErrorMessage = transferResponse?.message || "Transfer was declined by Flutterwave payment gateway";
         }
       } catch (trfErr) {
-        console.error("Flutterwave instant transfer error:", trfErr.message);
+        console.error("Flutterwave instant transfer network error:", trfErr.message);
+        transferErrorMessage = trfErr.message || "Network error connecting to Flutterwave";
       }
     } else {
       transferSuccess = true;
-      transferResponse = { status: "success", message: "Simulated instant payout via Flutterwave test mode" };
+      transferResponse = { status: "success", message: "Simulated instant payout via Flutterwave test mode", data: { id: `sim_${Date.now()}`, status: "SUCCESSFUL" } };
     }
+
+    // 10. IF FLUTTERWAVE FAILED: IMMEDIATELY ROLLBACK - ZERO LOSS FOR USER!
+    if (!transferSuccess) {
+      await client.query("ROLLBACK");
+
+      let userFriendlyMsg = transferErrorMessage;
+      let requiresWhitelisting = false;
+      if (transferErrorMessage.includes("administrator") || transferErrorMessage.includes("cannot be processed")) {
+        userFriendlyMsg = "Payment gateway restricted: Flutterwave payout requires merchant IP whitelisting or transfer approval. Please contact the administrator.";
+        requiresWhitelisting = true;
+      }
+
+      return res.status(400).json({
+        success: false,
+        refunded: true,
+        error: `Withdrawal failed: ${userFriendlyMsg}. Your balance of \u20A6${currentBalance.toLocaleString()} is safe and was NOT deducted.`,
+        gatewayError: transferErrorMessage,
+        balance: currentBalance,
+        ipNotice: requiresWhitelisting ? {
+          serverIp: "34.34.246.125",
+          instructions: "Add server IP 34.34.246.125 to Flutterwave Dashboard -> Settings -> Security / API Keys -> IP Whitelist."
+        } : void 0
+      });
+    }
+
+    // 11. ONLY DEDUCT AND COMMIT IF FLUTTERWAVE ACCEPTED THE PAYOUT
+    await client.query(`
+      UPDATE users 
+      SET bank_name = COALESCE(${escapeSql(cleanBank)}, bank_name),
+          account_number = COALESCE(${escapeSql(cleanAccNum)}, account_number),
+          account_name = COALESCE(${escapeSql(cleanAccName)}, account_name),
+          balance = balance - ${escapeSql(totalDeduction)}
+      WHERE id = ${escapeSql(userId)}
+    `);
+    await updatePlatformFinance(40);
+
+    const wdId = `wd_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+    const userIgn = userRow.codm_ign || userRow.username || "Gladiator";
+    const remark = `CODM-${userIgn.slice(0, 10).toUpperCase()}-${cleanAccNum.slice(-4)}`;
     const desc = `\u26A1 Instant Withdrawal: \u20A6${numAmount.toLocaleString()} (+ \u20A650 fee) to ${cleanBank} (${cleanAccNum})`;
+
     await client.query(`
       INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
       VALUES (${escapeSql(txId)}, ${escapeSql(userId)}, 'WITHDRAWAL', ${escapeSql(totalDeduction)}, ${escapeSql(desc)}, ${Date.now()})
     `);
+
+    const flwStatus = (transferResponse?.data?.status || "").toUpperCase();
+    const finalWdStatus = flwStatus === 'SUCCESSFUL' ? 'completed' : 'pending';
+
     await client.query(`
       INSERT INTO withdrawal_requests (
-        id, user_id, codm_ign, email, phone, amount, bank_name, account_number, account_name, bank_code, status, remark, created_at, balance_deducted, webhook_received
+        id, user_id, codm_ign, email, phone, amount, bank_name, account_number, account_name, bank_code, status, remark, created_at, balance_deducted, webhook_received, transfer_reference
       ) VALUES (
         ${escapeSql(wdId)},
         ${escapeSql(userId)},
@@ -5079,20 +5219,23 @@ app.post("/api/users/:id/withdraw", rateLimitMiddleware(1, 6e4), secureSignature
         ${escapeSql(cleanBank)},
         ${escapeSql(cleanAccNum)},
         ${escapeSql(cleanAccName)},
-        ${escapeSql(bankCode || "")},
-        'completed',
+        ${escapeSql(bankCode || flwCode || "")},
+        ${escapeSql(finalWdStatus)},
         ${escapeSql(remark)},
         ${Date.now()},
         true,
-        true
+        ${flwStatus === 'SUCCESSFUL' ? 'true' : 'false'},
+        ${escapeSql(transferRef)}
       )
     `);
+
     await client.query("COMMIT");
-    user = await getUserFromDb(userId);
+    const updatedUser = await getUserFromDb(userId);
+
     return res.json({
       success: true,
-      pending: false,
-      balance: user?.balance ?? currentBalance - numAmount,
+      pending: finalWdStatus === 'pending',
+      balance: updatedUser?.balance ?? (currentBalance - totalDeduction),
       amount: numAmount,
       transferResponse,
       transaction: {
@@ -5102,13 +5245,12 @@ app.post("/api/users/:id/withdraw", rateLimitMiddleware(1, 6e4), secureSignature
         description: desc,
         timestamp: Date.now()
       },
-      message: `Withdrawal of \u20A6${numAmount.toLocaleString()} sent instantly via Flutterwave API to ${cleanBank} (${cleanAccNum})!`
+      message: `Withdrawal of \u20A6${numAmount.toLocaleString()} sent successfully via Flutterwave to ${cleanBank} (${cleanAccNum})!`
     });
   } catch (dbErr) {
     try {
       await client.query("ROLLBACK");
-    } catch (_) {
-    }
+    } catch (_) {}
     console.error("Database withdrawal error:", dbErr);
     return res.status(500).json({ error: dbErr.message || "Database error processing withdrawal" });
   } finally {

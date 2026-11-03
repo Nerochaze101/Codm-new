@@ -129,8 +129,9 @@ export async function withdrawWallet(
       'Content-Type': 'application/json',
       'X-Requested-With': 'XMLHttpRequest',
       'X-Ops-Signature': 'ops_client_verified',
+      'X-User-Id': userId,
     },
-    body: JSON.stringify({ amount, ...bankDetails }),
+    body: JSON.stringify({ amount, userId, ...bankDetails }),
   });
   return await parseResponse(res);
 }

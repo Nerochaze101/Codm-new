@@ -299,6 +299,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     }
   };
 
+  // Flutterwave Payout Diagnostics State
+  const [flwTestLoading, setFlwTestLoading] = useState(false);
+  const [flwTestResult, setFlwTestResult] = useState<any | null>(null);
+  const [copiedIp, setCopiedIp] = useState(false);
+
+  const handleRunFlwTest = async () => {
+    setFlwTestLoading(true);
+    setFlwTestResult(null);
+    try {
+      const res = await fetch('/api/msksksnuwje/test-cashout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Admin-Id': currentUser.id,
+          'X-User-Id': currentUser.id,
+        },
+        body: JSON.stringify({
+          amount: 100,
+          bankName: 'OPay',
+          accountNumber: '9151609682',
+          accountName: 'NURUDEEN BOLAJI ABDULSALAM',
+          bankCode: '100004',
+          gateway: 'flutterwave'
+        })
+      });
+      const data = await res.json();
+      setFlwTestResult(data);
+    } catch (err: any) {
+      setFlwTestResult({ error: err.message || 'Network error running payout test' });
+    } finally {
+      setFlwTestLoading(false);
+    }
+  };
+
   // Passcode claim for unassigned admin
   const [adminPasscode, setAdminPasscode] = useState('');
   const [claimMsg, setClaimMsg] = useState<string | null>(null);
@@ -1680,6 +1714,117 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                     {withdrawSuccessMsg ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
                     {withdrawSuccessMsg || withdrawErrorMsg}
                   </div>
+                </div>
+              )}
+            </section>
+
+            {/* FLUTTERWAVE PAYOUT GATEWAY & IP WHITELIST */}
+            <section className="bg-neutral-900 border border-neutral-800 rounded-[2.5rem] p-8 sm:p-10 shadow-2xl relative overflow-hidden">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 border-b border-neutral-800/50 pb-8 mb-8">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded-full bg-cyan-400/10 text-cyan-400 border border-cyan-400/20">
+                      Automated Bank Transfers (Flutterwave API)
+                    </span>
+                    <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                      Live NGN Wallet Active
+                    </span>
+                  </div>
+                  <h3 className="text-2xl font-black text-white uppercase tracking-tighter">Payout Gateway Diagnostics</h3>
+                  <p className="text-neutral-500 text-xs mt-0.5">
+                    Monitor live server outbound IP address, test bank payouts, and verify Flutterwave IP whitelisting.
+                  </p>
+                </div>
+                <button
+                  onClick={handleRunFlwTest}
+                  disabled={flwTestLoading}
+                  className="px-6 py-3 bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg shadow-cyan-500/10 active:scale-95 disabled:opacity-50 flex items-center gap-2 cursor-pointer"
+                >
+                  {flwTestLoading ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} />}
+                  <span>Test ₦100 Payout to OPay</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Outbound IP Box */}
+                <div className="p-6 rounded-2xl bg-black/60 border border-neutral-800 space-y-3">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-black uppercase text-amber-400 tracking-wider flex items-center gap-2">
+                      <Shield size={16} /> Server Outbound IPv4
+                    </span>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText("34.34.246.125");
+                        setCopiedIp(true);
+                        setTimeout(() => setCopiedIp(false), 2500);
+                      }}
+                      className="text-[11px] font-bold text-neutral-400 hover:text-white flex items-center gap-1 cursor-pointer"
+                    >
+                      {copiedIp ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                      <span>{copiedIp ? "Copied!" : "Copy IP"}</span>
+                    </button>
+                  </div>
+                  <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-xl flex items-center justify-between">
+                    <code className="text-base font-mono font-black text-cyan-400">34.34.246.125</code>
+                    <span className="text-[10px] uppercase font-bold px-2 py-0.5 bg-neutral-800 text-neutral-400 rounded">Active Primary</span>
+                  </div>
+                  <p className="text-[11px] text-neutral-400 leading-relaxed">
+                    If transfers return <em className="text-neutral-300">"This request cannot be processed..."</em>, add this IP in Flutterwave:
+                    <br />
+                    <strong className="text-neutral-200">dashboard.flutterwave.com &rarr; Settings &rarr; Security / API Keys &rarr; IP Whitelist</strong>.
+                  </p>
+                </div>
+
+                {/* Account Details Box */}
+                <div className="p-6 rounded-2xl bg-black/60 border border-neutral-800 space-y-3">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-black uppercase text-emerald-400 tracking-wider flex items-center gap-2">
+                      <CheckCircle2 size={16} /> Test Recipient Account
+                    </span>
+                    <span className="text-[10px] font-bold text-neutral-400">OPay Digital Bank</span>
+                  </div>
+                  <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-xl space-y-1">
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs font-mono font-bold text-white">9151609682</span>
+                      <span className="text-[10px] text-neutral-400">Code: 100004</span>
+                    </div>
+                    <p className="text-[11px] font-medium text-neutral-300">NURUDEEN BOLAJI ABDULSALAM</p>
+                  </div>
+                  <p className="text-[11px] text-neutral-400 leading-relaxed">
+                    Atomic transaction rollback active: If Flutterwave rejects any payout, ₦0 is deducted and user balance is 100% protected.
+                  </p>
+                </div>
+              </div>
+
+              {flwTestResult && (
+                <div className={`mt-6 p-5 rounded-2xl border text-xs space-y-2 animate-in fade-in duration-300 ${
+                  flwTestResult.response?.status === 'success' || flwTestResult.response?.status === 'pending'
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                    : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                }`}>
+                  <div className="flex items-center justify-between font-bold">
+                    <div className="flex items-center gap-2">
+                      {flwTestResult.response?.status === 'success' || flwTestResult.response?.status === 'pending' ? (
+                        <CheckCircle2 size={18} className="text-emerald-400" />
+                      ) : (
+                        <AlertCircle size={18} className="text-rose-400" />
+                      )}
+                      <span>
+                        {flwTestResult.response?.status === 'success' || flwTestResult.response?.status === 'pending'
+                          ? 'Flutterwave Transfer Initiated Successfully!'
+                          : `Flutterwave Response: ${flwTestResult.response?.message || flwTestResult.error || 'Declined'}`}
+                      </span>
+                    </div>
+                    <button onClick={() => setFlwTestResult(null)} className="text-neutral-400 hover:text-white cursor-pointer">
+                      <X size={16} />
+                    </button>
+                  </div>
+                  {flwTestResult.ipNotice && (
+                    <div className="p-3 rounded-xl bg-black/40 border border-rose-500/20 text-neutral-300 space-y-1">
+                      <p className="font-bold text-rose-300">Action Required in Flutterwave Dashboard:</p>
+                      <p className="text-[11px]">{flwTestResult.ipNotice.instructions}</p>
+                    </div>
+                  )}
                 </div>
               )}
             </section>
