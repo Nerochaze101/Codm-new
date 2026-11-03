@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { UserProfile } from '../types';
-import { MessageCircle, X, Send, ShieldCheck, UserCheck, Loader2, Headphones, Minimize2, Trash2, Check, RefreshCw } from 'lucide-react';
+import { MessageCircle, X, Send, ShieldCheck, UserCheck, Loader2, Headphones, Minimize2, Trash2, Check, Tag } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 
 interface SupportWidgetProps {
@@ -13,12 +13,21 @@ interface SupportMessage {
   senderName: string;
   senderRole: string;
   text: string;
+  category?: string;
   timestamp: number;
 }
+
+const SUPPORT_CATEGORIES = [
+  { id: 'Deposit Issue', label: '💳 Deposit Issue' },
+  { id: 'Result Dispute', label: '⚔️ Result Dispute' },
+  { id: 'Withdrawal Issue', label: '💸 Withdrawal Issue' },
+  { id: 'General Inquiry', label: '💬 General Inquiry' },
+];
 
 export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isCancelled, setIsCancelled] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<string>('General Inquiry');
   const [messages, setMessages] = useState<SupportMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -31,10 +40,8 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser }) => 
   const userName = currentUser ? (currentUser.codmIgn || currentUser.username || 'User') : 'Guest User';
   const userRole = currentUser ? (currentUser.role || 'user') : 'guest';
 
-  // Room identifier for support: admins/mods join global support room, users join personal support room
   const supportRoom = isAdminOrMod ? 'support_admin_room' : `support_user_${userId}`;
 
-  // Check if user previously cancelled widget and handle re-showing after a while (e.g. 60 seconds)
   useEffect(() => {
     const cancelledTime = localStorage.getItem(`codm_support_cancelled_${userId}`);
     if (cancelledTime) {
@@ -111,6 +118,7 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser }) => 
       senderName: userName,
       senderRole: userRole,
       text: textToSend,
+      category: selectedCategory,
       timestamp: Date.now(),
     };
 
@@ -129,6 +137,7 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser }) => 
           senderName: userName,
           senderRole: userRole,
           text: textToSend,
+          category: selectedCategory,
           room: supportRoom,
         }),
       });
@@ -153,7 +162,6 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser }) => 
     setIsOpen(false);
     setIsCancelled(true);
     localStorage.setItem(`codm_support_cancelled_${userId}`, Date.now().toString());
-    // Auto show back after 60 seconds
     setTimeout(() => {
       setIsCancelled(false);
       localStorage.removeItem(`codm_support_cancelled_${userId}`);
@@ -176,7 +184,7 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser }) => 
       )}
 
       {isOpen && (
-        <div className="w-[90vw] sm:w-[400px] h-[550px] bg-neutral-900 border border-neutral-800 rounded-[2rem] shadow-[0_20px_60px_rgba(0,0,0,0.8)] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-300">
+        <div className="w-[90vw] sm:w-[400px] h-[580px] bg-neutral-900 border border-neutral-800 rounded-[2rem] shadow-[0_20px_60px_rgba(0,0,0,0.8)] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-300">
           <div className="p-4 bg-neutral-950 border-b border-neutral-800 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-amber-400/10 border border-amber-400/30 flex items-center justify-center text-amber-400 shrink-0">
@@ -211,6 +219,31 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser }) => 
             </div>
           </div>
 
+          {/* Query Category Selector Dropdown / Pills */}
+          {!isAdminOrMod && (
+            <div className="px-4 py-3 bg-black/40 border-b border-neutral-800 flex items-center gap-2 overflow-x-auto">
+              <span className="text-[10px] font-black text-neutral-500 uppercase tracking-widest shrink-0 flex items-center gap-1">
+                <Tag size={12} /> Category:
+              </span>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {SUPPORT_CATEGORIES.map((cat) => (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => setSelectedCategory(cat.id)}
+                    className={`px-3 py-1 rounded-lg text-[10px] font-bold uppercase transition-all cursor-pointer ${
+                      selectedCategory === cat.id
+                        ? 'bg-amber-400 text-black shadow-lg shadow-amber-400/10'
+                        : 'bg-neutral-800/80 text-neutral-400 hover:bg-neutral-800 hover:text-white'
+                    }`}
+                  >
+                    {cat.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="flex-1 p-4 overflow-y-auto space-y-3 bg-neutral-950/60 font-sans">
             <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-[11px] leading-relaxed space-y-1">
               <div className="font-bold uppercase tracking-wide flex items-center gap-1.5">
@@ -218,7 +251,7 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser }) => 
                 <span>Secure Support Channel</span>
               </div>
               <p className="opacity-90">
-                Welcome{currentUser ? `, ${userName}` : ''}! Ask any question regarding deposits, match escrow, or withdrawals. Our admins and moderators reply in real-time.
+                Welcome{currentUser ? `, ${userName}` : ''}! Your query is categorized as <b className="text-amber-400">{selectedCategory}</b> for prompt admin routing.
               </p>
             </div>
 
@@ -241,6 +274,11 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser }) => 
                     <span className="text-[10px] font-bold text-neutral-400 uppercase">
                       {msg.senderName}
                     </span>
+                    {msg.category && !isStaff && (
+                      <span className="px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-400 font-mono text-[8px] uppercase border border-neutral-700">
+                        {msg.category}
+                      </span>
+                    )}
                     {isStaff && (
                       <span className="px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-400 font-mono font-bold text-[9px] uppercase border border-amber-400/30">
                         Staff
@@ -274,7 +312,7 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser }) => 
               type="text"
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              placeholder="Type message to support..."
+              placeholder={`Type ${selectedCategory.toLowerCase()} message...`}
               className="flex-1 bg-neutral-900 border border-neutral-800 rounded-xl px-4 py-3 text-xs text-white focus:border-amber-400 focus:outline-none placeholder:text-neutral-600"
             />
             <button
