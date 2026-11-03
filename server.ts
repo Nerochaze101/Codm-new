@@ -214,6 +214,7 @@ async function initDatabase() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS flag_reason TEXT;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS flagged_with_user_id VARCHAR(255);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS flag_matches JSONB;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS conflict_strikes INT DEFAULT 0;
 
       CREATE TABLE IF NOT EXISTS matches (
         id VARCHAR(255) PRIMARY KEY,
@@ -1213,7 +1214,7 @@ async function getUserFromDb(idOrEmail) {
   try {
     if (!idOrEmail) return null;
     const userRes = await pool.query(
-      `SELECT id, username, codm_ign, codm_uid, email, phone, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, telegram_chat_id, telegram_username, is_flagged, flag_reason, flagged_with_user_id, flag_matches FROM users WHERE id = $1 OR LOWER(email) = LOWER($1) LIMIT 1`,
+      `SELECT id, username, codm_ign, codm_uid, email, phone, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, telegram_chat_id, telegram_username, is_flagged, flag_reason, flagged_with_user_id, flag_matches, conflict_strikes FROM users WHERE id = $1 OR LOWER(email) = LOWER($1) LIMIT 1`,
       [idOrEmail]
     );
     if (userRes.rows.length === 0) return null;
@@ -1256,6 +1257,7 @@ async function getUserFromDb(idOrEmail) {
       flagReason: r.flag_reason || void 0,
       flaggedWithUserId: r.flagged_with_user_id || void 0,
       flagMatches: r.flag_matches ? typeof r.flag_matches === "string" ? JSON.parse(r.flag_matches) : r.flag_matches : void 0,
+      conflictStrikes: parseInt(r.conflict_strikes || 0, 10),
       transactions
     };
   } catch (err) {
@@ -1267,7 +1269,7 @@ async function getUserByEmailOrIgn(identifier) {
   try {
     const cleanIdent = identifier.trim().toLowerCase();
     const userRes = await pool.query(
-      `SELECT id, username, codm_ign, codm_uid, email, phone, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, telegram_chat_id, telegram_username, is_flagged, flag_reason, flagged_with_user_id, flag_matches, password_hash FROM users WHERE LOWER(email) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(codm_ign) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(username) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(referral_code) = LOWER(${escapeSql(cleanIdent)})`
+      `SELECT id, username, codm_ign, codm_uid, email, phone, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, telegram_chat_id, telegram_username, is_flagged, flag_reason, flagged_with_user_id, flag_matches, conflict_strikes, password_hash FROM users WHERE LOWER(email) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(codm_ign) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(username) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(referral_code) = LOWER(${escapeSql(cleanIdent)})`
     );
     if (userRes.rows.length === 0) return null;
     const r = userRes.rows[0];
@@ -1309,6 +1311,7 @@ async function getUserByEmailOrIgn(identifier) {
       flagReason: r.flag_reason || void 0,
       flaggedWithUserId: r.flagged_with_user_id || void 0,
       flagMatches: r.flag_matches ? typeof r.flag_matches === "string" ? JSON.parse(r.flag_matches) : r.flag_matches : void 0,
+      conflictStrikes: parseInt(r.conflict_strikes || 0, 10),
       transactions
     };
     return { user, passwordHash: r.password_hash || "" };
@@ -5236,6 +5239,110 @@ async function postMatchToPublicChannel(match, origin) {
     console.error("\u274C [Telegram Bot] Critical exception during public channel post:", err.message);
   }
 }
+async function applyConflictFlagOrBan(dishonestUserId: string, match: any, reason: string = "Match conflict violation") {
+  try {
+    if (!dishonestUserId) return;
+    const userRes = await pool.query(`SELECT * FROM users WHERE id = ${escapeSql(dishonestUserId)}`);
+    if (userRes.rows.length === 0) return;
+    const user = userRes.rows[0];
+    const currentStrikes = parseInt(user.conflict_strikes || 0, 10) || 0;
+    const newStrikes = currentStrikes + 1;
+    const roomTag = match.roomCode || match.challengeCode || match.id;
+
+    if (newStrikes === 1) {
+      // Strike 1: Auto-flag
+      const flagReason = `Strike 1 Flag: Submitted false/conflicting result claim in Match #${roomTag}. Account placed on probation.`;
+      await pool.query(`
+        UPDATE users 
+        SET is_flagged = true,
+            conflict_strikes = 1,
+            flag_reason = ${escapeSql(flagReason)}
+        WHERE id = ${escapeSql(dishonestUserId)}
+      `);
+      console.log(`⚠️ [Conflict System] User ${user.codm_ign} (${dishonestUserId}) issued Strike 1 flag.`);
+
+      if (user.telegram_chat_id) {
+        const warnMessage = `⚠️ <b>ACCOUNT FLAGGED - MATCH CONFLICT STRIKE 1</b> ⚠️\n\n` +
+          `Your account has been officially flagged by the referee team for submitting a false or conflicting result claim in Match <b>#${roomTag}</b>.\n\n` +
+          `🚨 <b>POLICY WARNING:</b>\n` +
+          `• Strike Count: <b>1 / 2</b>\n` +
+          `• Account Status: 🟡 <b>FLAGGED / PROBATION</b>\n\n` +
+          `Please ensure all future match claims and scoreboard uploads are 100% accurate. A second conflict violation will trigger an immediate <b>PERMANENT ACCOUNT BAN</b> and complete forfeiture of all wallet funds.`;
+
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: user.telegram_chat_id.trim(),
+            text: warnMessage,
+            parse_mode: "HTML"
+          })
+        }).catch((e) => console.warn("[Conflict System] Failed to send Strike 1 Telegram warn:", e.message));
+      }
+    } else {
+      // Strike >= 2: Auto-ban & permanent fund forfeiture
+      const totalBalance = parseFloat(user.balance || 0) + parseFloat(user.escrow_balance || 0);
+      const banReason = `PERMANENT BAN (Strike ${newStrikes}): Repeat match conflict fraud in Match #${roomTag}. Total ₦${totalBalance.toLocaleString()} forfeited.`;
+
+      await pool.query(`
+        UPDATE users 
+        SET role = 'banned',
+            is_flagged = true,
+            conflict_strikes = ${escapeSql(newStrikes)},
+            flag_reason = ${escapeSql(banReason)},
+            balance = 0,
+            escrow_balance = 0
+        WHERE id = ${escapeSql(dishonestUserId)}
+      `);
+
+      if (totalBalance > 0) {
+        const txId = `tx_ban_forfeit_${Date.now()}`;
+        const txDesc = `🛑 Permanent Fraud Ban & Forfeiture: ₦${totalBalance.toLocaleString()} balance reset to zero due to repeat match conflict violations (Match #${roomTag})`;
+        await pool.query(`
+          INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+          VALUES (${escapeSql(txId)}, ${escapeSql(dishonestUserId)}, 'FRAUD_BAN_FORFEIT', ${escapeSql(totalBalance)}, ${escapeSql(txDesc)}, ${escapeSql(match.id)}, ${Date.now()})
+          ON CONFLICT (id) DO NOTHING
+        `);
+      }
+
+      console.log(`🛑 [Conflict System] User ${user.codm_ign} (${dishonestUserId}) PERMANENTLY BANNED on Strike ${newStrikes}. ₦${totalBalance} forfeited.`);
+
+      if (user.telegram_chat_id) {
+        const channelId = process.env.TELEGRAM_PUBLIC_CHANNEL_ID || "@OpsSTAKE";
+        fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/banChatMember`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: channelId,
+            user_id: user.telegram_chat_id
+          })
+        }).catch((e) => console.warn("[Telegram Bot] Failed to ban chat member from channel:", e.message));
+
+        const banMessage = `🛑 <b>ACCOUNT PERMANENTLY BANNED & FUNDS FORFEITED</b> 🛑\n\n` +
+          `Your account has been <b>PERMANENTLY BANNED</b> following a repeat match conflict violation in Match <b>#${roomTag}</b> (Strike ${newStrikes}).\n\n` +
+          `💸 <b>FORFEITURE & BAN DETAILS:</b>\n` +
+          `• Account Status: 🔴 <b>PERMANENTLY BANNED</b>\n` +
+          `• Forfeited Balance: <b>₦${totalBalance.toLocaleString()}</b> (Reset to ₦0)\n` +
+          `• Blacklist Status: 🔒 Credentials & Bank Account Blacklisted\n` +
+          `• Channel Access: 🚫 <b>BANNED FROM OFFICIAL @OpsSTAKE CHANNEL</b>\n\n` +
+          `Under Arena Security Rules, fraudulent result submissions and repeat conflict violations result in instant loss of funds and permanent loss of account access.`;
+
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: user.telegram_chat_id.trim(),
+            text: banMessage,
+            parse_mode: "HTML"
+          })
+        }).catch((e) => console.warn("[Conflict System] Failed to send Ban Telegram alert:", e.message));
+      }
+    }
+  } catch (err) {
+    console.error("[Conflict System] Error applying conflict flag/ban:", err);
+  }
+}
+
 async function sendTelegramMatchAcceptedAlert(match, opponentIgn) {
   try {
     const isSquad = match.matchType === "squad" || Boolean(match.squadData);
@@ -5244,25 +5351,25 @@ async function sendTelegramMatchAcceptedAlert(match, opponentIgn) {
       return;
     }
     const creatorUser = await getUserFromDb(match.creator.id);
-    const hostChatId = creatorUser?.telegramChatId || process.env.TELEGRAM_HOST_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
+    const hostChatId = creatorUser?.telegramChatId;
     const netPot = match.potAmount - (match.platformFee || 0);
     const winnerPayout = match.winnerPayout || netPot;
-    const messageText = `\u2694\uFE0F <b>MATCH ACCEPTED - OPS STAKE</b> \u2694\uFE0F
+    const messageText = `⚔️ <b>MATCH ACCEPTED - OPS STAKE</b> ⚔️
 
-\u{1F3AF} <b>A rival has accepted your 1v1 wager challenge!</b>
+🎯 <b>A rival has accepted your 1v1 wager challenge!</b>
 
-\u{1F464} <b>Host:</b> ${match.creator.codmIgn}
-\u2694\uFE0F <b>Opponent:</b> ${opponentIgn}
-\u{1F4B5} <b>Stake Amount:</b> \u20A6${match.stakeAmount.toLocaleString()}
-\u{1F3C6} <b>Total Pot:</b> \u20A6${match.potAmount.toLocaleString()}
-\u{1F3AF} <b>Winner Payout:</b> <b>\u20A6${winnerPayout.toLocaleString()}</b>
-\u{1F3AF} <b>Game Mode:</b> ${match.gameMode}
-\u{1F5FA}\uFE0F <b>Map:</b> ${match.map}
-\u{1F511} <b>In-Game Room Code:</b> <code>#${match.roomCode || "Ready"}</code>
-\u{1F3F7}\uFE0F <b>Challenge Code:</b> #${match.challengeCode}
+👤 <b>Host:</b> ${match.creator.codmIgn}
+⚔️ <b>Opponent:</b> ${opponentIgn}
+💵 <b>Stake Amount:</b> ₦${match.stakeAmount.toLocaleString()}
+🏆 <b>Total Pot:</b> ₦${match.potAmount.toLocaleString()}
+🎯 <b>Winner Payout:</b> <b>₦${winnerPayout.toLocaleString()}</b>
+🎯 <b>Game Mode:</b> ${match.gameMode}
+🗺️ <b>Map:</b> ${match.map}
+🔑 <b>In-Game Room Code:</b> <code>#${match.roomCode || "Ready"}</code>
+🏷️ <b>Challenge Code:</b> #${match.challengeCode}
 
-\u{1F680} <i>Open CODM, enter room code #${match.roomCode || "Ready"}, and claim your \u20A6${winnerPayout.toLocaleString()} victory!</i>`;
-    const chatIdsToSend = /* @__PURE__ */ new Set();
+🚀 <i>Open CODM, enter room code #${match.roomCode || "Ready"}, and claim your ₦${winnerPayout.toLocaleString()} victory!</i>`;
+    const chatIdsToSend = new Set();
     if (hostChatId && hostChatId.trim()) chatIdsToSend.add(hostChatId.trim());
     if (chatIdsToSend.size === 0) {
       console.log(`[Telegram Bot] Host ${match.creator.codmIgn} has no Telegram Chat ID configured.`);
@@ -5282,7 +5389,7 @@ async function sendTelegramMatchAcceptedAlert(match, opponentIgn) {
       if (!data.ok) {
         console.warn(`[Telegram Bot] Direct alert failed for chat ID ${chatId}: ${data.description}`);
       } else {
-        console.log(`\u2705 [Telegram Bot] Acceptance alert sent to host chat ${chatId}`);
+        console.log(`✅ [Telegram Bot] Acceptance alert sent to host chat ${chatId}`);
       }
     }
   } catch (err) {
@@ -5300,34 +5407,34 @@ async function sendTelegramSquadSlotJoinedAlert(match, playerIgn, team, slotNumb
     const teamLabel = team === "ALPHA" ? "Team Alpha (Blue)" : "Team Bravo (Red)";
     let messageText = "";
     if (filledCount === 10) {
-      messageText = `\u2694\uFE0F <b>5v5 SQUAD LOBBY FULL - MATCH COMMENCING!</b> \u2694\uFE0F
+      messageText = `⚔️ <b>5v5 SQUAD LOBBY FULL - MATCH COMMENCING!</b> ⚔️
 
-\u{1F3AF} <b>All 10 slots are filled and locked into escrow!</b>
+🎯 <b>All 10 slots are filled and locked into escrow!</b>
 
-\u{1F4B5} <b>Stake / Player:</b> \u20A6${match.stakeAmount.toLocaleString()}
-\u{1F3C6} <b>Total Gross Pot:</b> \u20A6${grossPot.toLocaleString()} (10 Players)
-\u2699\uFE0F <b>Squad Platform Fee:</b> \u20A6${feeAmount.toLocaleString()} (${feePercent}% Squad Fee)
-\u{1F4B0} <b>Winning Squad Pool:</b> \u20A6${netSquadPool.toLocaleString()}
-\u{1F3AF} <b>Exact Payout:</b> <b>\u20A6${perPlayerPayout.toLocaleString()}</b> per winning squad member
+💵 <b>Stake / Player:</b> ₦${match.stakeAmount.toLocaleString()}
+🏆 <b>Total Gross Pot:</b> ₦${grossPot.toLocaleString()} (10 Players)
+⚙️ <b>Squad Platform Fee:</b> ₦${feeAmount.toLocaleString()} (${feePercent}% Squad Fee)
+💰 <b>Winning Squad Pool:</b> ₦${netSquadPool.toLocaleString()}
+🎯 <b>Exact Payout:</b> <b>₦${perPlayerPayout.toLocaleString()}</b> per winning squad member
 
-\u{1F511} <b>In-Game CODM Room Code:</b> <code>#${match.roomCode || "Ready"}</code>
-\u{1F3F7}\uFE0F <b>Lobby Code:</b> #${match.challengeCode}
-\u{1F3AF} <b>Mode:</b> ${match.gameMode} \xB7 <b>Map:</b> ${match.map}
+🔑 <b>In-Game CODM Room Code:</b> <code>#${match.roomCode || "Ready"}</code>
+🏷️ <b>Lobby Code:</b> #${match.challengeCode}
+🎯 <b>Mode:</b> ${match.gameMode} · <b>Map:</b> ${match.map}
 
-\u{1F680} <i>Open CODM now, enter custom room #${match.roomCode || "Ready"}, and lead your squad to victory!</i>`;
+🚀 <i>Open CODM now, enter custom room #${match.roomCode || "Ready"}, and lead your squad to victory!</i>`;
     } else {
-      messageText = `\u{1F6E1}\uFE0F <b>5v5 SQUAD SLOT FILLED - OPS STAKE</b> \u{1F6E1}\uFE0F
+      messageText = `🛡️ <b>5v5 SQUAD SLOT FILLED - OPS STAKE</b> 🛡️
 
-\u2694\uFE0F <b>${playerIgn}</b> staked \u20A6${match.stakeAmount.toLocaleString()} and joined <b>${teamLabel} Slot #${slotNumber}</b>!
+⚔️ <b>${playerIgn}</b> staked ₦${match.stakeAmount.toLocaleString()} and joined <b>${teamLabel} Slot #${slotNumber}</b>!
 
-\u{1F4CA} <b>Lobby Progress:</b> <b>${filledCount}/10 Slots Staked</b> (${10 - filledCount} slots open)
-\u{1F4B5} <b>Entry Stake:</b> \u20A6${match.stakeAmount.toLocaleString()} / player
-\u{1F3C6} <b>Total Gross Pot:</b> \u20A6${grossPot.toLocaleString()} (10 Players)
-\u2699\uFE0F <b>Squad Fee:</b> ${feePercent}% (\u20A6${feeAmount.toLocaleString()})
-\u{1F3AF} <b>Exact Payout:</b> <b>\u20A6${perPlayerPayout.toLocaleString()}</b> per winning player (\u20A6${netSquadPool.toLocaleString()} Team Total)
-\u{1F3F7}\uFE0F <b>Lobby Code:</b> #${match.challengeCode}
+📊 <b>Lobby Progress:</b> <b>${filledCount}/10 Slots Staked</b> (${10 - filledCount} slots open)
+💵 <b>Entry Stake:</b> ₦${match.stakeAmount.toLocaleString()} / player
+🏆 <b>Total Gross Pot:</b> ₦${grossPot.toLocaleString()} (10 Players)
+⚙️ <b>Squad Fee:</b> ${feePercent}% (₦${feeAmount.toLocaleString()})
+🎯 <b>Exact Payout:</b> <b>₦${perPlayerPayout.toLocaleString()}</b> per winning player (₦${netSquadPool.toLocaleString()} Team Total)
+🏷️ <b>Lobby Code:</b> #${match.challengeCode}
 
-\u23F3 <i>Waiting for ${10 - filledCount} more player(s) to stake and lock in...</i>`;
+⏳ <i>Waiting for ${10 - filledCount} more player(s) to stake and lock in...</i>`;
     }
     const stakedUserIds = [];
     if (squad?.slots && Array.isArray(squad.slots)) {
@@ -5340,7 +5447,7 @@ async function sendTelegramSquadSlotJoinedAlert(match, playerIgn, team, slotNumb
     if (match.creator?.id && !stakedUserIds.includes(match.creator.id)) {
       stakedUserIds.push(match.creator.id);
     }
-    const chatIdsToSend = /* @__PURE__ */ new Set();
+    const chatIdsToSend = new Set();
     for (const uid of stakedUserIds) {
       const u = await getUserFromDb(uid);
       if (u?.telegramChatId && u.telegramChatId.trim()) {
@@ -5608,6 +5715,27 @@ async function handleTelegramMessage(message) {
   const senderName = from.first_name ? `${from.first_name} ${from.last_name || ""}`.trim() : telegramUsername || "Gladiator";
   const logPrefix = message.chat.type === "group" || message.chat.type === "supergroup" ? `[Telegram Bot] 👥 Group "${message.chat.title || "Untitled"}" (ID: ${chatId})` : `[Telegram Bot] 👤 Private User (${chatId})`;
   console.log(`${logPrefix} @${telegramUsername || "anon"}: "${fullContent || "[Media Attachment]"}"`);
+
+  // Check if sender is banned
+  const bannedCheck = await pool.query(
+    `SELECT id, role, codm_ign FROM users WHERE (telegram_chat_id = ${escapeSql(chatId)} OR (LOWER(telegram_username) = LOWER(${escapeSql(telegramUsername)}) AND ${escapeSql(telegramUsername)} != '')) AND role = 'banned' LIMIT 1`
+  );
+  if (bannedCheck.rows.length > 0) {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: `🛑 <b>ACCESS PERMANENTLY BANNED</b>\n\n` +
+          `Your account (<b>${bannedCheck.rows[0].codm_ign || "Gladiator"}</b>) has been <b>PERMANENTLY BANNED</b> from the OpsSTAKE Arena and Telegram Bot due to repeat match conflict violations & fraudulent result claims.\n\n` +
+          `• Wallet & Escrow Funds: 🔒 <b>100% FORFEITED (₦0)</b>\n` +
+          `• Channel Access: 🚫 <b>BANNED FROM OFFICIAL @OpsSTAKE CHANNEL</b>\n\n` +
+          `Bot commands, dispute uploads, and wager participation are permanently disabled.`,
+        parse_mode: "HTML"
+      })
+    });
+    return;
+  }
 
   // Handle /start command (both link_ account linking and dispute_ deep links)
   if (text.startsWith("/start")) {
@@ -7669,6 +7797,10 @@ app.post("/api/msksksnuwje/matches/:id/admin-resolve", async (req, res) => {
       await pool.query(`
         UPDATE users SET losses = losses + 1 WHERE id = ${escapeSql(loserObj.id)}
       `);
+      // Auto-flag or auto-ban dishonest user if they submitted a false victory claim or caused a match conflict
+      if (loserObj.resultClaim === 'VICTORY' || match.status === 'DISPUTED' || match.conflictReason) {
+        await applyConflictFlagOrBan(loserObj.id, match, `False result claim / match conflict in Match #${match.roomCode || match.challengeCode}`);
+      }
     }
   }
   match.status = "SETTLED";
@@ -8600,14 +8732,6 @@ async function startServer() {
         }
         io.to(data.matchId).emit("chat", { ...newMsg, matchId: data.matchId });
         socket.to(data.matchId).emit("chatNotification", {
-          id: `chat_notif_${newMsg.id}`,
-          matchId: data.matchId,
-          senderId: newMsg.senderId,
-          senderName: newMsg.senderName,
-          text: newMsg.text,
-          timestamp: newMsg.timestamp
-        });
-        io.emit("globalChatAlert", {
           id: `chat_notif_${newMsg.id}`,
           matchId: data.matchId,
           senderId: newMsg.senderId,

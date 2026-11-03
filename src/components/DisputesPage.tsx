@@ -221,24 +221,26 @@ export const DisputesPage: React.FC<DisputesPageProps> = ({ currentUser, matches
         )}
       </div>
 
-      {/* Official Telegram Review Group Card */}
-      <div className="p-6 sm:p-8 rounded-3xl bg-neutral-900 border border-neutral-800 space-y-4 shadow-xl text-center">
-        <h3 className="text-base font-bold text-white uppercase font-heading">
-          Official Referee Telegram Evidence Group
-        </h3>
-        <p className="text-xs text-neutral-400 max-w-lg mx-auto">
-          Join our Telegram group to interact with human referees, view dispute status updates, and ensure lightning-fast escrow resolution.
-        </p>
-        <a
-          href="https://t.me/+I5vcFF4RXwJkMWVk"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-sky-500 hover:bg-sky-400 text-neutral-950 font-black text-xs uppercase tracking-wide transition-all shadow-lg"
-        >
-          <ExternalLink size={16} />
-          <span>Join Telegram Dispute Group</span>
-        </a>
-      </div>
+      {/* Official Telegram Review Group Card (Gated to Admin/Moderator Staff Only) */}
+      {(currentUser.role === 'admin' || currentUser.role === 'super_admin' || currentUser.role === 'moderator') && (
+        <div className="p-6 sm:p-8 rounded-3xl bg-neutral-900 border border-neutral-800 space-y-4 shadow-xl text-center">
+          <h3 className="text-base font-bold text-white uppercase font-heading">
+            Official Referee Telegram Evidence Group
+          </h3>
+          <p className="text-xs text-neutral-400 max-w-lg mx-auto">
+            Join our Telegram group to interact with human referees, view dispute status updates, and ensure lightning-fast escrow resolution.
+          </p>
+          <a
+            href="https://t.me/+I5vcFF4RXwJkMWVk"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-sky-500 hover:bg-sky-400 text-neutral-950 font-black text-xs uppercase tracking-wide transition-all shadow-lg"
+          >
+            <ExternalLink size={16} />
+            <span>Join Telegram Dispute Group</span>
+          </a>
+        </div>
+      )}
     </div>
   );
 };

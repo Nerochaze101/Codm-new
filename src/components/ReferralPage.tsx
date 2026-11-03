@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { UserProfile } from '../types';
-import { Users, Copy, ArrowLeft, Zap, Trophy, ShieldCheck, Gift, Check, Share2, TrendingUp } from 'lucide-react';
+import { Users, Copy, ArrowLeft, Zap, Trophy, ShieldCheck, Gift, Check, Share2, TrendingUp, History as HistoryIcon, Clock } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 
 interface ReferralPageProps {
@@ -129,7 +129,89 @@ export const ReferralPage: React.FC<ReferralPageProps> = ({ currentUser, onNavig
          </div>
       </section>
 
-      {/* 3. HOW IT WORKS */}
+      {/* 3. REFERRAL EARNINGS HISTORY */}
+      <section className="bg-neutral-900 border border-neutral-800 rounded-[2.5rem] p-8 sm:p-10 shadow-2xl space-y-6">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-neutral-800 pb-6">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+              <HistoryIcon size={24} />
+            </div>
+            <div>
+              <h3 className="text-2xl font-black text-white uppercase tracking-tighter">Commission Payout History</h3>
+              <p className="text-xs text-neutral-400">Detailed breakdown of 10% platform fee payouts credited to your wallet.</p>
+            </div>
+          </div>
+          <div className="px-4 py-2 rounded-xl bg-black/60 border border-neutral-800 text-xs font-mono font-bold text-emerald-400 flex items-center gap-2">
+            <TrendingUp size={14} />
+            <span>Total Earned: ₦{(currentUser.totalReferralEarnings || 0).toLocaleString()}</span>
+          </div>
+        </div>
+
+        {(() => {
+          const referralTxList = (currentUser.transactions || [])
+            .filter(t => t.type === 'REFERRAL_EARNING')
+            .sort((a, b) => b.timestamp - a.timestamp);
+
+          if (referralTxList.length === 0) {
+            return (
+              <div className="py-12 px-6 rounded-2xl bg-black/40 border border-neutral-800/80 text-center space-y-3">
+                <div className="w-14 h-14 rounded-2xl bg-neutral-900 border border-neutral-800 flex items-center justify-center text-neutral-500 mx-auto">
+                  <Clock size={28} />
+                </div>
+                <div className="text-sm font-bold text-white uppercase tracking-wide">No Commission Payouts Yet</div>
+                <p className="text-xs text-neutral-500 max-w-md mx-auto leading-relaxed">
+                  When players register using your deployment link and compete in matches, 10% of their platform fees will automatically credit to your wallet and log here.
+                </p>
+              </div>
+            );
+          }
+
+          return (
+            <div className="space-y-3">
+              <div className="overflow-x-auto rounded-2xl border border-neutral-800 bg-black/40">
+                <table className="w-full text-left text-xs font-mono-nums">
+                  <thead className="bg-neutral-950/80 text-[10px] uppercase font-mono text-neutral-400 border-b border-neutral-800">
+                    <tr>
+                      <th className="p-4">Transaction Date</th>
+                      <th className="p-4">Match Details</th>
+                      <th className="p-4">Matched Commission Amount</th>
+                      <th className="p-4 text-center">User Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-800/60 text-neutral-300">
+                    {referralTxList.map((tx) => (
+                      <tr key={tx.id} className="hover:bg-neutral-800/40 transition-colors">
+                        <td className="p-4 text-neutral-400 text-[11px] whitespace-nowrap">
+                          {new Date(tx.timestamp).toLocaleDateString()} {new Date(tx.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </td>
+                        <td className="p-4 font-medium text-white max-w-xs truncate">
+                          {tx.description}
+                        </td>
+                        <td className="p-4 font-black text-emerald-400 text-sm whitespace-nowrap">
+                          +₦{tx.amount.toLocaleString()} <span className="text-[10px] text-neutral-500 font-normal">(10% Rake)</span>
+                        </td>
+                        <td className="p-4 text-center whitespace-nowrap">
+                          <span className={`px-2.5 py-1 rounded-lg border font-mono text-[10px] font-black uppercase tracking-wider ${
+                            currentUser.role === 'banned'
+                              ? 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                              : currentUser.isFlagged
+                              ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                              : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                          }`}>
+                            {currentUser.role === 'banned' ? 'BANNED' : currentUser.isFlagged ? 'FLAGGED' : 'SETTLED & CREDITED'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })()}
+      </section>
+
+      {/* 4. HOW IT WORKS */}
       <section className="bg-neutral-950/50 border border-neutral-900 rounded-[3rem] p-10">
          <h3 className="text-center text-[10px] font-black text-neutral-600 uppercase tracking-[0.4em] mb-12">Recruitment Protocol</h3>
          <div className="grid grid-cols-1 md:grid-cols-3 gap-12">

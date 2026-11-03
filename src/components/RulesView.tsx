@@ -77,15 +77,21 @@ export const RulesView: React.FC = () => {
       </div>
 
       {/* Dispute Resolution Note */}
-      <div className="p-6 rounded-2xl bg-neutral-900 border border-neutral-800 space-y-3">
-        <div className="flex items-center gap-2 text-amber-400 font-bold font-heading text-base">
+      <div className="p-6 rounded-2xl bg-neutral-900 border border-rose-500/40 space-y-3">
+        <div className="flex items-center gap-2 text-rose-400 font-bold font-heading text-base">
           <AlertTriangle className="w-5 h-5" />
-          <span>Dispute Guarantee & Fraud Protection</span>
+          <span>Dispute Guarantee, Repeat Offense & Channel Ban Policy</span>
         </div>
         <p className="text-xs text-neutral-300 leading-relaxed">
-          If both players claim Victory with fake or doctored screenshots, the escrow remains securely frozen and the match is automatically escalated to human referee adjudication.
-          Submitting fraudulent screenshots results in a permanent ban and forfeiture of deposited stakes.
+          If both players claim Victory or submit conflicting claims, the escrow remains securely frozen and the match is automatically escalated to human referee adjudication.
         </p>
+        <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-neutral-300 space-y-1.5">
+          <p className="font-bold text-rose-400 uppercase">2-Strike Conflict Penalty Policy:</p>
+          <ul className="list-disc list-inside space-y-1 text-[11px] text-neutral-300">
+            <li><strong>Strike 1:</strong> Account flagged, placed on probation, formal warning issued.</li>
+            <li><strong>Strike 2 (Repeat Violation):</strong> Immediate <strong>PERMANENT BAN</strong>, 100% forfeiture of all wallet & escrow balances to ₦0, and permanent ban from app, Telegram Bot, and official <strong>@OpsSTAKE</strong> channel.</li>
+          </ul>
+        </div>
       </div>
     </div>
   );

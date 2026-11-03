@@ -78,12 +78,27 @@ export const TermsModal: React.FC<TermsModalProps> = ({ isOpen, onClose, onAccep
           {/* Section 4: Single Identity & Permanent NUBAN */}
           <div className="space-y-1.5">
             <div className="flex items-center gap-2 text-white font-bold uppercase tracking-wide text-xs">
-              <AlertTriangle className="w-4 h-4 text-rose-400" />
+              <AlertTriangle className="w-4 h-4 text-amber-400" />
               <span>4. Anti-Smurf & Permanent Banking Policy</span>
             </div>
             <p className="text-neutral-400">
               To prevent multi-accounting and smurfing, each gladiator is restricted to one verified profile. Bank accounts (NUBAN) are permanently tied to your profile upon withdrawal registration.
             </p>
+          </div>
+
+          {/* Section 5: Conflict Fraud & Repeat Offense Penalty Policy */}
+          <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 space-y-2">
+            <div className="flex items-center gap-2 text-rose-400 font-bold uppercase tracking-wide text-xs">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>5. Conflict Fraud, Fund Forfeiture & Channel Ban Policy</span>
+            </div>
+            <p className="text-neutral-300 text-[11px]">
+              Submitting false result claims or causing match conflicts triggers our 2-Strike Penalty System:
+            </p>
+            <ul className="space-y-1 pl-3 list-disc text-neutral-300 text-[11px]">
+              <li><strong>Strike 1 (First Violation):</strong> Account flagged, placed on probation, and official warning sent to user's Telegram.</li>
+              <li><strong>Strike 2 (Repeat Violation):</strong> Immediate <strong>PERMANENT ACCOUNT BAN</strong>, 100% forfeiture of all wallet balances and escrow funds to ₦0, and permanent ban from the platform, Telegram Bot, and official <strong>@OpsSTAKE</strong> channel.</li>
+            </ul>
           </div>
         </div>
 

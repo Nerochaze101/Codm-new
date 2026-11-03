@@ -195,8 +195,8 @@ function MainApp() {
       });
     });
 
-    // Real-time chat notification when players send chat to each other
-    socket.on('globalChatAlert', (chatAlert: any) => {
+    // Real-time chat notification when players in the same match room send messages
+    socket.on('chatNotification', (chatAlert: any) => {
       if (!chatAlert || !chatAlert.text) return;
       if (chatAlert.senderId === currentUser.id) return; // Do not notify sender
 

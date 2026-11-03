@@ -218,8 +218,46 @@ export const RulesPage: React.FC<RulesPageProps> = ({
             </div>
           </div>
           <p className="text-xs text-neutral-300 leading-relaxed relative z-10">
-            Conflicting results freeze the escrow pot for human admin review. Ties/draws result in a 100% stake refund.
+            Conflicting results freeze the escrow pot for human admin review. Ties/draws result in a 100% stake refund. Screen recordings submitted via Telegram bot or web dashboard are analyzed by referees.
           </p>
+        </div>
+
+        {/* Rule 6: Conflict Fraud & Repeat Offense Policy */}
+        <div className="p-6 rounded-3xl bg-neutral-900 border border-rose-500/50 space-y-4 shadow-xl relative overflow-hidden md:col-span-2">
+          <img src={CODM_IMAGES.rulesFairPlayBg} className="absolute inset-0 w-full h-full object-cover opacity-10" />
+          <div className="relative z-10 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base sm:text-lg font-heading font-black text-rose-400 uppercase">
+                6. Match Conflict Fraud & Repeat Offense Penalty Policy
+              </h3>
+              <p className="text-xs text-neutral-400">Zero-tolerance policy for dishonest result submissions</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 relative z-10 pt-2">
+            <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-2">
+              <div className="flex items-center gap-2 font-bold text-amber-400 text-xs uppercase">
+                <span className="w-6 h-6 rounded-lg bg-amber-500/20 flex items-center justify-center font-mono">1</span>
+                <span>Strike 1: Account Flagging & Probation</span>
+              </div>
+              <p className="text-xs text-neutral-300 leading-relaxed">
+                When a user submits a false victory claim or causes a match conflict for the first time, their account is <strong>automatically flagged</strong>, placed on probation status, and issued an official Telegram warning.
+              </p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 space-y-2">
+              <div className="flex items-center gap-2 font-bold text-rose-400 text-xs uppercase">
+                <span className="w-6 h-6 rounded-lg bg-rose-500/20 flex items-center justify-center font-mono">2</span>
+                <span>Strike 2: Permanent Ban & 100% Fund Forfeiture</span>
+              </div>
+              <p className="text-xs text-neutral-300 leading-relaxed">
+                A <strong>repeat offense</strong> results in an immediate <strong>PERMANENT ACCOUNT BAN</strong>, complete 100% forfeiture of all wallet & escrow balances to ₦0, and permanent blacklisting from the platform, Telegram Bot, and official <strong>@OpsSTAKE</strong> channel.
+              </p>
+            </div>
+          </div>
         </div>
       </div>
       <VideoTutorial 

@@ -1,6 +1,6 @@
 export interface Transaction {
   id: string;
-  type: 'DEPOSIT' | 'ESCROW_LOCK' | 'ESCROW_REFUND' | 'MATCH_WIN_PAYOUT' | 'WITHDRAWAL' | 'REFERRAL_EARNING';
+  type: 'DEPOSIT' | 'ESCROW_LOCK' | 'ESCROW_REFUND' | 'MATCH_WIN_PAYOUT' | 'WITHDRAWAL' | 'REFERRAL_EARNING' | 'FRAUD_BAN_FORFEIT';
   amount: number;
   description: string;
   timestamp: number;
@@ -33,6 +33,9 @@ export interface UserProfile {
   role?: string;
   telegramChatId?: string;
   telegramUsername?: string;
+  isFlagged?: boolean;
+  flagReason?: string;
+  conflictStrikes?: number;
   transactions: Transaction[];
 }
 
