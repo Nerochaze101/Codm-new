@@ -34,6 +34,7 @@ import { NotificationCenterModal } from './components/NotificationCenterModal';
 import { MatchCreatedSuccessModal } from './components/MatchCreatedSuccessModal';
 import { BackgroundUploadBanner } from './components/BackgroundUploadBanner';
 import { DisputesPage } from './components/DisputesPage';
+import { SupportWidget } from './components/SupportWidget';
 import { ShieldAlert } from 'lucide-react';
 
 const socket = io('/');
@@ -1117,6 +1118,9 @@ function MainApp() {
           setIsNotificationCenterOpen(false);
         }}
       />
+
+      {/* Customer Support Floating Widget Chat */}
+      <SupportWidget currentUser={currentUser} />
     </div>
   );
 }
