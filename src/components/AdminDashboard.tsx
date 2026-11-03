@@ -116,7 +116,7 @@ interface AdminFinanceData {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onRefreshUser }) => {
-  const [activeTab, setActiveTab] = useState<'review_queue' | 'finance' | 'users' | 'gmail' | 'disputes' | 'multi_accounts'>('review_queue');
+  const [activeTab, setActiveTab] = useState<'review_queue' | 'finance' | 'users' | 'gmail' | 'disputes' | 'multi_accounts' | 'maintenance'>('review_queue');
   const [flaggedAccounts, setFlaggedAccounts] = useState<FlaggedAccountItem[]>([]);
   const [multiAccountClusters, setMultiAccountClusters] = useState<any[]>([]);
   const [flaggedLoading, setFlaggedLoading] = useState(false);
@@ -333,6 +333,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     }
   };
 
+  // Server IP Diagnostics State
+  const [serverIp, setServerIp] = useState<string>('34.34.246.125');
+  const [serverIpLoading, setServerIpLoading] = useState<boolean>(false);
+
+  const loadServerIp = async () => {
+    setServerIpLoading(true);
+    try {
+      const res = await fetch('/api/server-ip');
+      const data = await res.json();
+      if (data.ip) setServerIp(data.ip);
+    } catch (err) {
+      console.warn('Could not load dynamic server IP, using default:', err);
+    } finally {
+      setServerIpLoading(false);
+    }
+  };
+
   // Passcode claim for unassigned admin
   const [adminPasscode, setAdminPasscode] = useState('');
   const [claimMsg, setClaimMsg] = useState<string | null>(null);
@@ -477,7 +494,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     if (currentUser.role === 'moderator') {
       await Promise.all([loadDisputes(), loadReviewQueue()]);
     } else {
-      await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings(), loadFlaggedAccounts()]);
+      await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings(), loadFlaggedAccounts(), loadMaintenanceStatus(), loadServerIp()]);
     }
     if (onRefreshUser) onRefreshUser();
     setRefreshing(false);
@@ -487,9 +504,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     const init = async () => {
       setLoading(true);
       if (currentUser.role === 'moderator') {
-        await Promise.all([loadDisputes(), loadReviewQueue()]);
+        await Promise.all([loadDisputes(), loadReviewQueue(), loadServerIp()]);
       } else if (currentUser.role === 'admin' || currentUser.role === 'super_admin') {
-        await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings(), loadFlaggedAccounts(), loadMaintenanceStatus()]);
+        await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings(), loadFlaggedAccounts(), loadMaintenanceStatus(), loadServerIp()]);
       }
       setLoading(false);
     };
@@ -837,7 +854,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
               { id: 'users', icon: Users, label: 'Gladiators', badge: usersList.length, roles: ['admin'] },
               { id: 'disputes', icon: ShieldCheck, label: 'Disputes', badge: disputesList.length, roles: ['admin', 'moderator'] },
               { id: 'gmail', icon: Mail, label: 'Sync Engine', badge: emailsList.length, roles: ['admin'] },
-              { id: 'multi_accounts', icon: ShieldAlert, label: 'Multi-Accounts', badge: flaggedAccounts.length, roles: ['admin'] }
+              { id: 'multi_accounts', icon: ShieldAlert, label: 'Multi-Accounts', badge: flaggedAccounts.length, roles: ['admin'] },
+              { id: 'maintenance', icon: Settings, label: 'Maintenance & IP', badge: maintenanceEnabled ? 'ACTIVE' : 'OFF', roles: ['admin'] }
             ].filter(tab => tab.roles.includes(currentUser.role || 'user')).map(tab => (
               <button
                 key={tab.id}
@@ -848,7 +866,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                   <tab.icon size={20} className={activeTab === tab.id ? 'text-black' : 'text-neutral-500 group-hover:text-amber-400 transition-colors'} />
                   <span className="text-[11px] font-black uppercase tracking-widest">{tab.label}</span>
                 </div>
-                <span className={`text-[10px] font-mono font-bold px-2.5 py-1 rounded-lg relative z-10 ${activeTab === tab.id ? 'bg-black/10' : 'bg-neutral-800/50 text-neutral-500'}`}>{tab.badge}</span>
+                <span className={`text-[10px] font-mono font-bold px-2.5 py-1 rounded-lg relative z-10 ${activeTab === tab.id ? 'bg-black/10' : tab.id === 'maintenance' && maintenanceEnabled ? 'bg-amber-500/20 text-amber-400 font-black' : 'bg-neutral-800/50 text-neutral-500'}`}>{tab.badge}</span>
                 {activeTab === tab.id && <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" />}
               </button>
             ))}
@@ -868,6 +886,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
               <div className="flex justify-between items-center text-[10px] font-mono">
                 <span className="text-neutral-500 uppercase tracking-tighter">Realtime</span>
                 <span className="text-emerald-500 font-bold flex items-center gap-1.5"><div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> STABLE</span>
+              </div>
+              <div className="pt-2 border-t border-neutral-800/40 flex justify-between items-center text-[10px] font-mono">
+                <span className="text-neutral-500 uppercase tracking-tighter">Server IP</span>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(serverIp);
+                    setCopiedIp(true);
+                    setTimeout(() => setCopiedIp(false), 2000);
+                  }}
+                  className="text-cyan-400 font-bold flex items-center gap-1 hover:text-white transition-colors cursor-pointer"
+                  title="Click to copy server outbound IP"
+                >
+                  <span>{serverIp}</span>
+                  {copiedIp ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
+                </button>
               </div>
             </div>
           </div>
@@ -2502,6 +2535,289 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                  )}
                </div>
              </section>
+          </div>
+        )}
+
+        {/* TAB CONTENT: MAINTENANCE & SERVER IP */}
+        {activeTab === 'maintenance' && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
+            {/* Header */}
+            <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-400/10 border border-amber-400/30 flex items-center justify-center text-amber-400">
+                    <Settings size={22} />
+                  </div>
+                  <h3 className="text-3xl font-black text-white uppercase tracking-tighter leading-none">Maintenance & Server IP</h3>
+                </div>
+                <p className="text-neutral-500 text-[13px] font-medium">
+                  Control public arena availability, inspect outbound server IP, and configure Flutterwave payout whitelisting.
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => {
+                    loadMaintenanceStatus();
+                    loadServerIp();
+                  }}
+                  className="flex items-center gap-2 px-5 py-3 rounded-xl bg-neutral-900 border border-neutral-800 hover:border-neutral-700 text-neutral-300 hover:text-white text-xs font-black uppercase tracking-wider transition-all active:scale-95 shadow-lg"
+                >
+                  <RefreshCw size={14} className={serverIpLoading ? 'animate-spin' : ''} />
+                  <span>Refresh Status</span>
+                </button>
+              </div>
+            </header>
+
+            {/* MAINTENANCE MODE MASTER CONTROLLER */}
+            <section className={`p-8 md:p-10 rounded-[2.5rem] border transition-all duration-500 shadow-2xl relative overflow-hidden ${maintenanceEnabled ? 'bg-gradient-to-br from-amber-950/40 via-neutral-900 to-black border-amber-500/50 shadow-amber-500/10' : 'bg-gradient-to-br from-neutral-900 via-neutral-900 to-black border-neutral-800 shadow-black'}`}>
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-8 border-b border-neutral-800/80 pb-8">
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3">
+                    <span className={`px-3 py-1 rounded-full text-[10px] font-black tracking-widest uppercase border flex items-center gap-1.5 ${maintenanceEnabled ? 'bg-amber-500/20 text-amber-400 border-amber-500/30 animate-pulse' : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'}`}>
+                      <div className={`w-2 h-2 rounded-full ${maintenanceEnabled ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                      {maintenanceEnabled ? 'MAINTENANCE MODE ACTIVE' : 'ARENA ONLINE & OPERATIONAL'}
+                    </span>
+                    <span className="text-[11px] font-mono font-bold text-neutral-500 uppercase tracking-widest">
+                      SYSTEM LOCK: {maintenanceEnabled ? 'ENABLED' : 'DISABLED'}
+                    </span>
+                  </div>
+                  <h4 className="text-2xl md:text-3xl font-black text-white uppercase tracking-tight">
+                    {maintenanceEnabled ? 'Platform is Under Maintenance' : 'All Systems Live & Accessible'}
+                  </h4>
+                  <p className="text-neutral-400 text-sm max-w-2xl leading-relaxed">
+                    {maintenanceEnabled
+                      ? 'The public LandingPage shows a maintenance banner and non-admin players cannot create or join matches. Only verified administrators can access and operate the app.'
+                      : 'The arena is accessible to all players. Match creation, lobbies, score submissions, and instant automated withdrawals are running normally.'}
+                  </p>
+                </div>
+
+                <div className="shrink-0 w-full md:w-auto">
+                  <button
+                    onClick={() => handleToggleMaintenance(!maintenanceEnabled)}
+                    disabled={isTogglingMaintenance}
+                    className={`w-full md:w-auto px-8 py-5 rounded-2xl font-black text-xs uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-3 shadow-2xl active:scale-95 disabled:opacity-50 ${maintenanceEnabled ? 'bg-emerald-500 hover:bg-emerald-400 text-neutral-950 shadow-emerald-500/20' : 'bg-amber-400 hover:bg-amber-300 text-neutral-950 shadow-amber-400/20'}`}
+                  >
+                    {isTogglingMaintenance ? (
+                      <Loader2 size={18} className="animate-spin" />
+                    ) : maintenanceEnabled ? (
+                      <CheckCircle2 size={18} />
+                    ) : (
+                      <AlertTriangle size={18} />
+                    )}
+                    <span>
+                      {isTogglingMaintenance
+                        ? 'Updating Platform State...'
+                        : maintenanceEnabled
+                        ? 'Deactivate Maintenance (Go Live)'
+                        : 'Enable Maintenance Mode'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Maintenance Rules Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-8">
+                <div className="p-5 rounded-2xl bg-black/40 border border-neutral-800/80 space-y-2">
+                  <div className="flex items-center gap-2 text-amber-400 text-xs font-black uppercase tracking-wider">
+                    <ShieldAlert size={16} />
+                    <span>Match Creation Block</span>
+                  </div>
+                  <p className="text-neutral-400 text-xs leading-relaxed">
+                    Blocks all non-admin players from publishing 1v1 or 5v5 challenges.
+                  </p>
+                </div>
+
+                <div className="p-5 rounded-2xl bg-black/40 border border-neutral-800/80 space-y-2">
+                  <div className="flex items-center gap-2 text-amber-400 text-xs font-black uppercase tracking-wider">
+                    <AlertCircle size={16} />
+                    <span>Landing Banner</span>
+                  </div>
+                  <p className="text-neutral-400 text-xs leading-relaxed">
+                    Displays high-visibility maintenance warning banner to all visitors.
+                  </p>
+                </div>
+
+                <div className="p-5 rounded-2xl bg-black/40 border border-neutral-800/80 space-y-2">
+                  <div className="flex items-center gap-2 text-emerald-400 text-xs font-black uppercase tracking-wider">
+                    <ShieldCheck size={16} />
+                    <span>Admin Bypass</span>
+                  </div>
+                  <p className="text-neutral-400 text-xs leading-relaxed">
+                    Users with the Admin role retain full access to manage balances, payouts, and tests.
+                  </p>
+                </div>
+              </div>
+            </section>
+
+            {/* SERVER OUTBOUND IP & FLUTTERWAVE WHITELIST HUB */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              {/* Server IP Card */}
+              <section className="bg-neutral-900 border border-neutral-800 rounded-[2.5rem] p-8 md:p-10 shadow-2xl space-y-6 flex flex-col justify-between">
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+                        <Zap size={20} />
+                      </div>
+                      <div>
+                        <h4 className="text-lg font-black text-white uppercase tracking-tight">Server Outbound IP</h4>
+                        <p className="text-xs text-neutral-500 font-medium">Use this IP for payment gateway whitelisting</p>
+                      </div>
+                    </div>
+                    <span className="px-3 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-mono font-bold text-emerald-400 uppercase">
+                      VERIFIED
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-neutral-400 leading-relaxed">
+                    This is the static egress IP address from which your server makes automated withdrawal and payout requests to Flutterwave.
+                  </p>
+
+                  {/* Primary IP Box */}
+                  <div className="p-6 rounded-2xl bg-black/80 border-2 border-amber-400/30 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-inner">
+                    <div className="space-y-1 text-center sm:text-left">
+                      <span className="text-[10px] text-amber-400 font-mono font-black uppercase tracking-widest block">
+                        PRIMARY EGRESS IPV4
+                      </span>
+                      <span className="text-2xl md:text-3xl font-mono font-black text-white tracking-wider">
+                        {serverIp}
+                      </span>
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(serverIp);
+                        setCopiedIp(true);
+                        setTimeout(() => setCopiedIp(false), 2000);
+                      }}
+                      className="w-full sm:w-auto px-5 py-3 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all active:scale-95 shrink-0 shadow-lg shadow-amber-400/10"
+                    >
+                      {copiedIp ? <Check size={16} className="stroke-[3]" /> : <Copy size={16} />}
+                      <span>{copiedIp ? 'Copied to Clipboard!' : 'Copy Server IP'}</span>
+                    </button>
+                  </div>
+
+                  {/* Alternative Gateway IPs if applicable */}
+                  <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 text-[11px] font-mono space-y-1.5 text-neutral-400">
+                    <div className="text-[10px] text-neutral-500 uppercase tracking-widest font-sans font-bold">Additional Subnet Egress:</div>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {['34.34.246.125', '34.34.246.104', '34.34.246.124'].map(ip => (
+                        <button
+                          key={ip}
+                          onClick={() => {
+                            navigator.clipboard.writeText(ip);
+                            alert(`Copied ${ip}`);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 text-neutral-300 transition-colors flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <span>{ip}</span>
+                          <Copy size={11} className="text-neutral-500" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Whitelist quick checklist */}
+                <div className="p-5 rounded-2xl bg-black/40 border border-neutral-800/60 space-y-2.5">
+                  <div className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-2">
+                    <CheckCircle size={15} className="text-amber-400" />
+                    <span>Flutterwave Whitelist Instructions</span>
+                  </div>
+                  <ol className="text-xs text-neutral-400 space-y-1.5 list-decimal list-inside leading-relaxed">
+                    <li>Log into your <b>Flutterwave Dashboard</b></li>
+                    <li>Go to <b>Settings</b> → <b>API Keys & Webhooks</b> (or <b>IP Whitelist</b>)</li>
+                    <li>Add IP: <code className="text-amber-400 font-mono font-bold bg-neutral-900 px-1.5 py-0.5 rounded">34.34.246.125</code></li>
+                    <li>Save settings. Live automated withdrawals will execute instantly.</li>
+                  </ol>
+                </div>
+              </section>
+
+              {/* Live Flutterwave Diagnostics Card */}
+              <section className="bg-neutral-900 border border-neutral-800 rounded-[2.5rem] p-8 md:p-10 shadow-2xl space-y-6 flex flex-col justify-between">
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-amber-400/10 border border-amber-400/30 flex items-center justify-center text-amber-400">
+                        <Wallet size={20} />
+                      </div>
+                      <div>
+                        <h4 className="text-lg font-black text-white uppercase tracking-tight">Payout Gateway Diagnostics</h4>
+                        <p className="text-xs text-neutral-500 font-medium">Verify Flutterwave API connectivity and IP status</p>
+                      </div>
+                    </div>
+                    <span className="px-3 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[10px] font-mono font-bold text-amber-400 uppercase">
+                      FLUTTERWAVE
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-neutral-400 leading-relaxed">
+                    Run an instant live payout check to verify that Flutterwave accepts the server's whitelisted IP address and credentials.
+                  </p>
+
+                  <div className="p-5 rounded-2xl bg-black/60 border border-neutral-800 space-y-3">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-neutral-500 font-mono">Test Account:</span>
+                      <span className="text-white font-mono font-bold">9151609682 (OPay)</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-neutral-500 font-mono">Account Name:</span>
+                      <span className="text-white font-mono font-bold">NURUDEEN BOLAJI ABDULSALAM</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-neutral-500 font-mono">Test Payout Amount:</span>
+                      <span className="text-emerald-400 font-mono font-bold">₦100</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-neutral-500 font-mono">Active Gateway:</span>
+                      <span className="text-amber-400 font-mono font-bold">Flutterwave Instant Payout</span>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleRunFlwTest}
+                    disabled={flwTestLoading}
+                    className="w-full py-4 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-neutral-950 font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 transition-all shadow-xl shadow-amber-400/20 active:scale-95 disabled:opacity-50"
+                  >
+                    {flwTestLoading ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <Zap size={16} />
+                    )}
+                    <span>{flwTestLoading ? 'Executing Diagnostic Payout...' : 'Run Test Payout (₦100 to OPay)'}</span>
+                  </button>
+
+                  {/* Test Result Display */}
+                  {flwTestResult && (
+                    <div className={`p-4 rounded-xl border text-xs font-mono space-y-2 ${flwTestResult.success ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300' : 'bg-rose-950/40 border-rose-500/40 text-rose-300'}`}>
+                      <div className="flex items-center justify-between font-bold">
+                        <span className="flex items-center gap-1.5">
+                          {flwTestResult.success ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+                          <span>{flwTestResult.success ? 'TEST DISPATCHED SUCCESSFULLY' : 'DIAGNOSTIC TEST FAILED'}</span>
+                        </span>
+                        {flwTestResult.transferId && (
+                          <span className="text-[10px] text-neutral-400">ID: {flwTestResult.transferId}</span>
+                        )}
+                      </div>
+                      <p className="text-[11px] leading-relaxed break-all">
+                        {flwTestResult.message || flwTestResult.error || JSON.stringify(flwTestResult)}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Policy Notice */}
+                <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 text-[11px] text-neutral-500 space-y-1">
+                  <div className="font-bold text-neutral-400 flex items-center gap-1.5">
+                    <Lock size={12} />
+                    <span>Security & Anti-Exploit Enforcement</span>
+                  </div>
+                  <p>
+                    Normal public withdrawal threshold is locked at <b>₦5,000</b>. Paystack withdrawal gateway has been decommissioned. Only Flutterwave Instant Automated Payout is active.
+                  </p>
+                </div>
+              </section>
+            </div>
           </div>
         )}
       </main>

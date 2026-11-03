@@ -56,7 +56,7 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
   const [bankName, setBankName] = useState<string>('OPay Digital Bank');
   const [accountNumber, setAccountNumber] = useState<string>('');
   const [accountName, setAccountName] = useState<string>('');
-  const [gateway, setGateway] = useState<'flutterwave' | 'paystack'>('flutterwave');
+  const gateway = 'flutterwave';
   const [isConfirmStep, setIsConfirmStep] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isResolving, setIsResolving] = useState(false);
@@ -73,7 +73,7 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
       setIsSubmitting(false);
       setIsConfirmStep(false);
       setResolvedAccountName(null);
-      setAmountInput(currentUser.balance > 0 ? currentUser.balance.toString() : '1000');
+      setAmountInput(currentUser.balance >= 5000 ? currentUser.balance.toString() : '5000');
       setBankName(currentUser.bankName || 'OPay Digital Bank');
       setAccountNumber(currentUser.accountNumber || '');
       setAccountName(currentUser.accountName || currentUser.codmIgn || '');
@@ -126,8 +126,8 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
     e.preventDefault();
     setError(null);
 
-    if (isNaN(amountToWithdraw) || amountToWithdraw < 100) {
-      setError('Minimum cash out amount is ₦100');
+    if (isNaN(amountToWithdraw) || amountToWithdraw < 5000) {
+      setError('Minimum cash out amount is ₦5,000');
       return;
     }
 
@@ -162,17 +162,17 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
     setIsSubmitting(true);
 
     try {
-      // Execute cashout directly with bank details included atomically
-      const bankCode = gateway === 'flutterwave' ? selectedBankObj.flwCode : selectedBankObj.paystackCode;
+      // Execute cashout directly with bank details included atomically via Flutterwave
+      const bankCode = selectedBankObj.flwCode;
       await onConfirmCashOut(amountToWithdraw, {
         bankName,
         accountNumber: accountNumber.trim(),
         accountName: accountName.trim(),
         bankCode,
-        gateway,
+        gateway: 'flutterwave',
       });
 
-      setSuccessMsg(`Withdrawal request of ₦${amountToWithdraw.toLocaleString()} submitted successfully! Your request is pending admin approval and instant OPay payout to ${bankName} (${accountNumber.trim()}).`);
+      setSuccessMsg(`Withdrawal of ₦${amountToWithdraw.toLocaleString()} processed successfully via Flutterwave instant payout to ${bankName} (${accountNumber.trim()}).`);
       setTimeout(() => {
         onClose();
       }, 2500);
@@ -278,9 +278,10 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
                 </div>
 
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-neutral-400">Payout Gateway</span>
-                  <span className="font-bold text-amber-400 uppercase font-mono text-xs">
-                    {gateway === 'flutterwave' ? 'Flutterwave Automated API' : 'Paystack Transfers API'}
+                  <span className="text-neutral-400">Disbursement Channel</span>
+                  <span className="font-bold text-amber-400 uppercase font-mono text-xs flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    Flutterwave Automated Payout
                   </span>
                 </div>
 
@@ -359,54 +360,26 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
                       setAmountInput(val);
                       setError(null);
                     }}
-                    placeholder="Enter amount (e.g. 1000, 5000)"
+                    placeholder="Enter amount (min. ₦5,000)"
                     className="w-full pl-8 pr-4 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono-nums font-bold text-base focus:outline-none focus:border-emerald-400"
                   />
                 </div>
               </div>
 
-              {/* Transfer Gateway Option */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider block">
-                  Payout Gateway
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setGateway('flutterwave')}
-                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between ${
-                      gateway === 'flutterwave'
-                        ? 'bg-amber-500/15 border-amber-400 text-white'
-                        : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-white'
-                    }`}
-                  >
-                    <div>
-                      <div className="text-xs font-bold text-amber-400">Flutterwave</div>
-                      <div className="text-[10px] text-neutral-400">Direct NUBAN / OPay / PalmPay</div>
-                    </div>
-                    {gateway === 'flutterwave' && (
-                      <div className="w-2 h-2 rounded-full bg-amber-400" />
-                    )}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setGateway('paystack')}
-                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between ${
-                      gateway === 'paystack'
-                        ? 'bg-emerald-500/15 border-emerald-400 text-white'
-                        : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-white'
-                    }`}
-                  >
-                    <div>
-                      <div className="text-xs font-bold text-emerald-400">Paystack</div>
-                      <div className="text-[10px] text-neutral-400">Transfers API</div>
-                    </div>
-                    {gateway === 'paystack' && (
-                      <div className="w-2 h-2 rounded-full bg-emerald-400" />
-                    )}
-                  </button>
+              {/* Direct Flutterwave Payout Channel */}
+              <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/25 flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-amber-500/20 flex items-center justify-center text-amber-400 shrink-0">
+                    <Zap className="w-4 h-4 fill-current" />
+                  </div>
+                  <div>
+                    <div className="font-bold text-white text-xs">Automated Flutterwave Payout</div>
+                    <div className="text-[10px] text-neutral-400">Direct disbursement to OPay, PalmPay & Nigerian bank accounts</div>
+                  </div>
                 </div>
+                <span className="text-[9px] font-mono font-black text-amber-400 bg-amber-400/10 px-2 py-1 rounded border border-amber-400/20">
+                  INSTANT
+                </span>
               </div>
 
               {/* Bank Name Selector */}

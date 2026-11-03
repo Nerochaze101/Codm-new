@@ -1803,7 +1803,7 @@ async function requireAdminAuth(req, res, next) {
   next();
 }
 async function maintenanceMiddleware(req, res, next) {
-  const publicPaths = ["/api/maintenance-status", "/api/auth/login", "/api/auth/register", "/api/auth/request-verification", "/api/auth/reset-password", "/api/msksksnuwje/claim-admin"];
+  const publicPaths = ["/api/maintenance-status", "/api/server-ip", "/api/auth/login", "/api/auth/register", "/api/auth/request-verification", "/api/auth/reset-password", "/api/msksksnuwje/claim-admin"];
   if (publicPaths.includes(req.path)) {
     return next();
   }
@@ -2108,6 +2108,21 @@ app.get("/api/maintenance-status", async (req, res) => {
   } catch (err) {
     res.json({ maintenanceMode: false });
   }
+});
+app.get("/api/server-ip", async (req, res) => {
+  let outboundIp = "34.34.246.125";
+  try {
+    const ipRes = await fetch("https://api.ipify.org?format=json", { signal: AbortSignal.timeout(3000) });
+    const ipData = await ipRes.json();
+    if (ipData?.ip) outboundIp = ipData.ip;
+  } catch (_) {}
+  res.json({
+    ip: outboundIp,
+    primaryIpv4: outboundIp,
+    alternatives: ["34.34.246.104", "34.34.246.124"],
+    flutterwaveWhitelistUrl: "https://dashboard.flutterwave.com",
+    instructions: "Add this IP address to Flutterwave Dashboard -> Settings -> Security / API Keys -> IP Whitelist."
+  });
 });
 app.post("/api/msksksnuwje/maintenance-mode", async (req, res) => {
   try {
@@ -5049,8 +5064,8 @@ app.post("/api/users/:id/withdraw", rateLimitMiddleware(5, 6e4), secureSignature
   if (!Number.isFinite(numAmount) || numAmount <= 0) {
     return res.status(400).json({ error: "Invalid withdrawal amount" });
   }
-  if (numAmount < 100) {
-    return res.status(400).json({ error: "Minimum withdrawal amount is ₦100" });
+  if (numAmount < 5000) {
+    return res.status(400).json({ error: "Minimum withdrawal amount is ₦5,000" });
   }
   if (numAmount > 1000000) {
     return res.status(400).json({ error: "Maximum single withdrawal amount is ₦1,000,000" });

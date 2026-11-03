@@ -9,13 +9,13 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import crypto2 from "crypto";
 import { GoogleGenAI } from "@google/genai";
-
-// db.ts
 import pg from "pg";
 import dotenv from "dotenv";
 import dns from "dns";
 import net from "net";
 import { URL } from "url";
+import tls from "tls";
+import crypto from "crypto";
 try {
   dns.setDefaultResultOrder("ipv4first");
 } catch (e) {
@@ -213,6 +213,7 @@ async function initDatabase() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS flag_reason TEXT;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS flagged_with_user_id VARCHAR(255);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS flag_matches JSONB;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS conflict_strikes INT DEFAULT 0;
 
       CREATE TABLE IF NOT EXISTS matches (
         id VARCHAR(255) PRIMARY KEY,
@@ -316,6 +317,7 @@ async function initDatabase() {
       ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS balance_deducted BOOLEAN DEFAULT false;
       ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS webhook_received BOOLEAN DEFAULT false;
       ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS webhook_payload JSONB;
+      ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS transfer_reference VARCHAR(255);
 
       CREATE TABLE IF NOT EXISTS opay_sms_alerts (
         id VARCHAR(255) PRIMARY KEY,
@@ -401,10 +403,6 @@ async function initDatabase() {
     return false;
   }
 }
-
-// gmailService.ts
-import tls from "tls";
-import crypto from "crypto";
 async function loadImapflow() {
   try {
     const imapflowMod = await import("imapflow");
@@ -1031,8 +1029,6 @@ function startGmailAutoSyncService() {
     }
   }, 15e3);
 }
-
-// server.ts
 dotenv2.config();
 process.on("uncaughtException", (err) => {
   console.error("[Process] Uncaught Exception (handled safely):", err);
@@ -1166,6 +1162,14 @@ async function getPlatformFeeSettings() {
     return { soloFeePercent: 10, squadFeePercent: 5 };
   }
 }
+async function getMaintenanceMode() {
+  try {
+    const res = await pool.query(`SELECT value FROM platform_settings WHERE key = 'maintenance_mode'`);
+    return res.rows.length > 0 ? res.rows[0].value === "true" : false;
+  } catch {
+    return false;
+  }
+}
 function getSoloRakePercentage(totalPotAmount, baseRate = 10) {
   if (totalPotAmount >= 1e5) return Math.min(baseRate / 100, 0.035);
   if (totalPotAmount >= 5e4) return Math.min(baseRate / 100, 0.04);
@@ -1212,7 +1216,7 @@ async function getUserFromDb(idOrEmail) {
   try {
     if (!idOrEmail) return null;
     const userRes = await pool.query(
-      `SELECT id, username, codm_ign, codm_uid, email, phone, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, telegram_chat_id, telegram_username, is_flagged, flag_reason, flagged_with_user_id, flag_matches FROM users WHERE id = $1 OR LOWER(email) = LOWER($1) LIMIT 1`,
+      `SELECT id, username, codm_ign, codm_uid, email, phone, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, telegram_chat_id, telegram_username, is_flagged, flag_reason, flagged_with_user_id, flag_matches, conflict_strikes FROM users WHERE id = $1 OR LOWER(email) = LOWER($1) LIMIT 1`,
       [idOrEmail]
     );
     if (userRes.rows.length === 0) return null;
@@ -1225,6 +1229,15 @@ async function getUserFromDb(idOrEmail) {
       description: t.description,
       timestamp: parseInt(t.timestamp, 10),
       matchId: t.match_id || void 0
+    }));
+    const refListRes = await pool.query(
+      `SELECT id, codm_ign, created_at FROM users WHERE referred_by = $1 ORDER BY created_at DESC LIMIT 10`,
+      [r.id]
+    );
+    const referrals = refListRes.rows.map((row) => ({
+      id: row.id,
+      codmIgn: row.codm_ign,
+      createdAt: parseInt(row.created_at, 10)
     }));
     return {
       id: r.id,
@@ -1255,7 +1268,9 @@ async function getUserFromDb(idOrEmail) {
       flagReason: r.flag_reason || void 0,
       flaggedWithUserId: r.flagged_with_user_id || void 0,
       flagMatches: r.flag_matches ? typeof r.flag_matches === "string" ? JSON.parse(r.flag_matches) : r.flag_matches : void 0,
-      transactions
+      conflictStrikes: parseInt(r.conflict_strikes || 0, 10),
+      transactions,
+      referrals
     };
   } catch (err) {
     console.error(`Error loading user ${idOrEmail} from DB:`, err);
@@ -1266,7 +1281,7 @@ async function getUserByEmailOrIgn(identifier) {
   try {
     const cleanIdent = identifier.trim().toLowerCase();
     const userRes = await pool.query(
-      `SELECT id, username, codm_ign, codm_uid, email, phone, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, telegram_chat_id, telegram_username, is_flagged, flag_reason, flagged_with_user_id, flag_matches, password_hash FROM users WHERE LOWER(email) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(codm_ign) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(username) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(referral_code) = LOWER(${escapeSql(cleanIdent)})`
+      `SELECT id, username, codm_ign, codm_uid, email, phone, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, telegram_chat_id, telegram_username, is_flagged, flag_reason, flagged_with_user_id, flag_matches, conflict_strikes, password_hash FROM users WHERE LOWER(email) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(codm_ign) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(username) = LOWER(${escapeSql(cleanIdent)}) OR LOWER(referral_code) = LOWER(${escapeSql(cleanIdent)})`
     );
     if (userRes.rows.length === 0) return null;
     const r = userRes.rows[0];
@@ -1278,6 +1293,15 @@ async function getUserByEmailOrIgn(identifier) {
       description: t.description,
       timestamp: parseInt(t.timestamp, 10),
       matchId: t.match_id || void 0
+    }));
+    const refListRes = await pool.query(
+      `SELECT id, codm_ign, created_at FROM users WHERE referred_by = $1 ORDER BY created_at DESC LIMIT 10`,
+      [r.id]
+    );
+    const referrals = refListRes.rows.map((row) => ({
+      id: row.id,
+      codmIgn: row.codm_ign,
+      createdAt: parseInt(row.created_at, 10)
     }));
     const user = {
       id: r.id,
@@ -1308,7 +1332,9 @@ async function getUserByEmailOrIgn(identifier) {
       flagReason: r.flag_reason || void 0,
       flaggedWithUserId: r.flagged_with_user_id || void 0,
       flagMatches: r.flag_matches ? typeof r.flag_matches === "string" ? JSON.parse(r.flag_matches) : r.flag_matches : void 0,
-      transactions
+      conflictStrikes: parseInt(r.conflict_strikes || 0, 10),
+      transactions,
+      referrals
     };
     return { user, passwordHash: r.password_hash || "" };
   } catch (err) {
@@ -1447,6 +1473,30 @@ async function getMatchFromDb(id) {
     };
   } catch (err) {
     console.error(`Error getting match ${id} from DB:`, err);
+    return null;
+  }
+}
+async function getMatchByCodeOrId(codeOrId) {
+  if (!codeOrId) return null;
+  const clean = String(codeOrId).trim().replace(/^#/, "");
+  try {
+    const res = await pool.query(
+      `SELECT id FROM matches 
+       WHERE id = $1 
+          OR room_code = $1 
+          OR challenge_code = $1 
+          OR LOWER(room_code) = LOWER($1) 
+          OR LOWER(challenge_code) = LOWER($1) 
+          OR LOWER(room_code) = LOWER('CODM-' || $1)
+          OR REPLACE(LOWER(room_code), '#', '') = LOWER($1)
+          OR REPLACE(LOWER(challenge_code), '#', '') = LOWER($1)
+       LIMIT 1`,
+      [clean]
+    );
+    if (res.rows.length === 0) return null;
+    return await getMatchFromDb(res.rows[0].id);
+  } catch (err) {
+    console.error("Error getting match by code or ID:", err);
     return null;
   }
 }
@@ -1741,6 +1791,29 @@ async function requireAdminAuth(req, res, next) {
   req.adminUser = user;
   next();
 }
+async function maintenanceMiddleware(req, res, next) {
+  const publicPaths = ["/api/maintenance-status", "/api/server-ip", "/api/auth/login", "/api/auth/register", "/api/auth/request-verification", "/api/auth/reset-password", "/api/msksksnuwje/claim-admin"];
+  if (publicPaths.includes(req.path)) {
+    return next();
+  }
+  const maintenanceActive = await getMaintenanceMode();
+  if (maintenanceActive) {
+    const userId = req.headers["x-user-id"] || req.headers["x-admin-id"] || req.body?.userId || req.body?.adminUserId || req.query?.userId || req.query?.adminUserId;
+    if (userId) {
+      const user = await getUserFromDb(String(userId));
+      if (user && (user.role === "admin" || user.role === "moderator" || user.role === "super_admin")) {
+        return next();
+      }
+    }
+    return res.status(503).json({
+      error: "System Maintenance",
+      message: "OPS STAKE is currently undergoing scheduled maintenance. Access is restricted to administrators only. We will be back online shortly.",
+      maintenanceMode: true
+    });
+  }
+  next();
+}
+app.use("/api", maintenanceMiddleware);
 app.use("/api/msksksnuwje", requireAdminAuth);
 app.get("/api/msksksnuwje/flagged-accounts", async (req, res) => {
   const user = req.adminUser;
@@ -2015,6 +2088,46 @@ app.get("/api/admin/fee-settings", async (req, res) => {
     res.json(settings);
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to load fee settings" });
+  }
+});
+app.get("/api/maintenance-status", async (req, res) => {
+  try {
+    const maintenanceMode = await getMaintenanceMode();
+    res.json({ maintenanceMode });
+  } catch (err) {
+    res.json({ maintenanceMode: false });
+  }
+});
+app.get("/api/server-ip", async (req, res) => {
+  let outboundIp = "34.34.246.125";
+  try {
+    const ipRes = await fetch("https://api.ipify.org?format=json", { signal: AbortSignal.timeout(3e3) });
+    const ipData = await ipRes.json();
+    if (ipData?.ip) outboundIp = ipData.ip;
+  } catch (_) {
+  }
+  res.json({
+    ip: outboundIp,
+    primaryIpv4: outboundIp,
+    alternatives: ["34.34.246.104", "34.34.246.124"],
+    flutterwaveWhitelistUrl: "https://dashboard.flutterwave.com",
+    instructions: "Add this IP address to Flutterwave Dashboard -> Settings -> Security / API Keys -> IP Whitelist."
+  });
+});
+app.post("/api/msksksnuwje/maintenance-mode", async (req, res) => {
+  try {
+    const { enabled } = req.body;
+    if (req.adminUser.role !== "admin") {
+      return res.status(403).json({ error: "Unauthorized: Admin privileges required" });
+    }
+    await pool.query(`
+      INSERT INTO platform_settings (key, value, updated_at)
+      VALUES ('maintenance_mode', ${escapeSql(enabled ? "true" : "false")}, ${Date.now()})
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at
+    `);
+    res.json({ success: true, maintenanceMode: enabled });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to toggle maintenance mode" });
   }
 });
 app.post("/api/admin/fee-settings", async (req, res) => {
@@ -2436,12 +2549,38 @@ app.post("/api/msksksnuwje/users/:id/adjust-balance", async (req, res) => {
     const refreshed = await getUserFromDb(targetUserId);
     res.json({
       success: true,
-      message: `Successfully adjusted balance for ${targetUser.codmIgn || targetUser.email} to \u20A6${newBal.toLocaleString()}`,
+      message: `Balance adjusted for ${refreshed.codmIgn || refreshed.email}. New balance: \u20A6${refreshed.balance.toLocaleString()}`,
       user: refreshed
     });
   } catch (err) {
-    console.error("Error adjusting user balance:", err);
+    console.error("Error adjusting balance:", err);
     res.status(500).json({ error: err.message || "Failed to adjust balance" });
+  }
+});
+app.delete("/api/msksksnuwje/users/:id", async (req, res) => {
+  try {
+    const targetUserId = req.params.id;
+    if (req.adminUser.role !== "admin") {
+      return res.status(403).json({ error: "Unauthorized: Admin privileges required to delete gladiators" });
+    }
+    const targetUser = await getUserFromDb(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ error: "Target gladiator not found" });
+    }
+    if (targetUser.email === "b@gmail.com") {
+      return res.status(400).json({ error: "Protected account cannot be deleted" });
+    }
+    await pool.query("BEGIN");
+    await pool.query(`DELETE FROM transactions WHERE user_id = ${escapeSql(targetUserId)}`);
+    await pool.query(`DELETE FROM deposit_requests WHERE user_id = ${escapeSql(targetUserId)}`);
+    await pool.query(`DELETE FROM withdrawal_requests WHERE user_id = ${escapeSql(targetUserId)}`);
+    await pool.query(`DELETE FROM users WHERE id = ${escapeSql(targetUserId)}`);
+    await pool.query("COMMIT");
+    res.json({ success: true, message: `Gladiator ${targetUser.codmIgn || targetUserId} has been permanently purged from the database.` });
+  } catch (err) {
+    await pool.query("ROLLBACK");
+    console.error("Error deleting user:", err);
+    res.status(500).json({ error: err.message || "Failed to delete gladiator" });
   }
 });
 function constantTimeVerify(candidate, validList) {
@@ -2850,7 +2989,7 @@ app.post("/api/deposits/create", async (req, res) => {
     res.status(500).json({ error: err.message || "Failed to create deposit request" });
   }
 });
-app.get("/api/deposits/:id/status", async (req, res) => {
+app.get("/api/deposits/:id/status", rateLimitMiddleware(1, 6e4), async (req, res) => {
   try {
     const { id } = req.params;
     const depRes = await pool.query(`SELECT * FROM deposit_requests WHERE id = ${escapeSql(id)}`);
@@ -2919,16 +3058,25 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
         AND (
           subject ILIKE '%' || ${escapeSql(cleanRef)} || '%'
           OR body ILIKE '%' || ${escapeSql(cleanRef)} || '%'
-          OR subject ILIKE '%' || ${escapeSql(dep.payment_reference)} || '%'
-          OR body ILIKE '%' || ${escapeSql(dep.payment_reference)} || '%'
         )
       ORDER BY created_at DESC LIMIT 5
     `);
     if (emailsRes.rows.length === 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({
-        error: "We could not confirm a matching bank transfer for this reference yet. If you recently transferred the funds, please allow a moment and try again."
+        error: "We could not confirm a matching bank transfer for this session ID. If you recently transferred the funds, please allow a moment and try again."
       });
+    }
+    const emailBody = emailsRes.rows[0].body;
+    const amountMatch = emailBody.match(/(\d{1,3}(?:,\d{3})*(?:\.\d+)?)/);
+    if (amountMatch) {
+      const amountInEmail = parseFloat(amountMatch[1].replace(/,/g, ""));
+      if (Math.abs(amountInEmail - parseFloat(dep.amount)) > 1) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          error: `Amount mismatch: Request was for \u20A6${parseFloat(dep.amount).toLocaleString()}, but transaction was for \u20A6${amountInEmail.toLocaleString()}. Payment not fulfilled.`
+        });
+      }
     }
     const matchedEmail = emailsRes.rows[0];
     const baseDepositAmount = parseFloat(dep.amount);
@@ -3832,6 +3980,62 @@ app.post("/api/flutterwave/webhook", async (req, res) => {
         }
       } else {
         console.warn(`\u26A0\uFE0F [Flutterwave Webhook] Target user not identified for payment ref ${txRef}`);
+      }
+    } else if (payload?.event === "transfer.completed") {
+      const trfData = payload.data || {};
+      const trfRef = trfData.reference || String(trfData.id || "");
+      const trfStatus = (trfData.status || "").toUpperCase();
+      console.log(`\u{1F514} [Flutterwave Webhook] Transfer event: Ref: ${trfRef}, Status: ${trfStatus}`);
+      if (trfStatus === "FAILED") {
+        const wdRes = await pool.query(`
+          SELECT * FROM withdrawal_requests 
+          WHERE (transfer_reference = ${escapeSql(trfRef)} OR remark LIKE ${escapeSql("%" + trfRef + "%")} OR id = ${escapeSql(trfRef)})
+            AND status != 'rejected'
+          LIMIT 1
+        `);
+        if (wdRes.rows.length > 0) {
+          const wd = wdRes.rows[0];
+          const failReason = trfData.complete_message || "Transfer failed at destination bank";
+          const refundAmount = parseFloat(wd.amount) + 50;
+          await pool.query(`
+            UPDATE withdrawal_requests 
+            SET status = 'rejected',
+                rejection_reason = ${escapeSql(failReason)},
+                webhook_received = true,
+                webhook_payload = ${escapeSql(JSON.stringify(payload))}
+            WHERE id = ${escapeSql(wd.id)}
+          `);
+          if (wd.balance_deducted === true) {
+            await pool.query(`
+              UPDATE users 
+              SET balance = balance + ${escapeSql(refundAmount)} 
+              WHERE id = ${escapeSql(wd.user_id)}
+            `);
+            await pool.query(`
+              UPDATE platform_finance 
+              SET total_fees_collected = GREATEST(0, total_fees_collected - 40) 
+              WHERE id = 'main'
+            `);
+            const refundTxId = `tx_ref_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+            const refundDesc = `\u21A9\uFE0F Automatic Refund: \u20A6${parseFloat(wd.amount).toLocaleString()} (+ \u20A650 fee) returned [Gateway failure: ${failReason}]`;
+            await pool.query(`
+              INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
+              VALUES (${escapeSql(refundTxId)}, ${escapeSql(wd.user_id)}, 'ESCROW_REFUND', ${escapeSql(refundAmount)}, ${escapeSql(refundDesc)}, ${Date.now()})
+            `);
+            console.log(`\u2705 [Flutterwave Webhook] Refunded \u20A6${refundAmount} to user ${wd.user_id} due to failed transfer.`);
+          }
+        }
+      } else if (trfStatus === "SUCCESSFUL") {
+        await pool.query(`
+          UPDATE withdrawal_requests 
+          SET status = 'completed',
+              webhook_received = true,
+              processed_at = ${Date.now()},
+              webhook_payload = ${escapeSql(JSON.stringify(payload))}
+          WHERE (transfer_reference = ${escapeSql(trfRef)} OR id = ${escapeSql(trfRef)})
+            AND status != 'completed'
+        `);
+        console.log(`\u2705 [Flutterwave Webhook] Marked withdrawal request ${trfRef} as completed.`);
       }
     }
     return res.status(200).json({ status: "success" });
@@ -4757,10 +4961,9 @@ app.post("/api/msksksnuwje/test-cashout", async (req, res) => {
         response: data,
         ipNotice: data.message?.includes("IP Whitelisting") || data.message?.includes("administrator") || data.status === "error" ? {
           requiresIpWhitelistOrApproval: true,
-          serverIpv4: "34.34.246.104",
-          secondaryIpv4: "34.34.246.124",
-          serverIpv6: "2600:1900:0:4a03::e00",
-          instructions: "In your Flutterwave Dashboard, go to Settings -> Security / API Keys -> Whitelisted IP addresses, and add 34.34.246.104. Also check your email (nerochazeagent@gmail.com) for Flutterwave transfer approval or IP alert."
+          serverIpv4: "34.34.246.125",
+          alternativeIps: ["34.34.246.104", "34.34.246.124"],
+          instructions: "In your Flutterwave Dashboard (dashboard.flutterwave.com), go to Settings -> Security / API Keys -> IP Whitelist, and add 34.34.246.125. Also ensure 'Transfers' is enabled on your live account settings or check your email (nerochazeagent@gmail.com) for transfer authorization."
         } : void 0
       });
     } catch (err) {
@@ -4825,28 +5028,45 @@ app.post("/api/msksksnuwje/test-cashout", async (req, res) => {
   }
 });
 var activeWithdrawalLocks = /* @__PURE__ */ new Set();
-app.post("/api/users/:id/withdraw", rateLimitMiddleware(10, 6e4), secureSignatureMiddleware, async (req, res) => {
+app.post("/api/users/:id/withdraw", rateLimitMiddleware(5, 6e4), secureSignatureMiddleware, async (req, res) => {
   const userId = req.params.id;
+  if (!await isUserOrAdmin(req, userId)) {
+    return res.status(403).json({ error: "Unauthorized: You cannot initiate a withdrawal from another user's wallet." });
+  }
   if (activeWithdrawalLocks.has(userId)) {
     return res.status(429).json({ error: "A withdrawal is currently in progress for this account. Please wait a moment." });
   }
   const { amount, bankName = "", accountNumber = "", accountName = "", bankCode = "", gateway = "flutterwave" } = req.body;
   const numAmount = Number(amount);
-  if (!numAmount || numAmount <= 0) {
+  if (!Number.isFinite(numAmount) || numAmount <= 0) {
     return res.status(400).json({ error: "Invalid withdrawal amount" });
+  }
+  if (numAmount < 5e3) {
+    return res.status(400).json({ error: "Minimum withdrawal amount is \u20A65,000" });
+  }
+  if (numAmount > 1e6) {
+    return res.status(400).json({ error: "Maximum single withdrawal amount is \u20A61,000,000" });
   }
   activeWithdrawalLocks.add(userId);
   const client = await pool.connect();
-  let user = null;
   const txId = `tx_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
   try {
     await client.query("BEGIN");
+    const pendingWdRes = await client.query(`SELECT id FROM withdrawal_requests WHERE user_id = ${escapeSql(userId)} AND status = 'pending'`);
+    if (pendingWdRes.rows.length > 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "You already have a pending withdrawal request in progress. Please wait for it to complete." });
+    }
     const userLockRes = await client.query(`SELECT * FROM users WHERE id = ${escapeSql(userId)} FOR UPDATE`);
     if (userLockRes.rows.length === 0) {
       await client.query("ROLLBACK");
       return res.status(404).json({ error: "User not found" });
     }
     const userRow = userLockRes.rows[0];
+    if (userRow.role === "banned") {
+      await client.query("ROLLBACK");
+      return res.status(403).json({ error: "Account Banned: Withdrawals are locked for this account." });
+    }
     const currentBalance = parseFloat(userRow.balance || 0);
     const totalDeduction = numAmount + 50;
     if (totalDeduction > currentBalance) {
@@ -4855,29 +5075,30 @@ app.post("/api/users/:id/withdraw", rateLimitMiddleware(10, 6e4), secureSignatur
         error: `Insufficient balance (includes \u20A650 withdrawal fee). Available: \u20A6${currentBalance.toLocaleString()}`
       });
     }
-    await client.query(`
-      UPDATE users 
-      SET bank_name = COALESCE(${escapeSql(bankName || null)}, bank_name),
-          account_number = COALESCE(${escapeSql(accountNumber || null)}, account_number),
-          account_name = COALESCE(${escapeSql(accountName || null)}, account_name)
-      WHERE id = ${escapeSql(userId)}
-    `);
     const cleanBank = (bankName || userRow.bank_name || "").trim();
-    const cleanAccNum = (accountNumber || userRow.account_number || "").trim();
+    const cleanAccNum = (accountNumber || userRow.account_number || "").trim().replace(/\D/g, "");
     const cleanAccName = (accountName || userRow.account_name || "").trim();
-    await client.query(`
-      UPDATE users SET balance = balance - ${escapeSql(totalDeduction)} WHERE id = ${escapeSql(userId)}
-    `);
-    await updatePlatformFinance(40);
-    const wdId = `wd_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
-    const userIgn = userRow.codm_ign || userRow.username || "Gladiator";
-    const remark = `CODM-${userIgn.slice(0, 10).toUpperCase()}-${cleanAccNum.slice(-4)}`;
+    if (!cleanBank) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Bank name is required" });
+    }
+    if (!cleanAccNum || cleanAccNum.length !== 10) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Account number must be exactly 10 digits" });
+    }
+    if (!cleanAccName) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Account name is required" });
+    }
     const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || "";
     const flwCode = getFlutterwaveBankCode(cleanBank, bankCode);
+    const transferRef = `FLW_WD_${Date.now()}_${Math.floor(1e3 + Math.random() * 9e3)}`;
     let transferResponse = null;
     let transferSuccess = false;
+    let transferErrorMessage = "";
     if (flwSecret && !flwSecret.startsWith("FLWSECK_TEST-xxxx")) {
       try {
+        console.log(`[Withdrawal] Calling Flutterwave: \u20A6${numAmount} to ${cleanAccNum} (${cleanBank} / code ${flwCode})...`);
         const trfRes = await fetch("https://api.flutterwave.com/v3/transfers", {
           method: "POST",
           headers: {
@@ -4888,31 +5109,70 @@ app.post("/api/users/:id/withdraw", rateLimitMiddleware(10, 6e4), secureSignatur
             account_bank: flwCode,
             account_number: cleanAccNum,
             amount: numAmount,
-            narration: `CodStakes Payout to ${cleanAccName}`,
+            narration: `OpsSTAKE Cashout to ${cleanAccName}`.slice(0, 50),
             currency: "NGN",
-            reference: `FLW_INSTANT_${Date.now()}_${Math.floor(1e3 + Math.random() * 9e3)}`,
-            beneficiary_name: cleanAccName
+            reference: transferRef,
+            beneficiary_name: cleanAccName,
+            debit_currency: "NGN"
           })
         });
         transferResponse = await trfRes.json();
+        console.log("[Withdrawal] Flutterwave response:", transferResponse);
         if (transferResponse.status === "success" || transferResponse.status === "pending") {
           transferSuccess = true;
+        } else {
+          transferErrorMessage = transferResponse?.message || "Transfer was declined by Flutterwave payment gateway";
         }
       } catch (trfErr) {
-        console.error("Flutterwave instant transfer error:", trfErr.message);
+        console.error("Flutterwave instant transfer network error:", trfErr.message);
+        transferErrorMessage = trfErr.message || "Network error connecting to Flutterwave";
       }
     } else {
       transferSuccess = true;
-      transferResponse = { status: "success", message: "Simulated instant payout via Flutterwave test mode" };
+      transferResponse = { status: "success", message: "Simulated instant payout via Flutterwave test mode", data: { id: `sim_${Date.now()}`, status: "SUCCESSFUL" } };
     }
+    if (!transferSuccess) {
+      await client.query("ROLLBACK");
+      let userFriendlyMsg = transferErrorMessage;
+      let requiresWhitelisting = false;
+      if (transferErrorMessage.includes("administrator") || transferErrorMessage.includes("cannot be processed")) {
+        userFriendlyMsg = "Payment gateway restricted: Flutterwave payout requires merchant IP whitelisting or transfer approval. Please contact the administrator.";
+        requiresWhitelisting = true;
+      }
+      return res.status(400).json({
+        success: false,
+        refunded: true,
+        error: `Withdrawal failed: ${userFriendlyMsg}. Your balance of \u20A6${currentBalance.toLocaleString()} is safe and was NOT deducted.`,
+        gatewayError: transferErrorMessage,
+        balance: currentBalance,
+        ipNotice: requiresWhitelisting ? {
+          serverIp: "34.34.246.125",
+          instructions: "Add server IP 34.34.246.125 to Flutterwave Dashboard -> Settings -> Security / API Keys -> IP Whitelist."
+        } : void 0
+      });
+    }
+    await client.query(`
+      UPDATE users 
+      SET bank_name = COALESCE(${escapeSql(cleanBank)}, bank_name),
+          account_number = COALESCE(${escapeSql(cleanAccNum)}, account_number),
+          account_name = COALESCE(${escapeSql(cleanAccName)}, account_name),
+          balance = balance - ${escapeSql(totalDeduction)}
+      WHERE id = ${escapeSql(userId)}
+    `);
+    await updatePlatformFinance(40);
+    const wdId = `wd_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+    const userIgn = userRow.codm_ign || userRow.username || "Gladiator";
+    const remark = `CODM-${userIgn.slice(0, 10).toUpperCase()}-${cleanAccNum.slice(-4)}`;
     const desc = `\u26A1 Instant Withdrawal: \u20A6${numAmount.toLocaleString()} (+ \u20A650 fee) to ${cleanBank} (${cleanAccNum})`;
     await client.query(`
       INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
       VALUES (${escapeSql(txId)}, ${escapeSql(userId)}, 'WITHDRAWAL', ${escapeSql(totalDeduction)}, ${escapeSql(desc)}, ${Date.now()})
     `);
+    const flwStatus = (transferResponse?.data?.status || "").toUpperCase();
+    const finalWdStatus = flwStatus === "SUCCESSFUL" ? "completed" : "pending";
     await client.query(`
       INSERT INTO withdrawal_requests (
-        id, user_id, codm_ign, email, phone, amount, bank_name, account_number, account_name, bank_code, status, remark, created_at, balance_deducted, webhook_received
+        id, user_id, codm_ign, email, phone, amount, bank_name, account_number, account_name, bank_code, status, remark, created_at, balance_deducted, webhook_received, transfer_reference
       ) VALUES (
         ${escapeSql(wdId)},
         ${escapeSql(userId)},
@@ -4923,20 +5183,21 @@ app.post("/api/users/:id/withdraw", rateLimitMiddleware(10, 6e4), secureSignatur
         ${escapeSql(cleanBank)},
         ${escapeSql(cleanAccNum)},
         ${escapeSql(cleanAccName)},
-        ${escapeSql(bankCode || "")},
-        'completed',
+        ${escapeSql(bankCode || flwCode || "")},
+        ${escapeSql(finalWdStatus)},
         ${escapeSql(remark)},
         ${Date.now()},
         true,
-        true
+        ${flwStatus === "SUCCESSFUL" ? "true" : "false"},
+        ${escapeSql(transferRef)}
       )
     `);
     await client.query("COMMIT");
-    user = await getUserFromDb(userId);
+    const updatedUser = await getUserFromDb(userId);
     return res.json({
       success: true,
-      pending: false,
-      balance: user?.balance ?? currentBalance - numAmount,
+      pending: finalWdStatus === "pending",
+      balance: updatedUser?.balance ?? currentBalance - totalDeduction,
       amount: numAmount,
       transferResponse,
       transaction: {
@@ -4946,7 +5207,7 @@ app.post("/api/users/:id/withdraw", rateLimitMiddleware(10, 6e4), secureSignatur
         description: desc,
         timestamp: Date.now()
       },
-      message: `Withdrawal of \u20A6${numAmount.toLocaleString()} sent instantly via Flutterwave API to ${cleanBank} (${cleanAccNum})!`
+      message: `Withdrawal of \u20A6${numAmount.toLocaleString()} sent successfully via Flutterwave to ${cleanBank} (${cleanAccNum})!`
     });
   } catch (dbErr) {
     try {
@@ -5126,8 +5387,8 @@ async function postMatchToPublicChannel(match, origin) {
       console.warn("[Telegram Bot] Public channel ID is invalid or not configured. Skipping post.");
       return;
     }
-    const baseOrigin = (origin || "").replace(/\/$/, "");
-    const matchUrl = `${baseOrigin || "https://ops-stake.app"}/?join=${match.id}`;
+    const baseOrigin = (origin || process.env.APP_URL || "https://opsstake.online").replace(/\/$/, "");
+    const matchUrl = `${baseOrigin}/?join=${match.id}`;
     const isSquad = match.matchType === "squad" || Boolean(match.squadData);
     let messageText = "";
     let buttonLabel = "\u{1F3AE} ACCEPT WAGER NOW";
@@ -5211,6 +5472,104 @@ async function postMatchToPublicChannel(match, origin) {
     console.error("\u274C [Telegram Bot] Critical exception during public channel post:", err.message);
   }
 }
+async function applyConflictFlagOrBan(dishonestUserId, match, reason = "Match conflict violation") {
+  try {
+    if (!dishonestUserId) return;
+    const userRes = await pool.query(`SELECT * FROM users WHERE id = ${escapeSql(dishonestUserId)}`);
+    if (userRes.rows.length === 0) return;
+    const user = userRes.rows[0];
+    const currentStrikes = parseInt(user.conflict_strikes || 0, 10) || 0;
+    const newStrikes = currentStrikes + 1;
+    const roomTag = match.roomCode || match.challengeCode || match.id;
+    if (newStrikes === 1) {
+      const flagReason = `Strike 1 Flag: Submitted false/conflicting result claim in Match #${roomTag}. Account placed on probation.`;
+      await pool.query(`
+        UPDATE users 
+        SET is_flagged = true,
+            conflict_strikes = 1,
+            flag_reason = ${escapeSql(flagReason)}
+        WHERE id = ${escapeSql(dishonestUserId)}
+      `);
+      console.log(`\u26A0\uFE0F [Conflict System] User ${user.codm_ign} (${dishonestUserId}) issued Strike 1 flag.`);
+      if (user.telegram_chat_id) {
+        const warnMessage = `\u26A0\uFE0F <b>ACCOUNT FLAGGED - MATCH CONFLICT STRIKE 1</b> \u26A0\uFE0F
+
+Your account has been officially flagged by the referee team for submitting a false or conflicting result claim in Match <b>#${roomTag}</b>.
+
+\u{1F6A8} <b>POLICY WARNING:</b>
+\u2022 Strike Count: <b>1 / 2</b>
+\u2022 Account Status: \u{1F7E1} <b>FLAGGED / PROBATION</b>
+
+Please ensure all future match claims and scoreboard uploads are 100% accurate. A second conflict violation will trigger an immediate <b>PERMANENT ACCOUNT BAN</b> and complete forfeiture of all wallet funds.`;
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: user.telegram_chat_id.trim(),
+            text: warnMessage,
+            parse_mode: "HTML"
+          })
+        }).catch((e) => console.warn("[Conflict System] Failed to send Strike 1 Telegram warn:", e.message));
+      }
+    } else {
+      const totalBalance = parseFloat(user.balance || 0) + parseFloat(user.escrow_balance || 0);
+      const banReason = `PERMANENT BAN (Strike ${newStrikes}): Repeat match conflict fraud in Match #${roomTag}. Total \u20A6${totalBalance.toLocaleString()} forfeited.`;
+      await pool.query(`
+        UPDATE users 
+        SET role = 'banned',
+            is_flagged = true,
+            conflict_strikes = ${escapeSql(newStrikes)},
+            flag_reason = ${escapeSql(banReason)},
+            balance = 0,
+            escrow_balance = 0
+        WHERE id = ${escapeSql(dishonestUserId)}
+      `);
+      if (totalBalance > 0) {
+        const txId = `tx_ban_forfeit_${Date.now()}`;
+        const txDesc = `\u{1F6D1} Permanent Fraud Ban & Forfeiture: \u20A6${totalBalance.toLocaleString()} balance reset to zero due to repeat match conflict violations (Match #${roomTag})`;
+        await pool.query(`
+          INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+          VALUES (${escapeSql(txId)}, ${escapeSql(dishonestUserId)}, 'FRAUD_BAN_FORFEIT', ${escapeSql(totalBalance)}, ${escapeSql(txDesc)}, ${escapeSql(match.id)}, ${Date.now()})
+          ON CONFLICT (id) DO NOTHING
+        `);
+      }
+      console.log(`\u{1F6D1} [Conflict System] User ${user.codm_ign} (${dishonestUserId}) PERMANENTLY BANNED on Strike ${newStrikes}. \u20A6${totalBalance} forfeited.`);
+      if (user.telegram_chat_id) {
+        const channelId = process.env.TELEGRAM_PUBLIC_CHANNEL_ID || "@OpsSTAKE";
+        fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/banChatMember`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: channelId,
+            user_id: user.telegram_chat_id
+          })
+        }).catch((e) => console.warn("[Telegram Bot] Failed to ban chat member from channel:", e.message));
+        const banMessage = `\u{1F6D1} <b>ACCOUNT PERMANENTLY BANNED & FUNDS FORFEITED</b> \u{1F6D1}
+
+Your account has been <b>PERMANENTLY BANNED</b> following a repeat match conflict violation in Match <b>#${roomTag}</b> (Strike ${newStrikes}).
+
+\u{1F4B8} <b>FORFEITURE & BAN DETAILS:</b>
+\u2022 Account Status: \u{1F534} <b>PERMANENTLY BANNED</b>
+\u2022 Forfeited Balance: <b>\u20A6${totalBalance.toLocaleString()}</b> (Reset to \u20A60)
+\u2022 Blacklist Status: \u{1F512} Credentials & Bank Account Blacklisted
+\u2022 Channel Access: \u{1F6AB} <b>BANNED FROM OFFICIAL @OpsSTAKE CHANNEL</b>
+
+Under Arena Security Rules, fraudulent result submissions and repeat conflict violations result in instant loss of funds and permanent loss of account access.`;
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: user.telegram_chat_id.trim(),
+            text: banMessage,
+            parse_mode: "HTML"
+          })
+        }).catch((e) => console.warn("[Conflict System] Failed to send Ban Telegram alert:", e.message));
+      }
+    }
+  } catch (err) {
+    console.error("[Conflict System] Error applying conflict flag/ban:", err);
+  }
+}
 async function sendTelegramMatchAcceptedAlert(match, opponentIgn) {
   try {
     const isSquad = match.matchType === "squad" || Boolean(match.squadData);
@@ -5219,7 +5578,7 @@ async function sendTelegramMatchAcceptedAlert(match, opponentIgn) {
       return;
     }
     const creatorUser = await getUserFromDb(match.creator.id);
-    const hostChatId = creatorUser?.telegramChatId || process.env.TELEGRAM_HOST_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
+    const hostChatId = creatorUser?.telegramChatId;
     const netPot = match.potAmount - (match.platformFee || 0);
     const winnerPayout = match.winnerPayout || netPot;
     const messageText = `\u2694\uFE0F <b>MATCH ACCEPTED - OPS STAKE</b> \u2694\uFE0F
@@ -5534,7 +5893,7 @@ async function handleTelegramCallbackQuery(cq) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ callback_query_id: cq.id, text: "\u2705 Channel verified! Account linked successfully." })
         });
-        const appUrl = (process.env.APP_URL || "https://ops-stake.app").replace(/\/$/, "");
+        const appUrl = (process.env.APP_URL || "https://opsstake.online").replace(/\/$/, "");
         await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -5576,14 +5935,61 @@ async function handleTelegramMessage(message) {
   if (!message || !message.chat) return;
   const chatId = String(message.chat.id);
   const text = (message.text || "").trim();
+  const caption = (message.caption || "").trim();
+  const fullContent = text || caption;
   const from = message.from || {};
   const telegramUsername = from.username || "";
   const senderName = from.first_name ? `${from.first_name} ${from.last_name || ""}`.trim() : telegramUsername || "Gladiator";
   const logPrefix = message.chat.type === "group" || message.chat.type === "supergroup" ? `[Telegram Bot] \u{1F465} Group "${message.chat.title || "Untitled"}" (ID: ${chatId})` : `[Telegram Bot] \u{1F464} Private User (${chatId})`;
-  console.log(`${logPrefix} @${telegramUsername || "anon"}: "${text || "[Media/Other]"}"`);
+  console.log(`${logPrefix} @${telegramUsername || "anon"}: "${fullContent || "[Media Attachment]"}"`);
+  const bannedCheck = await pool.query(
+    `SELECT id, role, codm_ign FROM users WHERE (telegram_chat_id = ${escapeSql(chatId)} OR (LOWER(telegram_username) = LOWER(${escapeSql(telegramUsername)}) AND ${escapeSql(telegramUsername)} != '')) AND role = 'banned' LIMIT 1`
+  );
+  if (bannedCheck.rows.length > 0) {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: `\u{1F6D1} <b>ACCESS PERMANENTLY BANNED</b>
+
+Your account (<b>${bannedCheck.rows[0].codm_ign || "Gladiator"}</b>) has been <b>PERMANENTLY BANNED</b> from the OpsSTAKE Arena and Telegram Bot due to repeat match conflict violations & fraudulent result claims.
+
+\u2022 Wallet & Escrow Funds: \u{1F512} <b>100% FORFEITED (\u20A60)</b>
+\u2022 Channel Access: \u{1F6AB} <b>BANNED FROM OFFICIAL @OpsSTAKE CHANNEL</b>
+
+Bot commands, dispute uploads, and wager participation are permanently disabled.`,
+        parse_mode: "HTML"
+      })
+    });
+    return;
+  }
   if (text.startsWith("/start")) {
     const parts = text.split(/\s+/);
     const rawPayload = parts.length > 1 ? parts[1].trim() : "";
+    if (rawPayload.startsWith("dispute_")) {
+      const roomCode = rawPayload.replace(/^dispute_/, "").trim();
+      const match = await getMatchByCodeOrId(roomCode);
+      if (match) {
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: `\u{1F6A8} <b>DISPUTE REGISTRATION FOR MATCH #${match.roomCode || match.challengeCode}</b>
+
+\u{1F3AE} <b>Mode:</b> ${match.gameMode} | \u{1F5FA}\uFE0F <b>Map:</b> ${match.map}
+\u{1F4B0} <b>Escrow Pot:</b> <b>\u20A6${match.potAmount.toLocaleString()}</b>
+
+\u{1F4F9} <b>UPLOAD YOUR SCREEN RECORDING NOW:</b>
+Please send/upload your CODM screen recording video file directly into this chat.
+You can also include caption: <code>/dispute ${match.roomCode || match.challengeCode}</code>`,
+            parse_mode: "HTML"
+          })
+        });
+        return;
+      }
+    }
     const targetUserId = rawPayload.replace(/^link_/, "").trim();
     if (targetUserId) {
       let user = await getUserFromDb(targetUserId);
@@ -5649,7 +6055,7 @@ To link your Telegram account and receive instant match room codes, escrow wager
           });
         }
         console.log(`\u2705 [Telegram Bot] User ${user.codmIgn} (${user.id}) automatically linked to Chat ID ${chatId}!`);
-        const appUrl = (process.env.APP_URL || "https://ops-stake.app").replace(/\/$/, "");
+        const appUrl = (process.env.APP_URL || "https://opsstake.online").replace(/\/$/, "");
         await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -5705,6 +6111,140 @@ Or copy your Chat ID <code>${chatId}</code> and paste it in your profile.`,
     });
     return;
   }
+  const isVideoOrMedia = Boolean(message.video || message.document || message.photo || message.animation);
+  const isDisputeCommand = fullContent.toLowerCase().startsWith("/dispute");
+  if (isDisputeCommand || isVideoOrMedia) {
+    let matchCode = "";
+    const parts = fullContent.split(/\s+/);
+    const dispIdx = parts.findIndex((p) => p.toLowerCase().startsWith("/dispute"));
+    if (dispIdx !== -1 && parts.length > dispIdx + 1) {
+      matchCode = parts[dispIdx + 1].trim();
+    } else {
+      const codeMatch = fullContent.match(/(?:CODM-[0-9]+-[A-Za-z]+|CHALLENGE-[0-9]+|match_[0-9_a-z]+)/i);
+      if (codeMatch) {
+        matchCode = codeMatch[0];
+      }
+    }
+    let match = await getMatchByCodeOrId(matchCode);
+    if (!match) {
+      const userRes = await pool.query(`SELECT id, codm_ign FROM users WHERE telegram_chat_id = ${escapeSql(chatId)} LIMIT 1`);
+      const user = userRes.rows[0];
+      if (user) {
+        const mRes = await pool.query(
+          `SELECT id FROM matches 
+           WHERE (creator_id = $1 OR opponent_id = $1) 
+             AND status IN ('DISPUTED', 'SUBMITTING_RESULTS', 'READY_TO_PLAY', 'IN_PROGRESS')
+           ORDER BY created_at DESC LIMIT 1`,
+          [user.id]
+        );
+        if (mRes.rows.length > 0) {
+          match = await getMatchFromDb(mRes.rows[0].id);
+        }
+      }
+    }
+    if (isDisputeCommand && !match && matchCode) {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: `\u26A0\uFE0F <b>Match code <code>${matchCode}</code> not found!</b>
+
+Please check your match room code in the Arena and try again (e.g. <code>/dispute CODM-5175-SHI</code>).`,
+          parse_mode: "HTML"
+        })
+      });
+      return;
+    }
+    if (match) {
+      const userRes = await pool.query(`SELECT id, codm_ign FROM users WHERE telegram_chat_id = ${escapeSql(chatId)} LIMIT 1`);
+      const playerIgn = userRes.rows[0]?.codm_ign || senderName;
+      if (userRes.rows[0]?.id) {
+        await pool.query(`UPDATE users SET telegram_chat_id = ${escapeSql(chatId)} WHERE id = ${escapeSql(userRes.rows[0].id)}`);
+      }
+      if (isVideoOrMedia) {
+        const reviewGroupId = TELEGRAM_REVIEW_GROUP_ID || TELEGRAM_PUBLIC_CHANNEL_ID;
+        if (reviewGroupId) {
+          try {
+            await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/forwardMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                chat_id: reviewGroupId,
+                from_chat_id: chatId,
+                message_id: message.message_id
+              })
+            });
+            const alertText = `\u{1F6A8} <b>MATCH DISPUTE VIDEO RECEIVED (Telegram Bot)</b> \u{1F6A8}
+
+\u{1F464} <b>Player:</b> ${playerIgn} (@${telegramUsername || "anon"})
+\u{1F3F7}\uFE0F <b>Match Code:</b> #${match.roomCode || match.challengeCode}
+\u{1F3AE} <b>Mode:</b> ${match.gameMode} | Map: ${match.map}
+\u{1F4B0} <b>Pot Amount:</b> <b>\u20A6${match.potAmount.toLocaleString()}</b>
+\u{1F50D} <b>Search Tag:</b> <code>#DISPUTE_${match.roomCode || match.challengeCode}</code>`;
+            await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                chat_id: reviewGroupId,
+                text: alertText,
+                parse_mode: "HTML"
+              })
+            });
+          } catch (fwdErr) {
+            console.error("[Telegram Bot] Error forwarding dispute video:", fwdErr.message);
+          }
+        }
+        match.status = "DISPUTED";
+        match.resolutionNotes = `Screen recording dispute proof submitted via Telegram Bot by ${playerIgn}. Awaiting referee review. Pot \u20A6${match.potAmount.toLocaleString()} locked.`;
+        match.chatMessages = match.chatMessages || [];
+        match.chatMessages.push({
+          id: `msg_${Date.now()}_tg_dispute`,
+          senderId: "SYSTEM",
+          senderName: "CODM Referee Bot",
+          text: `\u{1F4F9} ${playerIgn} submitted dispute screen recording video via Telegram Bot. Escrow pot locked for referee review.`,
+          timestamp: Date.now()
+        });
+        await saveMatchToDb(match);
+        if (globalIo) {
+          globalIo.emit("matchUpdated", match);
+          globalIo.to(match.id).emit("matchUpdated", match);
+        }
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: `\u2705 <b>DISPUTE SCREEN RECORDING RECEIVED!</b>
+
+Your video proof for Match <b>#${match.roomCode || match.challengeCode}</b> has been received and escalated to the OpsSTAKE Admin Referee Team for priority review.
+
+\u{1F512} The escrow pot (<b>\u20A6${match.potAmount.toLocaleString()}</b>) remains securely locked until review completes.
+You will be notified right here in Telegram as soon as the referee adjudicates the result!`,
+            parse_mode: "HTML"
+          })
+        });
+        return;
+      } else {
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: `\u{1F6A8} <b>DISPUTE INITIATED FOR MATCH #${match.roomCode || match.challengeCode}</b>
+
+\u{1F3AE} <b>Mode:</b> ${match.gameMode} | Map: ${match.map}
+\u{1F4B0} <b>Escrow Pot:</b> <b>\u20A6${match.potAmount.toLocaleString()}</b>
+
+\u{1F4F9} <b>UPLOAD SCREEN RECORDING PROOF NOW:</b>
+Please send or upload your screen recording video file directly into this chat to complete your dispute submission.`,
+            parse_mode: "HTML"
+          })
+        });
+        return;
+      }
+    }
+  }
   if (text === "/status" || text === "/myid") {
     const userRes = await pool.query(`SELECT id, username, codm_ign, balance FROM users WHERE telegram_chat_id = ${escapeSql(chatId)} LIMIT 1`);
     const linkedUser = userRes.rows[0];
@@ -5727,7 +6267,7 @@ Or copy your Chat ID <code>${chatId}</code> and paste it in your profile.`,
   if (text === "/matches" || text === "/wagers" || text === "/squads") {
     const allMatches = await getAllMatchesFromDb();
     const openMatches = allMatches.filter((m) => m.status === "PENDING_OPPONENT_STAKE");
-    const appUrl = (process.env.APP_URL || "https://ops-stake.app").replace(/\/$/, "");
+    const appUrl = (process.env.APP_URL || "https://opsstake.online").replace(/\/$/, "");
     if (openMatches.length === 0) {
       await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: "POST",
@@ -5853,13 +6393,18 @@ app.post("/api/telegram/unlink", async (req, res) => {
   res.json({ success: true, message: "Telegram account unlinked successfully", user: updatedUser });
 });
 app.post("/api/telegram/webhook", async (req, res) => {
-  const update = req.body;
-  if (update?.message) {
-    handleTelegramMessage(update.message).catch((err) => {
-      console.error("[Telegram Webhook Error]:", err.message);
-    });
+  try {
+    const update = req.body;
+    if (update?.message) {
+      await handleTelegramMessage(update.message);
+    } else if (update?.callback_query) {
+      await handleTelegramCallbackQuery(update.callback_query);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[Telegram Webhook Exception]:", err.message);
+    res.status(500).json({ ok: false, error: err.message });
   }
-  res.json({ ok: true });
 });
 app.post("/api/telegram/test-channel-post", async (req, res) => {
   const { channelId } = req.body;
@@ -5961,6 +6506,14 @@ function calculateSquadEconomics(stakePerPlayer, playersPerTeam = 5, squadFeePer
   };
 }
 app.post("/api/matches", async (req, res) => {
+  const isMaintenance = await getMaintenanceMode();
+  if (isMaintenance) {
+    const userId = req.body?.creatorId;
+    const user = userId ? await getUserFromDb(userId) : null;
+    if (!user || user.role !== "admin") {
+      return res.status(503).json({ error: "Match creation is disabled during scheduled maintenance." });
+    }
+  }
   const {
     creatorId,
     gameMode = "1v1 Sniper Only",
@@ -6938,6 +7491,9 @@ function computeMatchConflictReasons(match) {
 app.post("/api/matches/:id/submit-result", rateLimitMiddleware(15, 6e4), secureSignatureMiddleware, async (req, res) => {
   const match = await getMatchFromDb(req.params.id);
   if (!match) return res.status(404).json({ error: "Match not found" });
+  if (match.status === "SETTLED" || match.status === "DISPUTED") {
+    return res.status(400).json({ error: "Match already settled or under dispute. No further dispute actions allowed." });
+  }
   const { playerId, claim, screenshotBase64 } = req.body;
   if (!["VICTORY", "DEFEAT", "DRAW"].includes(claim)) {
     return res.status(400).json({ error: "Claim must be VICTORY, DEFEAT, or DRAW" });
@@ -7476,6 +8032,9 @@ app.post("/api/msksksnuwje/matches/:id/admin-resolve", async (req, res) => {
       await pool.query(`
         UPDATE users SET losses = losses + 1 WHERE id = ${escapeSql(loserObj.id)}
       `);
+      if (loserObj.resultClaim === "VICTORY" || match.status === "DISPUTED" || match.conflictReason) {
+        await applyConflictFlagOrBan(loserObj.id, match, `False result claim / match conflict in Match #${match.roomCode || match.challengeCode}`);
+      }
     }
   }
   match.status = "SETTLED";
@@ -8407,14 +8966,6 @@ async function startServer() {
         }
         io.to(data.matchId).emit("chat", { ...newMsg, matchId: data.matchId });
         socket.to(data.matchId).emit("chatNotification", {
-          id: `chat_notif_${newMsg.id}`,
-          matchId: data.matchId,
-          senderId: newMsg.senderId,
-          senderName: newMsg.senderName,
-          text: newMsg.text,
-          timestamp: newMsg.timestamp
-        });
-        io.emit("globalChatAlert", {
           id: `chat_notif_${newMsg.id}`,
           matchId: data.matchId,
           senderId: newMsg.senderId,
