@@ -32,12 +32,25 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { NotificationToast } from './components/NotificationToast';
 import { NotificationCenterModal } from './components/NotificationCenterModal';
 import { MatchCreatedSuccessModal } from './components/MatchCreatedSuccessModal';
+import { BackgroundUploadBanner } from './components/BackgroundUploadBanner';
+import { DisputesPage } from './components/DisputesPage';
 
 const socket = io('/');
 
 function MainApp() {
   const navigate = useNavigate();
   const location = useLocation();
+
+  const [globalUploading, setGlobalUploading] = useState<boolean>(() => {
+    return localStorage.getItem('codm_global_uploading') === 'true';
+  });
+  const [globalProgress, setGlobalProgress] = useState<number>(() => {
+    const saved = localStorage.getItem('codm_global_progress');
+    return saved ? parseInt(saved, 10) : 0;
+  });
+  const [globalUploadStatus, setGlobalUploadStatus] = useState<'idle' | 'uploading' | 'pending_review' | 'failed'>(() => {
+    return (localStorage.getItem('codm_global_upload_status') as any) || 'idle';
+  });
 
   const [currentUser, setCurrentUser] = useState<UserProfile>({
     id: 'guest',
@@ -343,6 +356,7 @@ function MainApp() {
   else if (pathname === '/arena' || (pathname === '/' && currentUser.id !== 'guest' && !refCode)) currentTab = 'arena';
   else if (pathname === '/rules') currentTab = 'rules';
   else if (pathname === '/history') currentTab = 'history';
+  else if (pathname === '/disputes') currentTab = 'disputes';
   else if (pathname === '/referrals') currentTab = 'referrals';
   else if (pathname === '/wallet') currentTab = 'wallet';
   else if (pathname === '/profile') currentTab = 'profile';
@@ -760,6 +774,15 @@ function MainApp() {
   // 3. IN-APP PAGES WITH ROUTING & NAVBAR / BOTTOM DOCK
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col bg-tactical-grid selection:bg-amber-500 selection:text-black relative">
+      <BackgroundUploadBanner
+        isUploading={globalUploading}
+        progress={globalProgress}
+        status={globalUploadStatus}
+        onDismiss={() => {
+          setGlobalUploadStatus('idle');
+          localStorage.setItem('codm_global_upload_status', 'idle');
+        }}
+      />
       <Navbar
         currentUser={currentUser}
         currentTab={currentTab}
@@ -844,6 +867,16 @@ function MainApp() {
                 onNavigateToReferrals={() => navigate('/referrals')}
                 onOpenCreateBet={handleOpenCreateBet}
                 onSignOut={handleSignOut}
+              />
+            }
+          />
+          <Route
+            path="/disputes"
+            element={
+              <DisputesPage
+                currentUser={currentUser}
+                matches={matches}
+                onRefresh={loadData}
               />
             }
           />

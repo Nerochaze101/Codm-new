@@ -3,7 +3,7 @@ import { UserProfile } from '../types';
 import {
   Menu, X, Swords, CreditCard, ShieldCheck, Clock,
   User, Trophy, Plus, LogOut, ChevronRight, Wallet,
-  Crosshair, ArrowRight, Bell
+  Crosshair, ArrowRight, Bell, ShieldAlert
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { useSound } from '../hooks/useSound';
@@ -96,6 +96,14 @@ export const Navbar: React.FC<NavbarProps> = ({
       icon: User,
       badge: 'LVL 150',
       badgeColor: 'bg-amber-500/20 text-amber-400 border-amber-500/40',
+    },
+    {
+      id: 'disputes',
+      label: 'Dispute Resolution',
+      subtitle: 'Video Proof & Referee Queue',
+      icon: ShieldAlert,
+      badge: 'ESCROW',
+      badgeColor: 'bg-rose-500/20 text-rose-400 border-rose-500/40',
     },
     {
       id: 'referrals',

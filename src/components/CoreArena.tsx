@@ -5,7 +5,7 @@ import {
   ArrowRight, AlertCircle, CheckCircle2, MessageCircle, Wallet,
   UserCheck, RefreshCw, Sparkles, Crosshair, Target, X, Plus,
   Flame, Zap, Users, Flag, Shield, Sliders, ChevronRight, Gamepad2, MapPin,
-  TrendingUp, Award, Clock, Lock, AlertTriangle, XCircle, Bell, Info, ExternalLink
+  TrendingUp, Award, Clock, Lock, AlertTriangle, XCircle, Bell, Info, ExternalLink, Send
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { SkeletonLoader } from './SkeletonLoader';
@@ -996,7 +996,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                       )}
 
                       {myActiveMatch.status === 'DISPUTED' ? (
-                        <div className="p-5 rounded-2xl bg-rose-950/40 border-2 border-rose-500/60 space-y-4 animate-in zoom-in-95">
+                        <div className="p-5 sm:p-6 rounded-2xl bg-rose-950/40 border-2 border-rose-500/60 space-y-5 animate-in zoom-in-95">
                           <div className="flex gap-3">
                             <div className="w-10 h-10 rounded-xl bg-rose-500/20 flex items-center justify-center shrink-0">
                               <AlertTriangle className="text-rose-400" />
@@ -1004,116 +1004,66 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                             <div>
                               <div className="text-sm font-black text-white uppercase">Dispute Detected!</div>
                               <p className="text-[11px] text-neutral-400">
-                                Conflicting claims submitted. Upload a <b>screen recording</b> of your history and match outcome for referee inspection.
+                                Conflicting claims submitted. Escrow funds are safely locked. Use the automated Telegram Bot button below to submit your screen recording.
                               </p>
                             </div>
                           </div>
 
-                          {/* Mandatory Video Guide Player (Embedded Instantly) */}
+                          {/* Mandatory Video Guide Player */}
                           <VideoTutorial
                             title="Mandatory Video Guide: How to Screen Record Proof"
                             description="Follow this tutorial to record your match history and end-game victory/defeat scoreboard. Proofs are evaluated by human referees."
                           />
 
-                          {/* Background Screen Recording Video Upload */}
-                          <div className="p-4 rounded-xl bg-neutral-900 border border-neutral-800 space-y-3">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-black uppercase text-sky-400 flex items-center gap-1.5">
-                                <Upload className="w-4 h-4" />
-                                <span>Upload Screen Recording (Video)</span>
-                              </span>
-                              <span className="text-[10px] font-mono text-neutral-400">MP4, MOV, WebM (Max 200MB)</span>
-                            </div>
-
-                            <input
-                              type="file"
-                              accept="video/*"
-                              disabled={isUploadingVideo}
-                              className="w-full text-xs text-neutral-400 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:bg-sky-500 file:text-white file:font-black file:text-xs cursor-pointer disabled:opacity-50"
-                              onChange={(e) => {
-                                const f = e.target.files?.[0];
-                                if (f) {
-                                  handleVideoUpload(myActiveMatch.id, f);
-                                }
-                              }}
-                            />
-
-                            {isUploadingVideo && (
-                              <div className="p-3 rounded-lg bg-sky-950/60 border border-sky-500/40 space-y-2 animate-pulse">
-                                <div className="flex items-center justify-between text-[10px] font-black uppercase text-sky-300">
-                                  <span>Streaming to Referee Telegram Queue...</span>
-                                  <span className="font-mono">{videoUploadProgress}%</span>
-                                </div>
-                                <div className="w-full h-2 bg-neutral-950 rounded-full overflow-hidden">
-                                  <div
-                                    className="h-full bg-sky-400 transition-all duration-300"
-                                    style={{ width: `${videoUploadProgress}%` }}
-                                  />
-                                </div>
-                                <p className="text-[10px] text-neutral-400 italic">
-                                  Uploading in background. You can minimize or navigate other tabs while upload completes.
+                          {/* Telegram Bot /dispute Command Action Box */}
+                          <div className="p-5 rounded-2xl bg-gradient-to-br from-sky-950/60 to-neutral-900 border border-sky-500/30 space-y-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-sky-500/20 border border-sky-500/40 text-sky-400 flex items-center justify-center shrink-0">
+                                <Send className="w-5 h-5" />
+                              </div>
+                              <div>
+                                <h4 className="text-xs sm:text-sm font-black text-white uppercase font-heading">
+                                  Telegram Bot /dispute Command
+                                </h4>
+                                <p className="text-[11px] text-neutral-400">
+                                  Launch Telegram Bot with <code className="text-sky-400 font-mono">/dispute {myActiveMatch.id}</code> to upload screen recording.
                                 </p>
                               </div>
-                            )}
+                            </div>
 
-                            {videoUploadStatus === 'pending_review' && (
-                              <div className="p-3 rounded-lg bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-xs flex items-center justify-between gap-2">
-                                <div className="flex items-center gap-2">
-                                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
-                                  <span>Evidence Received! Status: <strong>Pending Referee Review</strong>.</span>
-                                </div>
-                                <a
-                                  href="https://t.me/+I5vcFF4RXwJkMWVk"
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="px-2.5 py-1 bg-emerald-500 text-neutral-950 font-black text-[10px] uppercase rounded-lg hover:bg-emerald-400 shrink-0"
-                                >
-                                  Telegram Group
-                                </a>
-                              </div>
-                            )}
-
-                            {videoUploadError && (
-                              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs flex items-center gap-2">
-                                <AlertTriangle className="w-4 h-4 shrink-0" />
-                                <span>{videoUploadError}</span>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Screenshot Fallback Upload */}
-                          <div className="p-3.5 rounded-xl bg-neutral-900/60 border border-neutral-800 space-y-2">
-                            <span className="text-[10px] font-bold uppercase text-neutral-400 block">
-                              Or Upload Scoreboard Screenshot:
-                            </span>
-                            <input
-                              type="file"
-                              accept="image/*"
-                              className="w-full text-xs text-neutral-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-neutral-800 file:text-neutral-200 file:text-xs cursor-pointer"
-                              onChange={(e) => {
-                                const f = e.target.files?.[0];
-                                if (f) {
-                                  const r = new FileReader();
-                                  r.onload = () => setScreenshotPreview(r.result as string);
-                                  r.readAsDataURL(f);
-                                }
-                              }}
-                            />
-                            {screenshotPreview && (
-                              <div className="h-36 rounded-xl overflow-hidden border border-neutral-800 bg-black mt-2">
-                                <img src={screenshotPreview} className="w-full h-full object-contain" alt="Scoreboard preview" />
-                              </div>
-                            )}
-                            {screenshotPreview && (
-                              <button
-                                onClick={() => handleResultSubmit(myActiveMatch.id)}
-                                disabled={isSubmitting}
-                                className="w-full py-2.5 bg-rose-500 hover:bg-rose-400 text-white font-black rounded-xl text-xs uppercase shadow transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                            <div className="flex flex-col sm:flex-row items-center gap-3 pt-1">
+                              <a
+                                href={`https://t.me/OpsStakeBot?start=dispute_${myActiveMatch.id}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="w-full sm:flex-1 py-3 bg-sky-500 hover:bg-sky-400 text-neutral-950 text-xs font-black rounded-xl transition-all shadow-lg cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide"
                               >
-                                {isSubmitting ? <RefreshCw size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-                                <span>Submit Screenshot Proof</span>
+                                <MessageCircle className="w-4 h-4" />
+                                <span>Open Telegram Bot & Send /dispute</span>
+                              </a>
+
+                              <button
+                                type="button"
+                                onClick={() => copyCode(`/dispute ${myActiveMatch.id}`)}
+                                className="w-full sm:w-auto px-4 py-3 bg-neutral-800 hover:bg-neutral-700 text-white text-xs font-bold rounded-xl border border-neutral-700 transition-all cursor-pointer flex items-center justify-center gap-2 font-mono"
+                              >
+                                {copiedCode ? (
+                                  <>
+                                    <Check className="w-4 h-4 text-emerald-400 stroke-[3]" />
+                                    <span className="text-emerald-400">Copied!</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-4 h-4 text-neutral-400" />
+                                    <span>Copy /dispute {myActiveMatch.id.slice(0, 8)}</span>
+                                  </>
+                                )}
                               </button>
-                            )}
+                            </div>
+
+                            <p className="text-[10px] text-neutral-400 italic">
+                              Once received by the Telegram bot, your video is automatically forwarded to the referee group for rapid review.
+                            </p>
                           </div>
                         </div>
                       ) : (isCreatorOfActive ? myActiveMatch.creator.resultClaim : myActiveMatch.opponent?.resultClaim) ? (
