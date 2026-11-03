@@ -41,7 +41,8 @@ import {
   Maximize2,
   ShieldAlert,
   Handshake,
-  Lock
+  Lock,
+  Copy
 } from 'lucide-react';
 import {
   fetchAdminUsers,
@@ -124,6 +125,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
   const [queueLoading, setQueueLoading] = useState(false);
   const [queueFilter, setQueueFilter] = useState<'all' | 'disputed' | 'ai_flagged' | 'resubmit'>('all');
   const [queueSearch, setQueueSearch] = useState('');
+  const [copiedTag, setCopiedTag] = useState<string | null>(null);
+
+  const handleCopyTag = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedTag(id);
+    setTimeout(() => setCopiedTag(null), 2000);
+  };
 
   // 1. Approve Payout Action Modal state
   const [payoutModal, setPayoutModal] = useState<{
@@ -1212,6 +1220,66 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                         </div>
                       )}
 
+                      {/* Telegram Admin Group Evidence Verification Box */}
+                      <div className="p-4 rounded-2xl bg-cyan-950/30 border border-cyan-500/40 space-y-3">
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-cyan-500/20 pb-2">
+                          <div className="flex items-center gap-2 text-cyan-300 font-bold text-xs">
+                            <Send size={15} className="text-cyan-400 shrink-0" />
+                            <span>Telegram Admin Group Evidence Verification</span>
+                          </div>
+                          <a
+                            href="https://t.me/+I5vcFF4RXwJkMWVk"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[10px] font-mono font-bold text-cyan-400 hover:text-cyan-300 flex items-center gap-1 bg-cyan-500/10 px-2.5 py-1 rounded-lg border border-cyan-500/30 transition-all cursor-pointer"
+                          >
+                            <span>Open Telegram Admin Group</span>
+                            <ExternalLink size={12} />
+                          </a>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs font-mono">
+                          <div className="p-2.5 bg-black/60 rounded-xl border border-neutral-800">
+                            <span className="text-[10px] text-neutral-500 block font-sans font-bold uppercase">Host Username</span>
+                            <span className="text-white font-bold">{match.creator.codmIgn}</span>
+                          </div>
+                          <div className="p-2.5 bg-black/60 rounded-xl border border-neutral-800">
+                            <span className="text-[10px] text-neutral-500 block font-sans font-bold uppercase">Rival Username</span>
+                            <span className="text-white font-bold">{match.opponent?.codmIgn || 'Awaiting Opponent'}</span>
+                          </div>
+                          <div className="p-2.5 bg-black/60 rounded-xl border border-neutral-800">
+                            <span className="text-[10px] text-neutral-500 block font-sans font-bold uppercase">Room Code</span>
+                            <span className="text-amber-400 font-bold">{match.roomCode || match.challengeCode}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => handleCopyTag(`#DISPUTE_${match.roomCode || match.challengeCode}`, `tag_${match.id}`)}
+                            className="px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                          >
+                            {copiedTag === `tag_${match.id}` ? (
+                              <><Check size={13} className="text-emerald-400 stroke-[3]" /> Copied Search Tag!</>
+                            ) : (
+                              <><Copy size={13} /> Copy Search Tag (#DISPUTE_{match.roomCode || match.challengeCode})</>
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleCopyTag(match.roomCode || match.challengeCode, `code_${match.id}`)}
+                            className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-300 text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                          >
+                            {copiedTag === `code_${match.id}` ? (
+                              <><Check size={13} className="text-emerald-400 stroke-[3]" /> Copied Room Code!</>
+                            ) : (
+                              <><Copy size={13} /> Copy Room Code ({match.roomCode || match.challengeCode})</>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
                       {/* Dual Player Breakdown (Host vs Rival) */}
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {/* Host Side */}
@@ -2011,7 +2079,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                       <Target size={160} />
                     </div>
                     
-                    <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-10 relative z-10">
+                     <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-10 relative z-10">
                       <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6">
                         <div className={`w-16 h-16 rounded-2xl flex items-center justify-center border-2 ${match.status === 'DISPUTED' ? 'bg-rose-500/10 border-rose-400 text-rose-400 shadow-lg shadow-rose-500/10' : 'bg-neutral-800 border-neutral-700 text-neutral-500'}`}>
                            <AlertTriangle size={32} />
@@ -2036,6 +2104,66 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                           className="flex-1 lg:flex-none px-8 py-4 bg-amber-400 text-black font-black uppercase text-[11px] tracking-widest rounded-2xl hover:bg-amber-300 transition-all shadow-xl shadow-amber-400/10 flex items-center justify-center gap-2"
                         >
                           <Eye size={18} /> Review Proof
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Telegram Admin Group Evidence Verification Box */}
+                    <div className="mt-6 p-4 rounded-2xl bg-cyan-950/30 border border-cyan-500/40 space-y-3 relative z-10">
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-cyan-500/20 pb-2">
+                        <div className="flex items-center gap-2 text-cyan-300 font-bold text-xs">
+                          <Send size={15} className="text-cyan-400 shrink-0" />
+                          <span>Telegram Admin Group Evidence Verification</span>
+                        </div>
+                        <a
+                          href="https://t.me/+I5vcFF4RXwJkMWVk"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[10px] font-mono font-bold text-cyan-400 hover:text-cyan-300 flex items-center gap-1 bg-cyan-500/10 px-2.5 py-1 rounded-lg border border-cyan-500/30 transition-all cursor-pointer"
+                        >
+                          <span>Open Telegram Admin Group</span>
+                          <ExternalLink size={12} />
+                        </a>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs font-mono">
+                        <div className="p-2.5 bg-black/60 rounded-xl border border-neutral-800">
+                          <span className="text-[10px] text-neutral-500 block font-sans font-bold uppercase">Host Username</span>
+                          <span className="text-white font-bold">{match.creator.codmIgn}</span>
+                        </div>
+                        <div className="p-2.5 bg-black/60 rounded-xl border border-neutral-800">
+                          <span className="text-[10px] text-neutral-500 block font-sans font-bold uppercase">Rival Username</span>
+                          <span className="text-white font-bold">{match.opponent?.codmIgn || 'Awaiting Opponent'}</span>
+                        </div>
+                        <div className="p-2.5 bg-black/60 rounded-xl border border-neutral-800">
+                          <span className="text-[10px] text-neutral-500 block font-sans font-bold uppercase">Room Code</span>
+                          <span className="text-amber-400 font-bold">{match.roomCode || match.challengeCode}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => handleCopyTag(`#DISPUTE_${match.roomCode || match.challengeCode}`, `disp_tag_${match.id}`)}
+                          className="px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                        >
+                          {copiedTag === `disp_tag_${match.id}` ? (
+                            <><Check size={13} className="text-emerald-400 stroke-[3]" /> Copied Search Tag!</>
+                          ) : (
+                            <><Copy size={13} /> Copy Search Tag (#DISPUTE_{match.roomCode || match.challengeCode})</>
+                          )}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleCopyTag(match.roomCode || match.challengeCode, `disp_code_${match.id}`)}
+                          className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-300 text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                        >
+                          {copiedTag === `disp_code_${match.id}` ? (
+                            <><Check size={13} className="text-emerald-400 stroke-[3]" /> Copied Room Code!</>
+                          ) : (
+                            <><Copy size={13} /> Copy Room Code ({match.roomCode || match.challengeCode})</>
+                          )}
                         </button>
                       </div>
                     </div>
