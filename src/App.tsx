@@ -7,7 +7,7 @@ import {
   opponentStakeMatch, creatorStakeMatch,
   cancelMatch, abandonMatch, submitMatchResult,
   createUser, signUpUser, signInUser, updateUser, withdrawWallet,
-  cleanUserHistory
+  cleanUserHistory, fetchMaintenanceStatus
 } from './services/api';
 
 import {
@@ -34,6 +34,7 @@ import { NotificationCenterModal } from './components/NotificationCenterModal';
 import { MatchCreatedSuccessModal } from './components/MatchCreatedSuccessModal';
 import { BackgroundUploadBanner } from './components/BackgroundUploadBanner';
 import { DisputesPage } from './components/DisputesPage';
+import { ShieldAlert } from 'lucide-react';
 
 const socket = io('/');
 
@@ -88,6 +89,7 @@ function MainApp() {
     }
   });
 
+  const [maintenanceActive, setMaintenanceActive] = useState(false);
   const previousMatchesRef = useRef<Map<string, string>>(new Map());
 
   // Initialize browser notification service worker on mount
@@ -135,6 +137,34 @@ function MainApp() {
       }
       return next;
     });
+  }, []);
+
+  useEffect(() => {
+    const checkMaintenance = async () => {
+      try {
+        const data = await fetchMaintenanceStatus();
+        setMaintenanceActive(data.maintenanceMode);
+      } catch (e) {
+        console.error('Failed to check maintenance status:', e);
+      }
+    };
+    checkMaintenance();
+    const interval = setInterval(checkMaintenance, 60000); // Check every minute
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const checkMaintenance = async () => {
+      try {
+        const data = await fetchMaintenanceStatus();
+        setMaintenanceActive(data.maintenanceMode);
+      } catch (e) {
+        console.error('Failed to check maintenance status:', e);
+      }
+    };
+    checkMaintenance();
+    const interval = setInterval(checkMaintenance, 60000); // Check every minute
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -744,6 +774,7 @@ function MainApp() {
         <LandingPage
           matches={matches}
           currentUser={currentUser}
+          maintenanceMode={maintenanceActive}
           onOpenAuth={(mode) => {
             setAuthMode(mode || 'signup');
             navigate('/auth');
@@ -808,29 +839,33 @@ function MainApp() {
           <Route
             path="/arena"
             element={
-              <CoreArena
-                currentUser={currentUser}
-                matches={matches}
-                isMatchesLoading={isMatchesLoading}
-                onCreateBet={handleCreateBet}
-                onJoinMatch={handleJoinMatch}
-                onOpponentStake={handleOpponentStake}
-                onCreatorStake={handleCreatorStake}
-                onSimulateOpponentStake={handleSimulateOpponentStake}
-                onSubmitResult={handleSubmitResult}
-                onCancelMatch={handleCancelMatch}
-                onAbandonMatch={handleAbandonMatch}
-                onCashOut={handleCashOut}
-                onRefresh={loadData}
-                onOpenCreateBet={handleOpenCreateBet}
-                onOpenNewUserOnboarding={(targetMatch) => {
-                  setOnboardingTargetMatch(targetMatch || null);
-                  setIsOnboardingModalOpen(true);
-                }}
-                onDismissMatch={(matchId) => {
-                  setMatches(matches.filter(m => m.id !== matchId));
-                }}
-              />
+              maintenanceActive && !['admin', 'super_admin', 'moderator'].includes(currentUser.role || '') ? (
+                <MaintenanceOverlay />
+              ) : (
+                <CoreArena
+                  currentUser={currentUser}
+                  matches={matches}
+                  isMatchesLoading={isMatchesLoading}
+                  onCreateBet={handleCreateBet}
+                  onJoinMatch={handleJoinMatch}
+                  onOpponentStake={handleOpponentStake}
+                  onCreatorStake={handleCreatorStake}
+                  onSimulateOpponentStake={handleSimulateOpponentStake}
+                  onSubmitResult={handleSubmitResult}
+                  onCancelMatch={handleCancelMatch}
+                  onAbandonMatch={handleAbandonMatch}
+                  onCashOut={handleCashOut}
+                  onRefresh={loadData}
+                  onOpenCreateBet={handleOpenCreateBet}
+                  onOpenNewUserOnboarding={(targetMatch) => {
+                    setOnboardingTargetMatch(targetMatch || null);
+                    setIsOnboardingModalOpen(true);
+                  }}
+                  onDismissMatch={(matchId) => {
+                    setMatches(matches.filter(m => m.id !== matchId));
+                  }}
+                />
+              )
             }
           />
           <Route
@@ -874,31 +909,43 @@ function MainApp() {
           <Route
             path="/disputes"
             element={
-              <DisputesPage
-                currentUser={currentUser}
-                matches={matches}
-                onRefresh={loadData}
-              />
+              maintenanceActive && !['admin', 'super_admin', 'moderator'].includes(currentUser.role || '') ? (
+                <MaintenanceOverlay />
+              ) : (
+                <DisputesPage
+                  currentUser={currentUser}
+                  matches={matches}
+                  onRefresh={loadData}
+                />
+              )
             }
           />
           <Route
             path="/referrals"
             element={
-              <ReferralPage
-                currentUser={currentUser}
-                onNavigateBack={() => navigate('/profile')}
-              />
+              maintenanceActive && !['admin', 'super_admin', 'moderator'].includes(currentUser.role || '') ? (
+                <MaintenanceOverlay />
+              ) : (
+                <ReferralPage
+                  currentUser={currentUser}
+                  onNavigateBack={() => navigate('/profile')}
+                />
+              )
             }
           />
           <Route
             path="/wallet"
             element={
-              <WalletPage
-                currentUser={currentUser}
-                onUpdateUser={handleUpdateUser}
-                onCashOut={handleCashOut}
-                onCleanHistory={handleCleanHistory}
-              />
+              maintenanceActive && !['admin', 'super_admin', 'moderator'].includes(currentUser.role || '') ? (
+                <MaintenanceOverlay />
+              ) : (
+                <WalletPage
+                  currentUser={currentUser}
+                  onUpdateUser={handleUpdateUser}
+                  onCashOut={handleCashOut}
+                  onCleanHistory={handleCleanHistory}
+                />
+              )
             }
           />
           <Route
@@ -920,6 +967,7 @@ function MainApp() {
                 <LandingPage
                   matches={matches}
                   currentUser={currentUser}
+                  maintenanceMode={maintenanceActive}
                   onOpenAuth={(mode) => {
                     setAuthMode(mode || 'signup');
                     navigate('/auth');
@@ -1072,6 +1120,56 @@ function MainApp() {
     </div>
   );
 }
+
+const MaintenanceOverlay: React.FC = () => (
+  <div className="fixed inset-0 z-[100] bg-neutral-950 flex items-center justify-center p-6 overflow-hidden">
+    <div className="absolute inset-0 bg-tactical-grid opacity-20" />
+    <div className="absolute inset-0 bg-gradient-to-b from-rose-500/5 via-transparent to-transparent" />
+    
+    <div className="relative z-10 max-w-xl w-full text-center space-y-8 animate-in fade-in zoom-in-95 duration-700">
+      <div className="relative mx-auto w-32 h-32 flex items-center justify-center">
+        <div className="absolute inset-0 bg-rose-500/20 rounded-[2.5rem] blur-2xl animate-pulse" />
+        <div className="relative w-full h-full bg-neutral-900 border-2 border-rose-500/40 rounded-[2.5rem] flex items-center justify-center text-rose-500 shadow-2xl shadow-rose-500/10">
+          <ShieldAlert size={64} className="animate-bounce" />
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <h1 className="text-4xl sm:text-5xl font-black font-heading text-white uppercase tracking-tighter leading-none">
+          SYSTEM <span className="text-rose-500">OFFLINE</span>
+        </h1>
+        <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[10px] font-black uppercase tracking-[0.2em]">
+          Scheduled Maintenance Protocol Active
+        </div>
+        <p className="text-neutral-400 text-sm sm:text-base leading-relaxed max-w-md mx-auto font-medium">
+          OPS STAKE is currently undergoing critical infrastructure upgrades to enhance your battle experience. Public access is restricted during this phase.
+        </p>
+      </div>
+
+      <div className="p-6 bg-neutral-900/50 border border-neutral-800 rounded-3xl space-y-4 shadow-xl">
+        <p className="text-xs text-neutral-500 font-mono">Estimated Time Remaining: <span className="text-rose-400 font-bold uppercase animate-pulse">Synchronizing...</span></p>
+        <div className="w-full h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+          <div className="w-2/3 h-full bg-rose-500 animate-shimmer" />
+        </div>
+        <div className="flex items-center justify-center gap-6 pt-2">
+          <div className="text-center">
+            <div className="text-xl font-black text-white font-mono tracking-tighter">100%</div>
+            <div className="text-[9px] text-neutral-600 font-black uppercase tracking-widest">Escrow Safe</div>
+          </div>
+          <div className="w-px h-8 bg-neutral-800" />
+          <div className="text-center">
+            <div className="text-xl font-black text-white font-mono tracking-tighter">LIVE</div>
+            <div className="text-[9px] text-neutral-600 font-black uppercase tracking-widest">Staff Only</div>
+          </div>
+        </div>
+      </div>
+
+      <p className="text-[10px] text-neutral-600 font-black uppercase tracking-[0.3em]">
+        Handshake Protocol: v2.4.0-Maintenance
+      </p>
+    </div>
+  </div>
+);
 
 export default function App() {
   return (

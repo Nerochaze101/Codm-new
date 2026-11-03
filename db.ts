@@ -329,7 +329,8 @@ export async function initDatabase() {
       INSERT INTO platform_settings (key, value, updated_at)
       VALUES 
         ('solo_fee_percent', '10', 1700000000000),
-        ('squad_fee_percent', '5', 1700000000000)
+        ('squad_fee_percent', '5', 1700000000000),
+        ('maintenance_mode', 'false', 1700000000000)
       ON CONFLICT (key) DO NOTHING;
 
       CREATE TABLE IF NOT EXISTS withdrawal_requests (

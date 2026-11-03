@@ -17,6 +17,7 @@ export interface LandingPageProps {
   currentUser?: UserProfile;
   onOpenAuth: (mode?: 'signin' | 'signup') => void;
   onNavigateToArena?: () => void;
+  maintenanceMode?: boolean;
 }
 
 const FAQS = [
@@ -51,6 +52,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   currentUser,
   onOpenAuth,
   onNavigateToArena,
+  maintenanceMode = false,
 }) => {
   const [activeFormatTab, setActiveFormatTab] = useState<'1v1' | 'normal'>('1v1');
   const [calcStake, setCalcStake] = useState<number>(100);
@@ -157,6 +159,19 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           </div>
         </div>
       </header>
+
+
+      {/* MAINTENANCE MODE ALERT */}
+      {maintenanceMode && (
+        <div className="bg-amber-400 text-neutral-950 py-3 px-4 shadow-2xl relative z-30">
+          <div className="max-w-7xl mx-auto flex items-center justify-center gap-3">
+            <AlertCircle size={18} className="animate-pulse" />
+            <p className="text-xs sm:text-sm font-black uppercase tracking-widest text-center">
+              Scheduled Maintenance Active: Arena access restricted. Systems will be back online shortly.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* 2. HERO PRESENTATION */}
       <section className="relative overflow-hidden py-16 sm:py-24 border-b border-neutral-800/80">

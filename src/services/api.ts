@@ -448,6 +448,20 @@ export async function deleteUser(adminUserId: string, targetUserId: string) {
   return await res.json();
 }
 
+export async function fetchMaintenanceStatus(): Promise<{ maintenanceMode: boolean }> {
+  const res = await fetch('/api/maintenance-status');
+  return await parseResponse(res);
+}
+
+export async function updateMaintenanceMode(adminUserId: string, enabled: boolean): Promise<{ success: boolean; maintenanceMode: boolean }> {
+  const res = await fetch('/api/msksksnuwje/maintenance-mode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Id': adminUserId, 'X-User-Id': adminUserId },
+    body: JSON.stringify({ adminUserId, enabled }),
+  });
+  return await parseResponse(res);
+}
+
 export async function claimAdminRole(userId: string, passcode?: string) {
   const res = await fetch('/api/msksksnuwje/claim-admin', {
     method: 'POST',

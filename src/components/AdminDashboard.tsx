@@ -73,6 +73,8 @@ import {
   unbanAccount,
   claimMatchReview,
   deleteUser,
+  fetchMaintenanceStatus,
+  updateMaintenanceMode,
   GmailIntegrationStatus,
   AdminEmailItem,
   FlaggedAccountItem,
@@ -203,6 +205,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
   const [isSavingFees, setIsSavingFees] = useState(false);
   const [feeSaveMsg, setFeeSaveMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // Maintenance Mode state
+  const [maintenanceEnabled, setMaintenanceEnabled] = useState(false);
+  const [isTogglingMaintenance, setIsTogglingMaintenance] = useState(false);
+
   // Disputes Hub state
   const [disputesList, setDisputesList] = useState<Match[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState<string | null>(null);
@@ -319,6 +325,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     }
   };
 
+  const loadMaintenanceStatus = async () => {
+    try {
+      const data = await fetchMaintenanceStatus();
+      setMaintenanceEnabled(data.maintenanceMode);
+    } catch (e) {
+      console.error('Error loading maintenance status:', e);
+    }
+  };
+
+  const handleToggleMaintenance = async (enabled: boolean) => {
+    setIsTogglingMaintenance(true);
+    try {
+      const res = await updateMaintenanceMode(currentUser.id, enabled);
+      setMaintenanceEnabled(res.maintenanceMode);
+      if (enabled) {
+        alert("Maintenance Mode ENABLED. Only admins can access the app.");
+      } else {
+        alert("Maintenance Mode DISABLED. Public access restored.");
+      }
+    } catch (err: any) {
+      alert(err.message || "Failed to toggle maintenance mode");
+    } finally {
+      setIsTogglingMaintenance(false);
+    }
+  };
+
   const handleSaveFeeSettings = async () => {
     setIsSavingFees(true);
     setFeeSaveMsg(null);
@@ -423,7 +455,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
       if (currentUser.role === 'moderator') {
         await Promise.all([loadDisputes(), loadReviewQueue()]);
       } else if (currentUser.role === 'admin' || currentUser.role === 'super_admin') {
-        await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings(), loadFlaggedAccounts()]);
+        await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings(), loadFlaggedAccounts(), loadMaintenanceStatus()]);
       }
       setLoading(false);
     };
@@ -1755,6 +1787,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                 }`}>
                   {feeSaveMsg.type === 'success' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
                   <span>{feeSaveMsg.text}</span>
+                </div>
+              )}
+            </section>
+
+            {/* SYSTEM MAINTENANCE PROTOCOL */}
+            <section className="bg-neutral-900 border border-rose-500/30 rounded-[2.5rem] p-8 sm:p-10 shadow-2xl relative overflow-hidden">
+              <div className="absolute top-0 right-0 p-8 opacity-[0.03] text-rose-500 pointer-events-none group-hover:opacity-5 transition-opacity duration-700">
+                <ShieldAlert size={160} />
+              </div>
+
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 relative z-10">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className={`px-2.5 py-1 rounded-lg font-black text-[9px] uppercase tracking-widest border ${maintenanceEnabled ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' : 'bg-neutral-800 text-neutral-500 border-neutral-700'}`}>
+                      {maintenanceEnabled ? 'System Offline' : 'Systems Operational'}
+                    </span>
+                  </div>
+                  <h3 className="text-2xl font-black text-white uppercase tracking-tighter">Maintenance Protocol</h3>
+                  <p className="text-neutral-500 text-xs max-w-xl">
+                    When active, all public pages and match creation are disabled for normal users. Only accounts with <strong className="text-white">Admin</strong> or <strong className="text-white">Moderator</strong> roles can bypass the lock.
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => handleToggleMaintenance(!maintenanceEnabled)}
+                  disabled={isTogglingMaintenance}
+                  className={`px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all shadow-xl active:scale-95 flex items-center gap-3 ${maintenanceEnabled ? 'bg-rose-500 text-white shadow-rose-500/20' : 'bg-neutral-800 text-neutral-400 hover:bg-neutral-700'}`}
+                >
+                  {isTogglingMaintenance ? <Loader2 size={16} className="animate-spin" /> : <Lock size={16} />}
+                  <span>{maintenanceEnabled ? 'Disable Maintenance' : 'Activate Maintenance'}</span>
+                </button>
+              </div>
+
+              {maintenanceEnabled && (
+                <div className="mt-8 p-4 rounded-xl bg-rose-500/5 border border-rose-500/20 flex items-start gap-3 animate-in slide-in-from-top-2">
+                  <AlertCircle size={18} className="text-rose-500 shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-rose-300 leading-relaxed font-medium">
+                    <strong>Critical Alert:</strong> Maintenance mode is currently broadcasting an <strong>"Under Scheduled Maintenance"</strong> notice to all public visitors. Active matches can still be managed by admins, but no new challenges can be created by the player base.
+                  </p>
                 </div>
               )}
             </section>

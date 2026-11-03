@@ -1168,6 +1168,14 @@ async function getPlatformFeeSettings() {
     return { soloFeePercent: 10, squadFeePercent: 5 };
   }
 }
+async function getMaintenanceMode() {
+  try {
+    const res = await pool.query(`SELECT value FROM platform_settings WHERE key = 'maintenance_mode'`);
+    return res.rows.length > 0 ? res.rows[0].value === "true" : false;
+  } catch {
+    return false;
+  }
+}
 function getSoloRakePercentage(totalPotAmount, baseRate = 10) {
   if (totalPotAmount >= 1e5) return Math.min(baseRate / 100, 0.035);
   if (totalPotAmount >= 5e4) return Math.min(baseRate / 100, 0.04);
@@ -1793,6 +1801,29 @@ async function requireAdminAuth(req, res, next) {
   req.adminUser = user;
   next();
 }
+async function maintenanceMiddleware(req, res, next) {
+  const publicPaths = ["/api/maintenance-status", "/api/auth/login", "/api/auth/register", "/api/auth/request-verification", "/api/auth/reset-password", "/api/msksksnuwje/claim-admin"];
+  if (publicPaths.includes(req.path)) {
+    return next();
+  }
+  const maintenanceActive = await getMaintenanceMode();
+  if (maintenanceActive) {
+    const userId = req.headers["x-user-id"] || req.headers["x-admin-id"] || req.body?.userId || req.body?.adminUserId || req.query?.userId || req.query?.adminUserId;
+    if (userId) {
+      const user = await getUserFromDb(String(userId));
+      if (user && (user.role === "admin" || user.role === "moderator" || user.role === "super_admin")) {
+        return next();
+      }
+    }
+    return res.status(503).json({
+      error: "System Maintenance",
+      message: "OPS STAKE is currently undergoing scheduled maintenance. Access is restricted to administrators only. We will be back online shortly.",
+      maintenanceMode: true
+    });
+  }
+  next();
+}
+app.use("/api", maintenanceMiddleware);
 app.use("/api/msksksnuwje", requireAdminAuth);
 app.get("/api/msksksnuwje/flagged-accounts", async (req, res) => {
   const user = req.adminUser;
@@ -2067,6 +2098,30 @@ app.get("/api/admin/fee-settings", async (req, res) => {
     res.json(settings);
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to load fee settings" });
+  }
+});
+app.get("/api/maintenance-status", async (req, res) => {
+  try {
+    const maintenanceMode = await getMaintenanceMode();
+    res.json({ maintenanceMode });
+  } catch (err) {
+    res.json({ maintenanceMode: false });
+  }
+});
+app.post("/api/msksksnuwje/maintenance-mode", async (req, res) => {
+  try {
+    const { enabled } = req.body;
+    if (req.adminUser.role !== "admin") {
+      return res.status(403).json({ error: "Unauthorized: Admin privileges required" });
+    }
+    await pool.query(`
+      INSERT INTO platform_settings (key, value, updated_at)
+      VALUES ('maintenance_mode', ${escapeSql(enabled ? "true" : "false")}, ${Date.now()})
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at
+    `);
+    res.json({ success: true, maintenanceMode: enabled });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to toggle maintenance mode" });
   }
 });
 app.post("/api/admin/fee-settings", async (req, res) => {
@@ -6355,6 +6410,14 @@ function calculateSquadEconomics(stakePerPlayer, playersPerTeam = 5, squadFeePer
   };
 }
 app.post("/api/matches", async (req, res) => {
+  const isMaintenance = await getMaintenanceMode();
+  if (isMaintenance) {
+    const userId = req.body?.creatorId;
+    const user = userId ? await getUserFromDb(userId) : null;
+    if (!user || user.role !== "admin") {
+      return res.status(503).json({ error: "Match creation is disabled during scheduled maintenance." });
+    }
+  }
   const {
     creatorId,
     gameMode = "1v1 Sniper Only",
