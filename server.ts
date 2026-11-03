@@ -2488,12 +2488,38 @@ app.post("/api/msksksnuwje/users/:id/adjust-balance", async (req, res) => {
     const refreshed = await getUserFromDb(targetUserId);
     res.json({
       success: true,
-      message: `Successfully adjusted balance for ${targetUser.codmIgn || targetUser.email} to \u20A6${newBal.toLocaleString()}`,
+      message: `Balance adjusted for ${refreshed.codmIgn || refreshed.email}. New balance: \u20A6${refreshed.balance.toLocaleString()}`,
       user: refreshed
     });
   } catch (err) {
-    console.error("Error adjusting user balance:", err);
+    console.error("Error adjusting balance:", err);
     res.status(500).json({ error: err.message || "Failed to adjust balance" });
+  }
+});
+app.delete("/api/msksksnuwje/users/:id", async (req, res) => {
+  try {
+    const targetUserId = req.params.id;
+    if (req.adminUser.role !== "admin") {
+      return res.status(403).json({ error: "Unauthorized: Admin privileges required to delete gladiators" });
+    }
+    const targetUser = await getUserFromDb(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ error: "Target gladiator not found" });
+    }
+    if (targetUser.email === "b@gmail.com") {
+      return res.status(400).json({ error: "Protected account cannot be deleted" });
+    }
+    await pool.query("BEGIN");
+    await pool.query(`DELETE FROM transactions WHERE user_id = ${escapeSql(targetUserId)}`);
+    await pool.query(`DELETE FROM deposit_requests WHERE user_id = ${escapeSql(targetUserId)}`);
+    await pool.query(`DELETE FROM withdrawal_requests WHERE user_id = ${escapeSql(targetUserId)}`);
+    await pool.query(`DELETE FROM users WHERE id = ${escapeSql(targetUserId)}`);
+    await pool.query("COMMIT");
+    res.json({ success: true, message: `Gladiator ${targetUser.codmIgn || targetUserId} has been permanently purged from the database.` });
+  } catch (err) {
+    await pool.query("ROLLBACK");
+    console.error("Error deleting user:", err);
+    res.status(500).json({ error: err.message || "Failed to delete gladiator" });
   }
 });
 function constantTimeVerify(candidate, validList) {

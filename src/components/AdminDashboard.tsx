@@ -72,6 +72,7 @@ import {
   banDuplicateAccount,
   unbanAccount,
   claimMatchReview,
+  deleteUser,
   GmailIntegrationStatus,
   AdminEmailItem,
   FlaggedAccountItem,
@@ -2033,6 +2034,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                                   title={`Change Role (Current: ${u.role})`}
                                  >
                                    <Shield size={18} />
+                                 </button>
+                               )}
+                               {currentUser.role === 'admin' && u.email !== 'b@gmail.com' && (
+                                 <button 
+                                   onClick={async () => { 
+                                     if(confirm(`⚠️ CRITICAL: Permanently purge gladiator ${u.codmIgn} and all their history? This cannot be undone.`)) { 
+                                       try {
+                                         await deleteUser(currentUser.id, u.id);
+                                         loadUsers();
+                                       } catch (err: any) {
+                                         alert(err.message || 'Failed to delete user');
+                                       }
+                                     } 
+                                   }} 
+                                   className="p-3 bg-rose-900/10 text-rose-500 hover:bg-rose-500 hover:text-white rounded-2xl transition-all border border-neutral-800 hover:border-rose-500 active:scale-90"
+                                   title="Purge User Record"
+                                 >
+                                   <Trash2 size={18} />
                                  </button>
                                )}
                              </div>

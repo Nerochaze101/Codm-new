@@ -436,6 +436,18 @@ export async function assignUserRole(adminUserId: string, params: { targetUserId
   return await res.json();
 }
 
+export async function deleteUser(adminUserId: string, targetUserId: string) {
+  const res = await fetch(`/api/msksksnuwje/users/${targetUserId}`, {
+    method: 'DELETE',
+    headers: { 'X-Admin-Id': adminUserId, 'X-User-Id': adminUserId },
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to delete user');
+  }
+  return await res.json();
+}
+
 export async function claimAdminRole(userId: string, passcode?: string) {
   const res = await fetch('/api/msksksnuwje/claim-admin', {
     method: 'POST',
