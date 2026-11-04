@@ -141,12 +141,18 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser }) => 
   };
 
   const handleClearChat = async () => {
-    if (!confirm('Clear support chat history?')) return;
+    if (!confirm('Clear support chat history? This will only work if the ticket is resolved.')) return;
     try {
-      await fetch(`/api/support/messages?userId=${userId}`, { method: 'DELETE' });
-      setMessages([]);
+      const res = await fetch(`/api/support/messages?userId=${userId}`, { method: 'DELETE' });
+      if (res.ok) {
+        setMessages([]);
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Failed to clear support chat. It might still be active.');
+      }
     } catch (err) {
       console.error('Failed to clear support chat:', err);
+      alert('Network error clearing chat.');
     }
   };
 
@@ -238,13 +244,21 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser }) => 
 
           <div className="flex-1 p-4 overflow-y-auto space-y-3 bg-neutral-950/60 font-sans">
             <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-[11px] leading-relaxed space-y-1">
-              <div className="font-bold uppercase tracking-wide flex items-center gap-1.5">
-                <ShieldCheck size={13} className="text-amber-400" />
-                <span>Secure Support Channel</span>
+              <div className="font-bold uppercase tracking-wide flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <ShieldCheck size={13} className="text-amber-400" />
+                  <span>Secure Support Channel</span>
+                </div>
+                {messages.length > 0 && messages[messages.length - 1].status === 'resolved' && (
+                   <span className="px-1.5 py-0.5 rounded bg-emerald-500 text-neutral-950 text-[8px] font-black animate-pulse">RESOLVED</span>
+                )}
               </div>
               <p className="opacity-90">
                 Welcome{currentUser ? `, ${userName}` : ''}! Your query is categorized as <b className="text-amber-400">{selectedCategory}</b> for prompt admin routing.
               </p>
+              {messages.length > 0 && messages[messages.length - 1].status === 'resolved' && (
+                <p className="text-[9px] text-emerald-400 font-bold mt-1">This ticket has been marked as resolved by staff. You can now clear the history if desired.</p>
+              )}
             </div>
 
             {loadingHistory && (

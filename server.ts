@@ -389,10 +389,13 @@ async function initDatabase() {
         text TEXT NOT NULL,
         category VARCHAR(100),
         room VARCHAR(255),
+        status VARCHAR(50) DEFAULT 'open',
         timestamp BIGINT NOT NULL
       );
+      ALTER TABLE support_messages ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'open';
       CREATE INDEX IF NOT EXISTS idx_support_user_id ON support_messages(user_id);
       CREATE INDEX IF NOT EXISTS idx_support_timestamp ON support_messages(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_support_status ON support_messages(status);
     `);
     const usersCountRes = await client.query("SELECT COUNT(*) FROM users");
     if (parseInt(usersCountRes.rows[0].count, 10) === 0) {
@@ -2175,11 +2178,36 @@ app.post("/api/support/messages", async (req, res) => {
     const id = `sup_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
     const timestamp = Date.now();
     await pool.query(
-      `INSERT INTO support_messages (id, user_id, sender_name, sender_role, text, category, room, timestamp)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      `INSERT INTO support_messages (id, user_id, sender_name, sender_role, text, category, room, timestamp, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open')`,
       [id, userId, senderName, senderRole, text, category, room, timestamp]
     );
+
+    const newMsg = { id, userId, senderName, senderRole, text, category, room, timestamp, status: 'open' };
+
+    // Emit socket event for real-time delivery to admin dashboard
+    if (globalIo) {
+      const target = room || `support_user_${userId}`;
+      globalIo.to(target).emit("support_message", newMsg);
+      if (senderRole === "user") {
+        globalIo.to("support_admin_room").emit("support_message", newMsg);
+        // Send Telegram Alert
+        sendTelegramSupportAlert(senderName, text, userId);
+      }
+    }
+
     res.json({ success: true, id, timestamp });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/support/resolve", async (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: "userId required" });
+    await pool.query(`UPDATE support_messages SET status = 'resolved' WHERE user_id = $1`, [userId]);
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2187,9 +2215,19 @@ app.post("/api/support/messages", async (req, res) => {
 
 app.delete("/api/support/messages", async (req, res) => {
   try {
-    const { userId } = req.query;
+    const { userId, force } = req.query;
     if (!userId) return res.status(400).json({ error: "userId required" });
-    await pool.query(`DELETE FROM support_messages WHERE user_id = $1 OR room = $2`, [userId, `support_user_${userId}`]);
+    
+    if (force === 'true') {
+       await pool.query(`DELETE FROM support_messages WHERE user_id = $1 OR room = $2`, [userId, `support_user_${userId}`]);
+    } else {
+       // Only delete if resolved
+       const check = await pool.query(`SELECT status FROM support_messages WHERE user_id = $1 AND status != 'resolved' LIMIT 1`, [userId]);
+       if (check.rows.length > 0) {
+         return res.status(400).json({ error: "Cannot delete active chat. Resolve it first." });
+       }
+       await pool.query(`DELETE FROM support_messages WHERE user_id = $1 OR room = $2`, [userId, `support_user_${userId}`]);
+    }
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -5425,6 +5463,24 @@ app.post("/api/users/:id/clean-history", async (req, res) => {
 var TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
 var TELEGRAM_PUBLIC_CHANNEL_ID = (process.env.TELEGRAM_PUBLIC_CHANNEL_ID || "").trim();
 var TELEGRAM_REVIEW_GROUP_ID = (process.env.TELEGRAM_REVIEW_GROUP_ID || "").trim();
+
+async function sendTelegramSupportAlert(senderName, text, userId) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_REVIEW_GROUP_ID) return;
+  const message = `📩 <b>NEW SUPPORT MESSAGE</b> 📩\n\n👤 <b>User:</b> ${senderName}\n🆔 <b>ID:</b> <code>${userId}</code>\n💬 <b>Message:</b> ${text}\n\n👉 <i>Check the Admin Dashboard to reply.</i>`;
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_REVIEW_GROUP_ID,
+        text: message,
+        parse_mode: "HTML"
+      })
+    });
+  } catch (err) {
+    console.warn("[Telegram Bot] Failed to send support alert:", err.message);
+  }
+}
 async function sendMatchDisputeVideoToTelegram(match, playerIgn, videoBase64) {
   try {
     const matches = videoBase64.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.*)$/);
@@ -6200,7 +6256,7 @@ async function handleTelegramMessage(message) {
           });
         }
         console.log(`✅ [Telegram Bot] User ${user.codmIgn} (${user.id}) automatically linked to Chat ID ${chatId}!`);
-        const appUrl = (process.env.APP_URL || "https://opsstake.online").replace(/\/$/, "");
+        const appUrl = "https://opsstake.online";
         await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -9115,6 +9171,8 @@ async function startServer() {
           // Also notify admins if it's a user message
           if (newMsg.senderRole === "user") {
             io.to("support_admin_room").emit("support_message", newMsg);
+            // Send Telegram Alert
+            sendTelegramSupportAlert(newMsg.senderName, newMsg.text, newMsg.userId);
           }
         }
       } catch (err) {

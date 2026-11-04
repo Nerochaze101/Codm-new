@@ -70,7 +70,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
   // Filter open challenges
   const openChallenges = (Array.isArray(matches) ? matches : []).filter(
-    (m) => m.status === 'PENDING_OPPONENT_STAKE'
+    (m) => m?.status === 'PENDING_OPPONENT_STAKE'
   );
 
   const toggleFaq = (idx: number) => {

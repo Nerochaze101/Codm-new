@@ -150,21 +150,7 @@ function MainApp() {
       }
     };
     checkMaintenance();
-    const interval = setInterval(checkMaintenance, 60000); // Check every minute
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    const checkMaintenance = async () => {
-      try {
-        const data = await fetchMaintenanceStatus();
-        setMaintenanceActive(data.maintenanceMode);
-      } catch (e) {
-        console.error('Failed to check maintenance status:', e);
-      }
-    };
-    checkMaintenance();
-    const interval = setInterval(checkMaintenance, 60000); // Check every minute
+    const interval = setInterval(checkMaintenance, 30000); // Check every 30 seconds for faster updates
     return () => clearInterval(interval);
   }, []);
 
@@ -416,9 +402,14 @@ function MainApp() {
           if (activeUser && activeUser.id) {
             setCurrentUser(activeUser);
           }
-        } catch (e) {
+        } catch (e: any) {
           console.error('Could not load saved user:', e);
-          localStorage.removeItem('codm_current_user_id');
+          // ONLY clear session if it's a 401/404. If it's a 503 (Maintenance), KEEP the session
+          // so admins can still bypass once they reach the arena or dashboard.
+          const errorMsg = String(e.message || '');
+          if (!errorMsg.includes('System Maintenance') && !errorMsg.includes('503')) {
+            localStorage.removeItem('codm_current_user_id');
+          }
         }
       }
       const mList = await fetchMatches();
@@ -1153,6 +1144,30 @@ const MaintenanceOverlay: React.FC = () => (
             <div className="text-[9px] text-neutral-600 font-black uppercase tracking-widest">Staff Only</div>
           </div>
         </div>
+      </div>
+
+      <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+        <button
+          onClick={() => window.location.href = '/auth?mode=signin'}
+          className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-amber-400 border border-amber-500 text-black hover:bg-amber-300 transition-all text-xs font-black uppercase tracking-widest shadow-lg shadow-amber-400/20"
+        >
+          <UserCheck size={14} />
+          <span>Staff Sign In</span>
+        </button>
+        <button
+          onClick={() => window.location.href = '/msksksnuwje'}
+          className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-700 transition-all text-xs font-black uppercase tracking-widest"
+        >
+          <Lock size={14} />
+          <span>Staff Access Portal</span>
+        </button>
+        <button
+          onClick={() => window.location.reload()}
+          className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-neutral-800 border border-neutral-700 text-white hover:bg-neutral-700 transition-all text-xs font-black uppercase tracking-widest"
+        >
+          <RefreshCw size={14} />
+          <span>Retry Connection</span>
+        </button>
       </div>
 
       <p className="text-[10px] text-neutral-600 font-black uppercase tracking-[0.3em]">

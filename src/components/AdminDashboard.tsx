@@ -550,6 +550,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     socketRef.current = socket;
     socket.emit('join_support_room', { userId: currentUser.id, role: currentUser.role, room: 'support_admin_room' });
 
+    socket.on('support_message', (newMsg: SupportMessage) => {
+      setSupportMessages((prev) => {
+        // Replace existing latest message for this user or add new one
+        const filtered = prev.filter(m => m.userId !== newMsg.userId);
+        return [newMsg, ...filtered].sort((a, b) => b.timestamp - a.timestamp);
+      });
+    });
+
     const init = async () => {
       setLoading(true);
       if (currentUser.role === 'moderator') {
@@ -902,14 +910,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
 
           <nav className="flex flex-col gap-3">
             {[
-              { id: 'review_queue', icon: AlertTriangle, label: 'Review Queue', badge: reviewQueueMatches.length, roles: ['admin', 'moderator'] },
-              { id: 'finance', icon: Wallet, label: 'Treasury', badge: `₦${availableFees.toLocaleString()}`, roles: ['admin'] },
-              { id: 'users', icon: Users, label: 'Gladiators', badge: usersList.length, roles: ['admin'] },
-              { id: 'disputes', icon: ShieldCheck, label: 'Disputes', badge: disputesList.length, roles: ['admin', 'moderator'] },
-              { id: 'support', icon: Headphones, label: 'Support Inbox', badge: supportMessages.length, roles: ['admin', 'moderator'] },
-              { id: 'gmail', icon: Mail, label: 'Sync Engine', badge: emailsList.length, roles: ['admin'] },
-              { id: 'multi_accounts', icon: ShieldAlert, label: 'Multi-Accounts', badge: flaggedAccounts.length, roles: ['admin'] },
-              { id: 'maintenance', icon: Settings, label: 'Maintenance & IP', badge: maintenanceEnabled ? 'ACTIVE' : 'OFF', roles: ['admin'] }
+              { id: 'review_queue', icon: AlertTriangle, label: 'Review Queue', badge: reviewQueueMatches.length, roles: ['admin', 'moderator', 'super_admin'] },
+              { id: 'finance', icon: Wallet, label: 'Treasury', badge: `₦${availableFees.toLocaleString()}`, roles: ['admin', 'super_admin'] },
+              { id: 'users', icon: Users, label: 'Gladiators', badge: usersList.length, roles: ['admin', 'super_admin'] },
+              { id: 'disputes', icon: ShieldCheck, label: 'Disputes', badge: disputesList.length, roles: ['admin', 'moderator', 'super_admin'] },
+              { id: 'support', icon: Headphones, label: 'Support Inbox', badge: supportMessages.length, roles: ['admin', 'moderator', 'super_admin'] },
+              { id: 'gmail', icon: Mail, label: 'Sync Engine', badge: emailsList.length, roles: ['admin', 'super_admin'] },
+              { id: 'multi_accounts', icon: ShieldAlert, label: 'Multi-Accounts', badge: flaggedAccounts.length, roles: ['admin', 'super_admin'] },
+              { id: 'maintenance', icon: Settings, label: 'Maintenance & IP', badge: maintenanceEnabled ? 'ACTIVE' : 'OFF', roles: ['admin', 'super_admin'] }
             ].filter(tab => tab.roles.includes(currentUser.role || 'user')).map(tab => (
               <button
                 key={tab.id}
@@ -2622,69 +2630,109 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {supportMessages.map((msg) => (
-                  <div key={msg.id} className="p-6 bg-neutral-900 border border-neutral-800 rounded-[2rem] space-y-4 hover:border-amber-400/30 transition-all group">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-amber-400/10 flex items-center justify-center text-amber-400 font-black">
-                          {msg.senderName[0].toUpperCase()}
+                {(supportMessages || []).map((msg) => {
+                  if (!msg) return null;
+                  const initial = (msg.senderName?.[0] || msg.userId?.[0] || "U").toUpperCase();
+                  return (
+                    <div key={msg.id} className="p-6 bg-neutral-900 border border-neutral-800 rounded-[2rem] space-y-4 hover:border-amber-400/30 transition-all group">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-amber-400/10 flex items-center justify-center text-amber-400 font-black">
+                            {initial}
+                          </div>
+                          <div>
+                            <div className="text-sm font-black text-white uppercase">{msg.senderName || "Unknown User"}</div>
+                            <div className="text-[10px] text-neutral-500 font-mono">User ID: {msg.userId ? msg.userId.slice(-8) : "N/A"}</div>
+                          </div>
                         </div>
-                        <div>
-                          <div className="text-sm font-black text-white uppercase">{msg.senderName}</div>
-                          <div className="text-[10px] text-neutral-500 font-mono">User ID: {msg.userId.slice(-8)}</div>
+                        <div className="flex flex-col items-end gap-1">
+                          <div className="text-[10px] text-neutral-600 font-mono">
+                            {msg.timestamp ? new Date(msg.timestamp).toLocaleString() : "N/A"}
+                          </div>
+                          <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest border ${
+                            msg.status === "resolved" 
+                              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" 
+                              : "bg-amber-500/10 text-amber-400 border-amber-500/20 animate-pulse"
+                          }`}>
+                            {msg.status || "open"}
+                          </span>
                         </div>
                       </div>
-                      <div className="text-[10px] text-neutral-600 font-mono">
-                        {new Date(msg.timestamp).toLocaleString()}
+
+                      <div className="p-4 bg-black/40 rounded-2xl border border-neutral-800/50">
+                        {msg.category && (
+                          <span className="inline-block px-2 py-0.5 rounded bg-neutral-800 text-neutral-400 font-mono text-[8px] uppercase border border-neutral-700 mb-2">
+                            {msg.category}
+                          </span>
+                        )}
+                        <p className="text-sm text-neutral-300 leading-relaxed italic">\"{msg.text}\"</p>
+                      </div>
+
+                      <div className="space-y-3">
+                        <textarea
+                          value={replyTexts[msg.id] || ""}
+                          onChange={(e) => setReplyTexts(prev => ({ ...prev, [msg.id]: e.target.value }))}
+                          placeholder="Type tactical response..."
+                          className="w-full bg-black border border-neutral-800 rounded-2xl px-4 py-3 text-xs text-white focus:border-amber-400 outline-none transition-all resize-none h-20"
+                        />
+                        <div className="grid grid-cols-2 gap-3">
+                          <button
+                            onClick={() => handleReply(msg)}
+                            disabled={!replyTexts[msg.id]?.trim()}
+                            className="py-3 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 disabled:hover:bg-amber-400 text-black font-black text-[10px] uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-amber-400/10"
+                          >
+                            <Send size={14} />
+                            Reply
+                          </button>
+                          {msg.status !== "resolved" ? (
+                            <button
+                              onClick={async () => {
+                                if (!confirm(`Mark ticket for ${msg.senderName} as resolved?`)) return;
+                                try {
+                                  const res = await fetch("/api/support/resolve", { 
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ userId: msg.userId })
+                                  });
+                                  if (res.ok) {
+                                    setSupportMessages(prev => prev.map(m => m.userId === msg.userId ? { ...m, status: "resolved" } : m));
+                                  }
+                                } catch (err) {
+                                  alert("Failed to resolve ticket");
+                                }
+                              }}
+                              className="py-3 bg-neutral-800 hover:bg-emerald-500/20 hover:text-emerald-400 text-neutral-400 font-black text-[10px] uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 border border-neutral-700 hover:border-emerald-500/30"
+                            >
+                              <CheckCircle size={14} />
+                              Resolve
+                            </button>
+                          ) : (
+                            <button
+                              onClick={async () => {
+                                if (!confirm(`Delete chat history for ${msg.senderName}?`)) return;
+                                try {
+                                  const res = await fetch(`/api/support/messages?userId=${msg.userId}`, { method: "DELETE" });
+                                  if (res.ok) {
+                                    setSupportMessages(prev => prev.filter(m => m.userId !== msg.userId));
+                                  } else {
+                                    const data = await res.json();
+                                    alert(data.error || "Failed to clear history");
+                                  }
+                                } catch (err) {
+                                  alert("Failed to clear history");
+                                }
+                              }}
+                              className="py-3 bg-neutral-800 hover:bg-rose-500/20 hover:text-rose-400 text-neutral-400 font-black text-[10px] uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 border border-neutral-700 hover:border-rose-500/30"
+                            >
+                              <Trash2 size={14} />
+                              Clear History
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
-
-                    <div className="p-4 bg-black/40 rounded-2xl border border-neutral-800/50">
-                      {msg.category && (
-                        <span className="inline-block px-2 py-0.5 rounded bg-neutral-800 text-neutral-400 font-mono text-[8px] uppercase border border-neutral-700 mb-2">
-                          {msg.category}
-                        </span>
-                      )}
-                      <p className="text-sm text-neutral-300 leading-relaxed italic">"{msg.text}"</p>
-                    </div>
-
-                    <div className="space-y-3">
-                      <textarea
-                        value={replyTexts[msg.id] || ''}
-                        onChange={(e) => setReplyTexts(prev => ({ ...prev, [msg.id]: e.target.value }))}
-                        placeholder="Type tactical response..."
-                        className="w-full bg-black border border-neutral-800 rounded-2xl px-4 py-3 text-xs text-white focus:border-amber-400 outline-none transition-all resize-none h-20"
-                      />
-                      <div className="grid grid-cols-2 gap-3">
-                        <button
-                          onClick={() => handleReply(msg)}
-                          disabled={!replyTexts[msg.id]?.trim()}
-                          className="py-3 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 disabled:hover:bg-amber-400 text-black font-black text-[10px] uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-amber-400/10"
-                        >
-                          <Send size={14} />
-                          Reply
-                        </button>
-                        <button
-                          onClick={async () => {
-                            if (!confirm(`Mark ticket for ${msg.senderName} as resolved and clear history?`)) return;
-                            try {
-                              const res = await fetch(`/api/support/messages?userId=${msg.userId}`, { method: 'DELETE' });
-                              if (res.ok) {
-                                setSupportMessages(prev => prev.filter(m => m.userId !== msg.userId));
-                              }
-                            } catch (err) {
-                              alert('Failed to resolve ticket');
-                            }
-                          }}
-                          className="py-3 bg-neutral-800 hover:bg-rose-500/20 hover:text-rose-400 text-neutral-400 font-black text-[10px] uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 border border-neutral-700 hover:border-rose-500/30"
-                        >
-                          <CheckCircle size={14} />
-                          Resolve
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>

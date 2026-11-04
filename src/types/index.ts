@@ -252,4 +252,5 @@ export interface SupportMessage {
   category?: string;
   timestamp: number;
   room?: string;
+  status?: 'open' | 'resolved';
 }
