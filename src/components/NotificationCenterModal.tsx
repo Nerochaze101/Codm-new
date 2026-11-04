@@ -196,15 +196,10 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
 
               <div className="shrink-0 flex items-center gap-2">
                 {currentUser.telegramChatId ? (
-                  <a
-                    href={`https://t.me/${botUsername}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-sky-300 font-semibold text-xs rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <ExternalLink size={13} />
-                    <span>Open Bot</span>
-                  </a>
+                  <span className="px-3 py-1.5 bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-semibold text-xs rounded-xl flex items-center gap-1.5">
+                    <CheckCircle2 size={13} />
+                    <span>Connected</span>
+                  </span>
                 ) : (
                   <a
                     href={`https://t.me/${botUsername}?start=link_${currentUser.id}`}

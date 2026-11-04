@@ -236,10 +236,55 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser, hidde
     }, 60000);
   };
 
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragRef = useRef<{ startX: number; startY: number; initialX: number; initialY: number }>({ startX: 0, startY: 0, initialX: 0, initialY: 0 });
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    setIsDragging(true);
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      initialX: position.x,
+      initialY: position.y,
+    };
+    e.preventDefault();
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDragging) return;
+      const dx = e.clientX - dragRef.current.startX;
+      const dy = e.clientY - dragRef.current.startY;
+      setPosition({
+        x: dragRef.current.initialX + dx,
+        y: dragRef.current.initialY + dy,
+      });
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    if (isDragging) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    }
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging]);
+
   if (hidden || isCancelled) return null;
 
   return (
-    <div className="fixed bottom-6 right-6 z-[60]">
+    <div
+      style={{
+        transform: `translate(${position.x}px, ${position.y}px)`,
+      }}
+      className="fixed bottom-6 right-6 z-[60] select-none"
+    >
       {!isOpen && (
         <button
           onClick={() => setIsOpen(true)}
@@ -255,8 +300,12 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser, hidde
 
       {isOpen && (
         <div className="w-[90vw] sm:w-[400px] h-[580px] bg-neutral-900 border border-neutral-800 rounded-[2rem] shadow-[0_20px_60px_rgba(0,0,0,0.8)] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-300">
-          <div className="p-4 bg-neutral-950 border-b border-neutral-800 flex items-center justify-between">
-            <div className="flex items-center gap-3">
+          <div
+            onMouseDown={handleMouseDown}
+            className="p-4 bg-neutral-950 border-b border-neutral-800 flex items-center justify-between cursor-grab active:cursor-grabbing"
+            title="Click and drag to move chat window"
+          >
+            <div className="flex items-center gap-3 pointer-events-none">
               <div className="w-10 h-10 rounded-xl bg-amber-400/10 border border-amber-400/30 flex items-center justify-center text-amber-400 shrink-0">
                 <Headphones size={20} />
               </div>

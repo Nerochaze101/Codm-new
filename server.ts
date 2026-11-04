@@ -6167,27 +6167,20 @@ async function handleTelegramCallbackQuery(cq) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ callback_query_id: cq.id, text: "\u2705 Channel verified! Account linked successfully." })
         });
-        const appUrl = (process.env.APP_URL || "https://opsstake.online").replace(/\/$/, "");
         await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             chat_id: chatId,
-            text: `\u{1F3AE} <b>OPS STAKE \xB7 TELEGRAM LINKED SUCCESSFULLY!</b> \u{1F3AE}
-
-\u2705 Welcome, <b>${user.codmIgn || user.username}</b>!
-Channel membership verified in <b>@OpsSTAKE</b>. Your account is now fully connected.
-
-\u{1F514} <b>What you will receive here in real-time:</b>
-\u2694\uFE0F Instant alert when a rival accepts your wagers
-\u{1F511} In-game CODM room codes as soon as matches deploy
-\u{1F3C6} Wager result confirmations & instant payout alerts
-
-\u{1F680} <i>You are ready for battle!</i>`,
-            parse_mode: "HTML",
-            reply_markup: {
-              inline_keyboard: [[{ text: "\u2694\uFE0F OPEN ARENA NOW", url: `${appUrl}/arena` }]]
-            }
+            text: `🎮 <b>OPS STAKE · TELEGRAM LINKED SUCCESSFULLY!</b> 🎮\n\n` +
+              `✅ Welcome, <b>${user.codmIgn || user.username}</b>!\n` +
+              `Channel membership verified in <b>@OpsSTAKE</b>. Your account is now fully connected.\n\n` +
+              `🔔 <b>What you will receive here in real-time:</b>\n` +
+              `⚔️ Instant alert when a rival accepts your wagers\n` +
+              `🔑 In-game CODM room codes as soon as matches deploy\n` +
+              `🏆 Wager result confirmations & instant payout alerts\n\n` +
+              `🚀 <i>You are ready for battle!</i>`,
+            parse_mode: "HTML"
           })
         });
         return;
@@ -6330,7 +6323,6 @@ async function handleTelegramMessage(message) {
           });
         }
         console.log(`✅ [Telegram Bot] User ${user.codmIgn} (${user.id}) automatically linked to Chat ID ${chatId}!`);
-        const appUrl = (process.env.APP_URL || "https://opsstake.online").replace(/\/$/, "");
         await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -6348,15 +6340,8 @@ async function handleTelegramMessage(message) {
               `🔑 In-game CODM room codes as soon as matches deploy\n` +
               `🏆 Wager result confirmations & instant payout alerts\n` +
               `⚠️ Match conflict notifications & referee status updates\n\n` +
-              `🚀 <i>You are ready for battle! Return to the arena to deploy or accept challenges.</i>`,
-            parse_mode: "HTML",
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  { text: "⚔️ OPEN ARENA NOW", url: `${appUrl}/arena` }
-                ]
-              ]
-            }
+              `🚀 <i>You are ready for battle!</i>`,
+            parse_mode: "HTML"
           })
         });
         return;
@@ -6749,7 +6734,45 @@ This is a test message from <b>@${botInfo.username}</b> to verify admin access.
       });
     }
   } catch (err) {
-    console.error(`\u274C [Telegram Bot] Manual test exception:`, err.message);
+    console.error(`❌ [Telegram Bot] Manual test exception:`, err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post("/api/telegram/test-welcome", async (req, res) => {
+  const { chatId } = req.body;
+  if (!chatId) return res.status(400).json({ error: "chatId required" });
+  try {
+    const welcomeText = `🎮 <b>OPS STAKE · TELEGRAM LINKED SUCCESSFULLY!</b> 🎮\n\n` +
+      `✅ Welcome, <b>Gladiator Test</b>!\n` +
+      `Your Telegram account has been <b>automatically connected</b> to your OPS STAKE profile.\n\n` +
+      `🔒 <b>Linked Profile Details:</b>\n` +
+      `• CODM IGN: <b>TestGladiator</b>\n` +
+      `• Chat ID: <code>${chatId}</code>\n` +
+      `• Current Balance: <b>₦5,000</b>\n\n` +
+      `🔔 <b>What you will receive here in real-time:</b>\n` +
+      `⚔️ Instant alert when a rival accepts your wagers\n` +
+      `🔑 In-game CODM room codes as soon as matches deploy\n` +
+      `🏆 Wager result confirmations & instant payout alerts\n` +
+      `⚠️ Match conflict notifications & referee status updates\n\n` +
+      `🚀 <i>You are ready for battle!</i>`;
+
+    const tgRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId.trim(),
+        text: welcomeText,
+        parse_mode: "HTML"
+      })
+    });
+    const data = await tgRes.json();
+    if (data.ok) {
+      return res.json({ success: true, message: "Welcome message test sent successfully!" });
+    } else {
+      return res.status(400).json({ success: false, error: data.description || "Failed to send welcome message" });
+    }
+  } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
