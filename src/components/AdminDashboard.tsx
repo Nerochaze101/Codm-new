@@ -255,7 +255,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
       room: targetRoom,
       targetRoom: targetRoom,
       timestamp,
-      status: 'open'
+      status: 'open' as const
     };
 
     // 1. Send via WebSocket immediately
@@ -620,6 +620,66 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
       if (data && data.userId) {
         setSupportMessages((prev) => prev.filter(m => (m.userId || (m as any).user_id) !== data.userId));
       }
+    });
+
+    socket.on('financeUpdated', (data: any) => {
+      if (data) setFinance(data);
+    });
+
+    socket.on('finance_updated', (data: any) => {
+      if (data) setFinance(data);
+    });
+
+    socket.on('userUpdated', (updatedUser: any) => {
+      if (updatedUser && updatedUser.id) {
+        setUsersList((prev) => {
+          const idx = prev.findIndex((u) => u.id === updatedUser.id);
+          if (idx !== -1) {
+            const copy = [...prev];
+            copy[idx] = { ...copy[idx], ...updatedUser };
+            return copy;
+          } else {
+            return [updatedUser, ...prev];
+          }
+        });
+      }
+    });
+
+    socket.on('userBalanceUpdated', (data: { userId: string; balance?: number; escrowBalance?: number }) => {
+      if (data && data.userId) {
+        setUsersList((prev) =>
+          prev.map((u) => {
+            if (u.id === data.userId) {
+              return {
+                ...u,
+                ...(data.balance !== undefined ? { balance: data.balance } : {}),
+                ...(data.escrowBalance !== undefined ? { escrowBalance: data.escrowBalance, escrow_balance: data.escrowBalance } : {}),
+              };
+            }
+            return u;
+          })
+        );
+      }
+    });
+
+    socket.on('deposit_updated', () => {
+      loadFinance();
+      loadUsers();
+    });
+
+    socket.on('withdrawal_updated', () => {
+      loadFinance();
+      loadUsers();
+    });
+
+    socket.on('matchUpdated', () => {
+      loadFinance();
+      loadUsers();
+    });
+
+    socket.on('match_updated', () => {
+      loadFinance();
+      loadUsers();
     });
 
     const init = async () => {

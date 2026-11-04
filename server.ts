@@ -1665,32 +1665,45 @@ function broadcastMatchStateChange(match, alertType, alertTitle, alertBody) {
   if (!match || !match.id) return;
   if (globalIo) {
     globalIo.emit("matchUpdated", match);
+    globalIo.emit("match_updated", match);
+
+    // Real-time broadcast for affected players' balances
+    if (match.creator?.id) broadcastUserUpdate(match.creator.id);
+    if (match.opponent?.id) broadcastUserUpdate(match.opponent.id);
+    if (match.squadData?.slots && Array.isArray(match.squadData.slots)) {
+      for (const slot of match.squadData.slots) {
+        if (slot.userId) broadcastUserUpdate(slot.userId);
+      }
+    }
+    // Real-time broadcast for platform finance
+    broadcastFinanceUpdate();
+
     let soundType = "default";
     let title = alertTitle || "";
     let body = alertBody || "";
     if (alertType === "NEW_MATCH_AWAITING_OPPONENT" || !match.opponent && (match.status === "PENDING_OPPONENT_STAKE" || match.status === "PENDING")) {
       soundType = "rival_joined";
-      title = title || `\u2694\uFE0F New Match Open: \u20A6${parseFloat(match.stakeAmount || 0).toLocaleString()} Challenge!`;
-      body = body || `${match.creator?.codmIgn || "A gladiator"} is awaiting an opponent for 1v1 ${match.gameMode || "Multiplayer"} on ${match.map || "Shipment"} (\u20A6${parseFloat(match.stakeAmount || 0).toLocaleString()}). Tap to accept!`;
+      title = title || `⚔️ New Match Open: ₦${parseFloat(match.stakeAmount || 0).toLocaleString()} Challenge!`;
+      body = body || `${match.creator?.codmIgn || "A gladiator"} is awaiting an opponent for 1v1 ${match.gameMode || "Multiplayer"} on ${match.map || "Shipment"} (₦${parseFloat(match.stakeAmount || 0).toLocaleString()}). Tap to accept!`;
     } else if (alertType === "RIVAL_JOINED" || match.status === "OPPONENT_STAKED_AWAITING_CREATOR") {
       soundType = "rival_joined";
-      title = title || `\u2694\uFE0F Rival Joined Challenge #${match.challengeCode}!`;
-      body = body || `${match.opponent?.codmIgn || "A rival"} staked \u20A6${parseFloat(match.stakeAmount || 0).toLocaleString()} in escrow. Match your stake to battle!`;
+      title = title || `⚔️ Rival Joined Challenge #${match.challengeCode}!`;
+      body = body || `${match.opponent?.codmIgn || "A rival"} staked ₦${parseFloat(match.stakeAmount || 0).toLocaleString()} in escrow. Match your stake to battle!`;
     } else if (alertType === "MATCH_STARTED" || match.status === "READY_TO_PLAY" || match.status === "IN_PROGRESS") {
       soundType = "match_started";
-      title = title || `\u{1F525} Match Started! Room Code #${match.roomCode || "Ready"}`;
-      body = body || `Both stakes locked (Pot: \u20A6${parseFloat(match.potAmount || 0).toLocaleString()}). Join CODM Room #${match.roomCode} now!`;
+      title = title || `🔥 Match Started! Room Code #${match.roomCode || "Ready"}`;
+      body = body || `Both stakes locked (Pot: ₦${parseFloat(match.potAmount || 0).toLocaleString()}). Join CODM Room #${match.roomCode} now!`;
     } else if (alertType === "RESULT_DISPUTED" || match.status === "DISPUTED") {
       soundType = "disputed";
-      title = title || `\u26A0\uFE0F Result Disputed on Challenge #${match.challengeCode}`;
+      title = title || `⚠️ Result Disputed on Challenge #${match.challengeCode}`;
       body = body || `Conflicting claims submitted. Escrow pot is protected while screenshots are reviewed.`;
     } else if (alertType === "MATCH_SETTLED" || match.status === "SETTLED") {
       soundType = "settled";
-      title = title || `\u{1F3C6} Match Settled! Winner: ${match.winnerIgn || "Champion"}`;
-      body = body || `\u20A6${parseFloat(match.winnerPayout || 0).toLocaleString()} awarded. Winnings credited to wallet.`;
+      title = title || `🏆 Match Settled! Winner: ${match.winnerIgn || "Champion"}`;
+      body = body || `₦${parseFloat(match.winnerPayout || 0).toLocaleString()} awarded. Winnings credited to wallet.`;
     } else if (alertType === "MATCH_CANCELLED" || match.status === "CANCELLED" || match.status === "ABANDONED" || match.status === "EXPIRED") {
       soundType = "default";
-      title = title || `\u{1F6E1}\uFE0F Match Escrow Released`;
+      title = title || `🛡️ Match Escrow Released`;
       body = body || `Challenge #${match.challengeCode} ended. Funds refunded to wallet.`;
     }
     if (title && body) {
@@ -1713,6 +1726,118 @@ function broadcastMatchStateChange(match, alertType, alertTitle, alertBody) {
     }
   }
 }
+async function broadcastFinanceUpdate() {
+  if (!globalIo) return;
+  try {
+    let resFin = await pool.query(`SELECT * FROM platform_finance WHERE id = 'main'`);
+    if (resFin.rows.length === 0) {
+      await pool.query(`INSERT INTO platform_finance (id, total_fees_collected, total_fees_withdrawn) VALUES ('main', 0, 0) ON CONFLICT DO NOTHING`);
+      resFin = await pool.query(`SELECT * FROM platform_finance WHERE id = 'main'`);
+    }
+    const finRow = resFin.rows[0] || { total_fees_collected: 0, total_fees_withdrawn: 0 };
+    let totalCollected = parseFloat(finRow.total_fees_collected || 0);
+
+    let totalReferralPayouts = 0;
+    try {
+      const refRes = await pool.query(`SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type = 'REFERRAL_EARNING'`);
+      totalReferralPayouts = parseFloat(refRes.rows[0]?.total || 0);
+    } catch (_) {}
+
+    if (totalCollected === 0) {
+      try {
+        const sumRes = await pool.query(`SELECT COALESCE(SUM(platform_fee), 0) as total FROM matches WHERE status = 'SETTLED'`);
+        const sumVal = parseFloat(sumRes.rows[0]?.total || 0);
+        if (sumVal > 0) {
+          totalCollected = Math.max(0, sumVal - totalReferralPayouts);
+          await pool.query(`UPDATE platform_finance SET total_fees_collected = ${escapeSql(totalCollected)} WHERE id = 'main'`);
+        }
+      } catch (_) {}
+    }
+
+    const totalWithdrawn = parseFloat(finRow.total_fees_withdrawn || 0);
+    const available = Math.max(0, totalCollected - totalWithdrawn);
+
+    let recentMatches = [];
+    try {
+      const matchRes = await pool.query(`
+        SELECT m.id, m.challenge_code, m.game_mode, m.map, m.stake_amount, m.pot_amount, m.platform_fee, m.winner_ign, m.settled_at,
+               COALESCE(SUM(t.amount), 0) as referral_deducted
+        FROM matches m
+        LEFT JOIN transactions t ON t.match_id = m.id AND t.type = 'REFERRAL_EARNING'
+        WHERE m.platform_fee > 0 
+        GROUP BY m.id, m.challenge_code, m.game_mode, m.map, m.stake_amount, m.pot_amount, m.platform_fee, m.winner_ign, m.settled_at, m.created_at
+        ORDER BY COALESCE(m.settled_at, m.created_at) DESC 
+        LIMIT 15
+      `);
+      recentMatches = matchRes.rows.map((m) => {
+        const grossFee = parseFloat(m.platform_fee || 0);
+        const refDeducted = parseFloat(m.referral_deducted || 0);
+        const netAdminFee = Math.max(0, grossFee - refDeducted);
+        return {
+          id: m.id,
+          challengeCode: m.challenge_code,
+          gameMode: m.game_mode,
+          map: m.map,
+          stakeAmount: parseFloat(m.stake_amount || 0),
+          potAmount: parseFloat(m.pot_amount || 0),
+          platformFee: netAdminFee,
+          grossPlatformFee: grossFee,
+          referralDeducted: refDeducted,
+          winnerIgn: m.winner_ign || "Winner",
+          settledAt: parseInt(m.settled_at || "0", 10)
+        };
+      });
+    } catch (_) {}
+
+    let recentWithdrawals = [];
+    try {
+      const txRes = await pool.query(`
+        SELECT id, amount, description, timestamp 
+        FROM transactions 
+        WHERE type = 'PLATFORM_FEE_WITHDRAWAL' 
+        ORDER BY timestamp DESC 
+        LIMIT 15
+      `);
+      recentWithdrawals = txRes.rows.map((tx) => ({
+        id: tx.id,
+        amount: parseFloat(tx.amount || 0),
+        description: tx.description,
+        timestamp: parseInt(tx.timestamp || "0", 10)
+      }));
+    } catch (_) {}
+
+    const payload = {
+      total_fees_collected: totalCollected,
+      total_fees_withdrawn: totalWithdrawn,
+      available_fees: available,
+      recent_fee_matches: recentMatches,
+      recent_withdrawals: recentWithdrawals
+    };
+
+    globalIo.emit("financeUpdated", payload);
+    globalIo.emit("finance_updated", payload);
+  } catch (err) {
+    console.error("Error broadcasting finance update:", err);
+  }
+}
+
+async function broadcastUserUpdate(userId: string) {
+  if (!globalIo || !userId) return;
+  try {
+    const updatedUser = await getUserFromDb(userId);
+    if (updatedUser) {
+      globalIo.emit("userUpdated", updatedUser);
+      globalIo.emit("userBalanceUpdated", {
+        userId: updatedUser.id,
+        balance: updatedUser.balance,
+        escrowBalance: updatedUser.escrowBalance
+      });
+    }
+  } catch (err) {
+    console.error("Error broadcasting user update:", err);
+  }
+}
+
 async function updatePlatformFinance(fee) {
   try {
     await pool.query(`
@@ -1720,10 +1845,12 @@ async function updatePlatformFinance(fee) {
       SET total_fees_collected = total_fees_collected + ${escapeSql(fee)}
       WHERE id = 'main'
     `);
+    setImmediate(() => broadcastFinanceUpdate());
   } catch (err) {
     console.error("Error updating platform finance:", err);
   }
 }
+
 async function withdrawPlatformFees(amount) {
   try {
     const res = await pool.query(`
@@ -1732,7 +1859,11 @@ async function withdrawPlatformFees(amount) {
       WHERE id = 'main' AND (total_fees_collected - total_fees_withdrawn) >= ${escapeSql(amount)}
       RETURNING *
     `);
-    return res.rows.length > 0;
+    if (res.rows.length > 0) {
+      setImmediate(() => broadcastFinanceUpdate());
+      return true;
+    }
+    return false;
   } catch (err) {
     console.error("Error withdrawing platform fees:", err);
     return false;
@@ -5259,8 +5390,8 @@ app.post("/api/users/:id/withdraw", rateLimitMiddleware(5, 6e4), secureSignature
   if (!Number.isFinite(numAmount) || numAmount <= 0) {
     return res.status(400).json({ error: "Invalid withdrawal amount" });
   }
-  if (numAmount < 5000) {
-    return res.status(400).json({ error: "Minimum withdrawal amount is ₦5,000" });
+  if (numAmount < 1500) {
+    return res.status(400).json({ error: "Minimum withdrawal amount is ₦1,500" });
   }
   if (numAmount > 1000000) {
     return res.status(400).json({ error: "Maximum single withdrawal amount is ₦1,000,000" });

@@ -73,7 +73,7 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
       setIsSubmitting(false);
       setIsConfirmStep(false);
       setResolvedAccountName(null);
-      setAmountInput(currentUser.balance >= 5000 ? currentUser.balance.toString() : '5000');
+      setAmountInput(currentUser.balance >= 1500 ? currentUser.balance.toString() : '1500');
       setBankName(currentUser.bankName || 'OPay Digital Bank');
       setAccountNumber(currentUser.accountNumber || '');
       setAccountName(currentUser.accountName || currentUser.codmIgn || '');
@@ -126,8 +126,8 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
     e.preventDefault();
     setError(null);
 
-    if (isNaN(amountToWithdraw) || amountToWithdraw < 5000) {
-      setError('Minimum cash out amount is ₦5,000');
+    if (isNaN(amountToWithdraw) || amountToWithdraw < 1500) {
+      setError('Minimum cash out amount is ₦1,500');
       return;
     }
 
@@ -360,7 +360,7 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
                       setAmountInput(val);
                       setError(null);
                     }}
-                    placeholder="Enter amount (min. ₦5,000)"
+                    placeholder="Enter amount (min. ₦1,500)"
                     className="w-full pl-8 pr-4 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono-nums font-bold text-base focus:outline-none focus:border-emerald-400"
                   />
                 </div>
