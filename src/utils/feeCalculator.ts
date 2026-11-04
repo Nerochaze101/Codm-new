@@ -14,9 +14,10 @@ export interface DepositFeeBreakdown {
 export interface WithdrawalFeeBreakdown {
   payoutAmount: number;
   gatewayFee: number; // Discarded Flutterwave cost (₦10.00)
-  adminFee: number;   // Added to admin dashboard balance (₦40.00)
-  totalFee: number;   // Total fee charged (₦50.00)
+  adminFee: number;   // Added to admin dashboard balance (₦5.50 for < ₦20,000, ₦40.00 for >= ₦20,000)
+  totalFee: number;   // Total fee charged (₦15.50 for < ₦20,000, ₦50.00 for >= ₦20,000)
   totalDeduction: number; // Total wallet deduction (payoutAmount + totalFee)
+  isHighTier: boolean; // True if payoutAmount >= ₦20,000
 }
 
 /**
@@ -40,14 +41,17 @@ export function calculateDepositFee(requestedAmount: number): DepositFeeBreakdow
 }
 
 /**
- * Calculate withdrawal fees and fund splits
+ * Calculate withdrawal fees and fund splits:
+ * - Withdrawals below ₦20,000: Total fee is ₦15.50 (₦10 Flutterwave cost + ₦5.50 to Admin Dashboard)
+ * - Withdrawals ₦20,000 and upward: Total fee is ₦50.00 (₦10 Flutterwave cost + ₦40.00 to Admin Dashboard)
  * @param requestedPayout - The target bank payout amount in NGN
  */
 export function calculateWithdrawalFee(requestedPayout: number): WithdrawalFeeBreakdown {
   const payoutAmount = Math.max(0, requestedPayout);
+  const isHighTier = payoutAmount >= 20000;
   const gatewayFee = 10.00; // Discarded Flutterwave cost
-  const adminFee = 40.00;   // Added to admin dashboard balance
-  const totalFee = 50.00;   // Total withdrawal fee
+  const adminFee = isHighTier ? 40.00 : 5.50;   // Added to admin dashboard balance
+  const totalFee = isHighTier ? 50.00 : 15.50;   // Total withdrawal fee
   const totalDeduction = payoutAmount + totalFee;
 
   return {
@@ -56,6 +60,7 @@ export function calculateWithdrawalFee(requestedPayout: number): WithdrawalFeeBr
     adminFee,
     totalFee,
     totalDeduction,
+    isHighTier,
   };
 }
 

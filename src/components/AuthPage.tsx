@@ -36,20 +36,20 @@ interface AuthPageProps {
 }
 
 const NIGERIAN_BANKS = [
-  'OPay Digital Services Limited (OPay)',
+  'OPay Digital Bank',
   'PalmPay',
-  'Kuda Bank',
   'Moniepoint Microfinance Bank',
-  'Guaranty Trust Bank (GTB)',
+  'Kuda Bank',
+  'GTBank (Guaranty Trust Bank)',
   'Zenith Bank',
   'Access Bank',
   'First Bank of Nigeria',
-  'United Bank for Africa (UBA)',
-  'Wema Bank',
+  'UBA (United Bank for Africa)',
+  'Wema Bank (ALAT)',
   'Stanbic IBTC Bank',
   'Fidelity Bank',
   'Sterling Bank',
-  'First City Monument Bank (FCMB)',
+  'FCMB (First City Monument Bank)',
   'Union Bank',
   'Providus Bank',
 ];
@@ -69,7 +69,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   const [signupPassword, setSignupPassword] = useState('');
   const [signupCodmIgn, setSignupCodmIgn] = useState('');
   const [signupPhone, setSignupPhone] = useState('');
-  const [signupBankName, setSignupBankName] = useState('OPay Digital Services Limited (OPay)');
+  const [signupBankName, setSignupBankName] = useState('OPay Digital Bank');
   const [signupAccountNumber, setSignupAccountNumber] = useState('');
   const [signupAccountName, setSignupAccountName] = useState('');
   const [signupVerificationCode, setSignupVerificationCode] = useState('');

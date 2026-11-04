@@ -2139,16 +2139,34 @@ app.get("/api/maintenance-status", async (req, res) => {
   }
 });
 
+// Support Chat Helper
+function formatSupportMessage(row) {
+  if (!row) return null;
+  const playerName = row.player_name || (row.sender_role === 'user' ? row.sender_name : null);
+  return {
+    id: row.id,
+    userId: row.user_id || row.userId,
+    senderName: row.sender_name || row.senderName || 'User',
+    playerName: playerName || row.sender_name || 'Player',
+    senderRole: row.sender_role || row.senderRole || 'user',
+    text: row.text,
+    category: row.category || 'General Inquiry',
+    room: row.room || `support_user_${row.user_id || row.userId}`,
+    status: row.status || 'open',
+    timestamp: typeof row.timestamp === 'string' ? Number(row.timestamp) : (Number(row.timestamp) || Date.now())
+  };
+}
+
 // Support Chat Routes
 app.get("/api/support/messages", async (req, res) => {
   try {
     const { userId } = req.query;
     if (!userId) return res.status(400).json({ error: "userId required" });
     const result = await pool.query(
-      `SELECT * FROM support_messages WHERE user_id = $1 OR room = $2 ORDER BY timestamp ASC LIMIT 100`,
+      `SELECT * FROM support_messages WHERE user_id = $1 OR room = $2 ORDER BY timestamp ASC LIMIT 200`,
       [userId, `support_user_${userId}`]
     );
-    res.json({ messages: result.rows });
+    res.json({ messages: result.rows.map(formatSupportMessage) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2161,11 +2179,23 @@ app.get("/api/support/admin/messages", async (req, res) => {
     if (!admin || !["admin", "super_admin", "moderator"].includes(admin.role)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
-    // Get latest messages from each user conversation
-    const result = await pool.query(
-      `SELECT DISTINCT ON (user_id) * FROM support_messages ORDER BY user_id, timestamp DESC LIMIT 200`
-    );
-    res.json({ messages: result.rows });
+    // Get latest messages from each user conversation with player display name
+    const result = await pool.query(`
+      SELECT 
+        sm.*,
+        COALESCE(u.codm_ign, u.username, (
+          SELECT sm2.sender_name FROM support_messages sm2 
+          WHERE sm2.user_id = sm.user_id AND sm2.sender_role = 'user' 
+          ORDER BY sm2.timestamp DESC LIMIT 1
+        ), sm.sender_name) as player_name
+      FROM (
+        SELECT DISTINCT ON (user_id) * FROM support_messages ORDER BY user_id, timestamp DESC
+      ) sm
+      LEFT JOIN users u ON u.id = sm.user_id
+      ORDER BY sm.timestamp DESC
+      LIMIT 200
+    `);
+    res.json({ messages: result.rows.map(formatSupportMessage) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2175,28 +2205,42 @@ app.post("/api/support/messages", async (req, res) => {
   try {
     const { userId, senderName, senderRole, text, category, room } = req.body;
     if (!userId || !text) return res.status(400).json({ error: "Missing fields" });
-    const id = `sup_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-    const timestamp = Date.now();
+    const id = req.body.id || `sup_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const timestamp = req.body.timestamp ? Number(req.body.timestamp) : Date.now();
+    const role = senderRole || "user";
+    const name = senderName || (role === "admin" ? "Admin Support" : "User");
+    const targetRoom = room || `support_user_${userId}`;
+    const cat = category || "General Inquiry";
+
     await pool.query(
       `INSERT INTO support_messages (id, user_id, sender_name, sender_role, text, category, room, timestamp, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open')`,
-      [id, userId, senderName, senderRole, text, category, room, timestamp]
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open')
+       ON CONFLICT (id) DO UPDATE SET text = EXCLUDED.text`,
+      [id, userId, name, role, text.trim(), cat, targetRoom, timestamp]
     );
 
-    const newMsg = { id, userId, senderName, senderRole, text, category, room, timestamp, status: 'open' };
+    const newMsg = {
+      id,
+      userId,
+      senderName: name,
+      senderRole: role,
+      text: text.trim(),
+      category: cat,
+      room: targetRoom,
+      timestamp,
+      status: 'open'
+    };
 
-    // Emit socket event for real-time delivery to admin dashboard
+    // Emit socket event for real-time delivery to user room and admin dashboard
     if (globalIo) {
-      const target = room || `support_user_${userId}`;
-      globalIo.to(target).emit("support_message", newMsg);
-      if (senderRole === "user") {
-        globalIo.to("support_admin_room").emit("support_message", newMsg);
-        // Send Telegram Alert
-        sendTelegramSupportAlert(senderName, text, userId);
+      globalIo.to(targetRoom).emit("support_message", newMsg);
+      globalIo.to("support_admin_room").emit("support_message", newMsg);
+      if (role === "user") {
+        sendTelegramSupportAlert(name, text.trim(), userId);
       }
     }
 
-    res.json({ success: true, id, timestamp });
+    res.json({ success: true, id, timestamp, message: newMsg });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2206,8 +2250,17 @@ app.post("/api/support/resolve", async (req, res) => {
   try {
     const { userId } = req.body;
     if (!userId) return res.status(400).json({ error: "userId required" });
-    await pool.query(`UPDATE support_messages SET status = 'resolved' WHERE user_id = $1`, [userId]);
-    res.json({ success: true });
+
+    // Resolve clears the chat from database completely for admin and users
+    await pool.query(`DELETE FROM support_messages WHERE user_id = $1 OR room = $2`, [userId, `support_user_${userId}`]);
+
+    // Real-time notification to clear chat on both player and admin interfaces
+    if (globalIo) {
+      globalIo.to(`support_user_${userId}`).emit("support_cleared", { userId, resolved: true });
+      globalIo.to("support_admin_room").emit("support_cleared", { userId, resolved: true });
+    }
+
+    res.json({ success: true, cleared: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2215,20 +2268,17 @@ app.post("/api/support/resolve", async (req, res) => {
 
 app.delete("/api/support/messages", async (req, res) => {
   try {
-    const { userId, force } = req.query;
+    const { userId } = req.query;
     if (!userId) return res.status(400).json({ error: "userId required" });
     
-    if (force === 'true') {
-       await pool.query(`DELETE FROM support_messages WHERE user_id = $1 OR room = $2`, [userId, `support_user_${userId}`]);
-    } else {
-       // Only delete if resolved
-       const check = await pool.query(`SELECT status FROM support_messages WHERE user_id = $1 AND status != 'resolved' LIMIT 1`, [userId]);
-       if (check.rows.length > 0) {
-         return res.status(400).json({ error: "Cannot delete active chat. Resolve it first." });
-       }
-       await pool.query(`DELETE FROM support_messages WHERE user_id = $1 OR room = $2`, [userId, `support_user_${userId}`]);
+    await pool.query(`DELETE FROM support_messages WHERE user_id = $1 OR room = $2`, [userId, `support_user_${userId}`]);
+
+    if (globalIo) {
+      globalIo.to(`support_user_${userId}`).emit("support_cleared", { userId, resolved: true });
+      globalIo.to("support_admin_room").emit("support_cleared", { userId, resolved: true });
     }
-    res.json({ success: true });
+
+    res.json({ success: true, cleared: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -4151,7 +4201,11 @@ app.post("/api/flutterwave/webhook", async (req, res) => {
         if (wdRes.rows.length > 0) {
           const wd = wdRes.rows[0];
           const failReason = trfData.complete_message || "Transfer failed at destination bank";
-          const refundAmount = parseFloat(wd.amount) + 50;
+          const wdBaseAmount = parseFloat(wd.amount);
+          const isHighTier = wdBaseAmount >= 20000;
+          const withdrawalFee = isHighTier ? 50 : 15.5;
+          const adminPlatformFee = isHighTier ? 40 : 5.5;
+          const refundAmount = wdBaseAmount + withdrawalFee;
 
           await pool.query(`
             UPDATE withdrawal_requests 
@@ -4170,16 +4224,16 @@ app.post("/api/flutterwave/webhook", async (req, res) => {
             `);
             await pool.query(`
               UPDATE platform_finance 
-              SET total_fees_collected = GREATEST(0, total_fees_collected - 40) 
+              SET total_fees_collected = GREATEST(0, total_fees_collected - ${escapeSql(adminPlatformFee)}) 
               WHERE id = 'main'
             `);
             const refundTxId = `tx_ref_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
-            const refundDesc = `\u21A9\uFE0F Automatic Refund: \u20A6${parseFloat(wd.amount).toLocaleString()} (+ \u20A650 fee) returned [Gateway failure: ${failReason}]`;
+            const refundDesc = `↩️ Automatic Refund: ₦${wdBaseAmount.toLocaleString()} (+ ₦${withdrawalFee.toFixed(2)} fee) returned [Gateway failure: ${failReason}]`;
             await pool.query(`
               INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
               VALUES (${escapeSql(refundTxId)}, ${escapeSql(wd.user_id)}, 'ESCROW_REFUND', ${escapeSql(refundAmount)}, ${escapeSql(refundDesc)}, ${Date.now()})
             `);
-            console.log(`\u2705 [Flutterwave Webhook] Refunded \u20A6${refundAmount} to user ${wd.user_id} due to failed transfer.`);
+            console.log(`✅ [Flutterwave Webhook] Refunded ₦${refundAmount} to user ${wd.user_id} due to failed transfer.`);
           }
         }
       } else if (trfStatus === "SUCCESSFUL") {
@@ -5240,13 +5294,16 @@ app.post("/api/users/:id/withdraw", rateLimitMiddleware(5, 6e4), secureSignature
       return res.status(403).json({ error: "Account Banned: Withdrawals are locked for this account." });
     }
 
-    // 7. Balance check (₦50 fee = ₦10 gateway + ₦40 admin platform fee)
+    // 7. Balance check (Tiered fee: ₦15.50 for < ₦20,000 [₦5.50 admin], ₦50.00 for >= ₦20,000 [₦40 admin])
+    const isHighTier = numAmount >= 20000;
+    const withdrawalFee = isHighTier ? 50 : 15.5;
+    const adminPlatformFee = isHighTier ? 40 : 5.5;
     const currentBalance = parseFloat(userRow.balance || 0);
-    const totalDeduction = numAmount + 50;
+    const totalDeduction = numAmount + withdrawalFee;
     if (totalDeduction > currentBalance) {
       await client.query("ROLLBACK");
       return res.status(400).json({
-        error: `Insufficient balance (includes \u20A650 withdrawal fee). Available: \u20A6${currentBalance.toLocaleString()}`
+        error: `Insufficient balance (includes ₦${withdrawalFee.toFixed(2)} withdrawal fee). Available: ₦${currentBalance.toLocaleString()}`
       });
     }
 
@@ -5347,12 +5404,12 @@ app.post("/api/users/:id/withdraw", rateLimitMiddleware(5, 6e4), secureSignature
           balance = balance - ${escapeSql(totalDeduction)}
       WHERE id = ${escapeSql(userId)}
     `);
-    await updatePlatformFinance(40);
+    await updatePlatformFinance(adminPlatformFee);
 
     const wdId = `wd_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
     const userIgn = userRow.codm_ign || userRow.username || "Gladiator";
     const remark = `CODM-${userIgn.slice(0, 10).toUpperCase()}-${cleanAccNum.slice(-4)}`;
-    const desc = `\u26A1 Instant Withdrawal: \u20A6${numAmount.toLocaleString()} (+ \u20A650 fee) to ${cleanBank} (${cleanAccNum})`;
+    const desc = `⚡ Instant Withdrawal: ₦${numAmount.toLocaleString()} (+ ₦${withdrawalFee.toFixed(2)} fee) to ${cleanBank} (${cleanAccNum})`;
 
     await client.query(`
       INSERT INTO transactions (id, user_id, type, amount, description, timestamp)
@@ -9156,15 +9213,20 @@ async function startServer() {
     socket.on("support_message", async (data) => {
       try {
         if (!data || !data.text || !data.text.trim()) return;
+        const targetUserId = data.targetUserId || data.userId || "unknown";
+        const targetRoom = data.targetRoom || data.room || (targetUserId !== 'unknown' ? `support_user_${targetUserId}` : null);
+        const role = data.senderRole || "user";
+        const name = data.senderName || (role === "admin" ? "Admin Support" : "User");
         const newMsg = {
           id: data.id || `sup_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
-          userId: data.userId || "unknown",
-          senderName: data.senderName || "User",
-          senderRole: data.senderRole || "user",
+          userId: targetUserId,
+          senderName: name,
+          senderRole: role,
           text: data.text.trim(),
           category: data.category || "General Inquiry",
-          room: data.room || data.targetRoom,
-          timestamp: data.timestamp || Date.now()
+          room: targetRoom,
+          status: data.status || 'open',
+          timestamp: data.timestamp ? Number(data.timestamp) : Date.now()
         };
 
         // Persist support message if not already persisted by REST API
@@ -9172,8 +9234,9 @@ async function startServer() {
           const existing = await pool.query(`SELECT id FROM support_messages WHERE id = $1`, [newMsg.id]);
           if (existing.rows.length === 0) {
             await pool.query(
-              `INSERT INTO support_messages (id, user_id, sender_name, sender_role, text, category, room, timestamp)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+              `INSERT INTO support_messages (id, user_id, sender_name, sender_role, text, category, room, timestamp, status)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open')
+               ON CONFLICT (id) DO UPDATE SET text = EXCLUDED.text`,
               [newMsg.id, newMsg.userId, newMsg.senderName, newMsg.senderRole, newMsg.text, newMsg.category, newMsg.room, newMsg.timestamp]
             );
           }
@@ -9181,16 +9244,15 @@ async function startServer() {
           console.error("Failed to persist support message:", dbErr);
         }
 
-        // Emit to specific room
-        const target = data.targetRoom || data.room;
-        if (target) {
-          io.to(target).emit("support_message", newMsg);
-          // Also notify admins if it's a user message
-          if (newMsg.senderRole === "user") {
-            io.to("support_admin_room").emit("support_message", newMsg);
-            // Send Telegram Alert
-            sendTelegramSupportAlert(newMsg.senderName, newMsg.text, newMsg.userId);
-          }
+        // Emit to specific user room and admin dashboard
+        if (targetRoom) {
+          io.to(targetRoom).emit("support_message", newMsg);
+        }
+        io.to("support_admin_room").emit("support_message", newMsg);
+        
+        if (newMsg.senderRole === "user") {
+          // Send Telegram Alert
+          sendTelegramSupportAlert(newMsg.senderName, newMsg.text, newMsg.userId);
         }
       } catch (err) {
         console.error("Error processing socket support message:", err);

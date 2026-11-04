@@ -364,6 +364,12 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
                     className="w-full pl-8 pr-4 py-2.5 rounded-xl bg-neutral-950 border border-neutral-700 text-white font-mono-nums font-bold text-base focus:outline-none focus:border-emerald-400"
                   />
                 </div>
+                <div className="flex items-center justify-between text-[11px] text-neutral-400 px-1">
+                  <span>Processing Fee:</span>
+                  <span className="font-mono font-bold text-amber-300">
+                    {amountToWithdraw >= 20000 ? '₦50.00 (≥ ₦20,000 tier)' : '₦15.50 (< ₦20,000 tier)'}
+                  </span>
+                </div>
               </div>
 
               {/* Direct Flutterwave Payout Channel */}

@@ -90,7 +90,15 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
   }, []);
 
   useEffect(() => {
-    if (currentUser.bankName) setBankName(currentUser.bankName);
+    if (currentUser.bankName) {
+      // Find matching bank or normalize
+      const matched = SUPPORTED_BANKS.find(
+        b => b.name.toLowerCase() === currentUser.bankName?.toLowerCase() ||
+             b.name.toLowerCase().includes(currentUser.bankName?.toLowerCase() || '') ||
+             currentUser.bankName?.toLowerCase().includes(b.name.toLowerCase() || '')
+      );
+      setBankName(matched ? matched.name : currentUser.bankName);
+    }
     if (currentUser.accountNumber) setAccountNumber(currentUser.accountNumber);
     if (currentUser.accountName) setAccountName(currentUser.accountName);
     if (currentUser.telegramChatId) setTelegramChatId(currentUser.telegramChatId);

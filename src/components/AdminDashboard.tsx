@@ -218,23 +218,77 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
   const [replyTexts, setReplyTexts] = useState<Record<string, string>>({});
   const socketRef = useRef<Socket | null>(null);
 
+  const normalizeAdminSupportMsg = (m: any): SupportMessage => ({
+    id: m.id || `sup_${Date.now()}`,
+    userId: m.userId || m.user_id,
+    senderName: m.senderName || m.sender_name || 'User',
+    senderRole: m.senderRole || m.sender_role || 'user',
+    text: m.text || '',
+    category: m.category || 'General Inquiry',
+    room: m.room || `support_user_${m.userId || m.user_id}`,
+    status: m.status || 'open',
+    timestamp: typeof m.timestamp === 'string' ? Number(m.timestamp) : (Number(m.timestamp) || Date.now()),
+    playerName: m.playerName || m.player_name || (m.senderRole === 'user' ? (m.senderName || m.sender_name) : undefined)
+  } as any);
+
   const handleReply = async (msg: SupportMessage) => {
     const text = replyTexts[msg.id];
     if (!text || !text.trim()) return;
 
-    if (socketRef.current) {
-      socketRef.current.emit('support_message', {
-        id: `rep_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
-        userId: currentUser.id,
-        senderName: 'Admin',
-        senderRole: currentUser.role,
-        text: text,
-        timestamp: Date.now(),
-        targetRoom: `support_user_${msg.userId}`
-      });
+    const targetUserId = msg.userId || (msg as any).user_id;
+    if (!targetUserId) {
+      alert('Error: Could not identify target player ID.');
+      return;
     }
+    const targetRoom = msg.room || `support_user_${targetUserId}`;
+    const senderName = currentUser.codmIgn || currentUser.username || 'Admin Support';
+    const replyId = `rep_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const timestamp = Date.now();
+
+    const replyPayload = {
+      id: replyId,
+      userId: targetUserId, // Attach reply to target player's ticket thread
+      senderName,
+      senderRole: currentUser.role || 'admin',
+      text: text.trim(),
+      category: msg.category || 'General Inquiry',
+      room: targetRoom,
+      targetRoom: targetRoom,
+      timestamp,
+      status: 'open'
+    };
+
+    // 1. Send via WebSocket immediately
+    if (socketRef.current) {
+      socketRef.current.emit('support_message', replyPayload);
+    }
+
+    // 2. Persist to REST API
+    try {
+      await fetch('/api/support/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(replyPayload)
+      });
+    } catch (err) {
+      console.error('Failed to post reply to server:', err);
+    }
+
     setReplyTexts(prev => ({ ...prev, [msg.id]: '' }));
-    alert('Reply sent!');
+
+    // Optimistically update card with latest message
+    setSupportMessages(prev =>
+      prev.map(m => {
+        if ((m.userId || (m as any).user_id) === targetUserId) {
+          return {
+            ...m,
+            ...replyPayload,
+            playerName: (m as any).playerName || (m.senderRole === 'user' ? m.senderName : 'Player')
+          };
+        }
+        return m;
+      })
+    );
   };
 
   // Disputes Hub state
@@ -500,7 +554,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
       });
       const data = await res.json();
       if (data && Array.isArray(data.messages)) {
-        setSupportMessages(data.messages);
+        setSupportMessages(data.messages.map(normalizeAdminSupportMsg));
       }
     } catch (err) {
       console.error('Failed to load support messages:', err);
@@ -550,12 +604,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     socketRef.current = socket;
     socket.emit('join_support_room', { userId: currentUser.id, role: currentUser.role, room: 'support_admin_room' });
 
-    socket.on('support_message', (newMsg: SupportMessage) => {
+    socket.on('support_message', (rawMsg: any) => {
+      const newMsg = normalizeAdminSupportMsg(rawMsg);
+      const targetUid = newMsg.userId;
+      if (!targetUid) return;
+
       setSupportMessages((prev) => {
         // Replace existing latest message for this user or add new one
-        const filtered = prev.filter(m => m.userId !== newMsg.userId);
+        const filtered = prev.filter(m => (m.userId || (m as any).user_id) !== targetUid);
         return [newMsg, ...filtered].sort((a, b) => b.timestamp - a.timestamp);
       });
+    });
+
+    socket.on('support_cleared', (data: { userId: string }) => {
+      if (data && data.userId) {
+        setSupportMessages((prev) => prev.filter(m => (m.userId || (m as any).user_id) !== data.userId));
+      }
     });
 
     const init = async () => {

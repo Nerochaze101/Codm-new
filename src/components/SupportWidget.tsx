@@ -40,18 +40,36 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser, hidde
     }
   });
 
-  const isAdminOrMod = currentUser && (currentUser.role === 'admin' || currentUser.role === 'super_admin' || currentUser.role === 'moderator');
+  const savedUserId = typeof window !== 'undefined' ? localStorage.getItem('codm_current_user_id') : null;
+  const isAdminOrMod = Boolean(currentUser && (currentUser.role === 'admin' || currentUser.role === 'super_admin' || currentUser.role === 'moderator'));
+  
+  // Use savedUserId immediately so page reload doesn't start with guestId during async auth check
   const userId = (currentUser && currentUser.id && currentUser.id !== 'guest')
     ? currentUser.id
-    : guestId;
+    : (savedUserId && savedUserId !== 'guest' ? savedUserId : guestId);
+
   const userName = (currentUser && currentUser.id && currentUser.id !== 'guest')
     ? (currentUser.codmIgn || currentUser.username || 'User')
-    : 'Guest Player';
+    : 'Player';
+
   const userRole = (currentUser && currentUser.id && currentUser.id !== 'guest')
     ? (currentUser.role || 'user')
-    : 'guest';
+    : 'user';
 
   const supportRoom = isAdminOrMod ? 'support_admin_room' : `support_user_${userId}`;
+
+  // Helper to normalize message payload from socket or REST
+  const normalizeMsg = (m: any): SupportMessage => ({
+    id: m.id || `sup_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+    userId: m.userId || m.user_id || userId,
+    senderName: m.senderName || m.sender_name || 'User',
+    senderRole: m.senderRole || m.sender_role || 'user',
+    text: m.text || '',
+    category: m.category || 'General Inquiry',
+    room: m.room || `support_user_${userId}`,
+    status: m.status || 'open',
+    timestamp: typeof m.timestamp === 'string' ? Number(m.timestamp) : (Number(m.timestamp) || Date.now()),
+  });
 
   // Allow opening widget from anywhere in the app (e.g. Navbar support button, FAQ links)
   useEffect(() => {
@@ -81,16 +99,25 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser, hidde
   }, [userId]);
 
   useEffect(() => {
+    if (!userId) return;
     const socket = io();
     socketRef.current = socket;
 
     socket.emit('join_support_room', { userId, role: userRole, room: supportRoom });
 
-    socket.on('support_message', (msg: SupportMessage) => {
+    socket.on('support_message', (rawMsg: any) => {
+      const msg = normalizeMsg(rawMsg);
       setMessages((prev) => {
         if (prev.some((m) => m.id === msg.id)) return prev;
         return [...prev, msg];
       });
+    });
+
+    // Clear chat immediately when ticket is resolved by admin or cleared
+    socket.on('support_cleared', (data: { userId: string }) => {
+      if (!data || data.userId === userId) {
+        setMessages([]);
+      }
     });
 
     loadChatHistory();
@@ -107,12 +134,13 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser, hidde
   }, [isOpen, messages]);
 
   const loadChatHistory = async () => {
+    if (!userId) return;
     setLoadingHistory(true);
     try {
       const res = await fetch(`/api/support/messages?userId=${userId}`);
       const data = await res.json();
       if (data && Array.isArray(data.messages)) {
-        setMessages(data.messages);
+        setMessages(data.messages.map(normalizeMsg));
       }
     } catch (err) {
       console.warn('Could not load support messages history:', err);
@@ -133,33 +161,43 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser, hidde
     setInputText('');
     setIsSending(true);
 
+    const msgId = `sup_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const timestamp = Date.now();
     const newMsg: SupportMessage = {
-      id: `sup_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+      id: msgId,
       userId,
       senderName: userName,
       senderRole: userRole,
       text: textToSend,
       category: selectedCategory,
-      timestamp: Date.now(),
+      room: supportRoom,
+      status: 'open',
+      timestamp,
     };
 
     setMessages((prev) => [...prev, newMsg]);
 
     try {
       if (socketRef.current) {
-        socketRef.current.emit('support_message', { ...newMsg, targetRoom: supportRoom });
+        socketRef.current.emit('support_message', {
+          ...newMsg,
+          targetUserId: userId,
+          targetRoom: supportRoom,
+        });
       }
 
       await fetch('/api/support/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          id: msgId,
           userId,
           senderName: userName,
           senderRole: userRole,
           text: textToSend,
           category: selectedCategory,
           room: supportRoom,
+          timestamp,
         }),
       });
     } catch (err) {
@@ -170,18 +208,17 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser, hidde
   };
 
   const handleClearChat = async () => {
-    if (!confirm('Clear support chat history? This will only work if the ticket is resolved.')) return;
+    if (!confirm('Clear support chat?')) return;
     try {
       const res = await fetch(`/api/support/messages?userId=${userId}`, { method: 'DELETE' });
       if (res.ok) {
         setMessages([]);
       } else {
         const data = await res.json();
-        alert(data.error || 'Failed to clear support chat. It might still be active.');
+        alert(data.error || 'Failed to clear support chat.');
       }
     } catch (err) {
       console.error('Failed to clear support chat:', err);
-      alert('Network error clearing chat.');
     }
   };
 
@@ -310,8 +347,8 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser, hidde
             )}
 
             {messages.map((msg) => {
-              const isMe = msg.userId === userId || (isAdminOrMod && msg.senderRole !== 'user');
               const isStaff = msg.senderRole === 'admin' || msg.senderRole === 'super_admin' || msg.senderRole === 'moderator';
+              const isMe = isAdminOrMod ? isStaff : !isStaff;
 
               return (
                 <div
