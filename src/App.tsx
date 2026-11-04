@@ -952,30 +952,17 @@ function MainApp() {
           <Route
             path="/msksksnuwje"
             element={
-              currentUser.role === 'admin' || currentUser.role === 'super_admin' || currentUser.role === 'moderator' ? (
-                <AdminDashboard
-                  currentUser={currentUser}
-                  onRefreshUser={async () => {
-                    try {
-                      const updated = await fetchUser(currentUser.id);
-                      setCurrentUser(updated);
-                    } catch (e) {
-                      console.error('Error refreshing admin profile:', e);
-                    }
-                  }}
-                />
-              ) : (
-                <LandingPage
-                  matches={matches}
-                  currentUser={currentUser}
-                  maintenanceMode={maintenanceActive}
-                  onOpenAuth={(mode) => {
-                    setAuthMode(mode || 'signup');
-                    navigate('/auth');
-                  }}
-                  onNavigateToArena={() => navigate('/arena')}
-                />
-              )
+              <AdminDashboard
+                currentUser={currentUser}
+                onRefreshUser={async () => {
+                  try {
+                    const updated = await fetchUser(currentUser.id);
+                    setCurrentUser(updated);
+                  } catch (e) {
+                    console.error('Error refreshing admin profile:', e);
+                  }
+                }}
+              />
             }
           />
           <Route

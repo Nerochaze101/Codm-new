@@ -168,7 +168,10 @@ export async function testPaystackConnection() {
 
 export async function fetchMatches(): Promise<Match[]> {
   try {
-    const res = await fetch('/api/matches');
+    const userId = localStorage.getItem('codm_current_user_id');
+    const res = await fetch('/api/matches', {
+      headers: userId ? { 'X-User-Id': userId } : {},
+    });
     return await parseResponse<Match[]>(res);
   } catch (e) {
     return [];
@@ -176,7 +179,10 @@ export async function fetchMatches(): Promise<Match[]> {
 }
 
 export async function fetchMatch(matchId: string): Promise<Match> {
-  const res = await fetch(`/api/matches/${matchId}`);
+  const userId = localStorage.getItem('codm_current_user_id');
+  const res = await fetch(`/api/matches/${matchId}`, {
+    headers: userId ? { 'X-User-Id': userId } : {},
+  });
   return await parseResponse<Match>(res);
 }
 
@@ -192,7 +198,10 @@ export async function createMatch(data: {
 }): Promise<Match> {
   const res = await fetch('/api/matches', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 
+      'Content-Type': 'application/json',
+      'X-User-Id': data.creatorId 
+    },
     body: JSON.stringify(data),
   });
   return await parseResponse<Match>(res);

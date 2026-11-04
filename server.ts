@@ -378,11 +378,21 @@ async function initDatabase() {
       CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions(timestamp);
       
       CREATE INDEX IF NOT EXISTS idx_withdrawal_user_id ON withdrawal_requests(user_id);
-      CREATE INDEX IF NOT EXISTS idx_withdrawal_status ON withdrawal_requests(status);
-      
-      CREATE INDEX IF NOT EXISTS idx_deposit_user_id ON deposit_requests(user_id);
       CREATE INDEX IF NOT EXISTS idx_deposit_status ON deposit_requests(status);
       CREATE INDEX IF NOT EXISTS idx_deposit_ref ON deposit_requests(payment_reference);
+
+      CREATE TABLE IF NOT EXISTS support_messages (
+        id VARCHAR(255) PRIMARY KEY,
+        user_id VARCHAR(255) NOT NULL,
+        sender_name VARCHAR(255) NOT NULL,
+        sender_role VARCHAR(50) NOT NULL,
+        text TEXT NOT NULL,
+        category VARCHAR(100),
+        room VARCHAR(255),
+        timestamp BIGINT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_support_user_id ON support_messages(user_id);
+      CREATE INDEX IF NOT EXISTS idx_support_timestamp ON support_messages(timestamp);
     `);
     const usersCountRes = await client.query("SELECT COUNT(*) FROM users");
     if (parseInt(usersCountRes.rows[0].count, 10) === 0) {
@@ -1803,10 +1813,20 @@ async function requireAdminAuth(req, res, next) {
   next();
 }
 async function maintenanceMiddleware(req, res, next) {
-  const publicPaths = ["/api/maintenance-status", "/api/server-ip", "/api/auth/login", "/api/auth/register", "/api/auth/request-verification", "/api/auth/reset-password", "/api/msksksnuwje/claim-admin", "/api/auth/login"];
+  const publicPaths = [
+    "/api/maintenance-status",
+    "/api/server-ip",
+    "/api/auth/login",
+    "/api/auth/register",
+    "/api/auth/request-verification",
+    "/api/auth/reset-password",
+    "/api/msksksnuwje/claim-admin"
+  ];
+  
   if (publicPaths.includes(req.path)) {
     return next();
   }
+  
   const maintenanceActive = await getMaintenanceMode();
   if (maintenanceActive) {
     const userId = req.headers["x-user-id"] || req.headers["x-admin-id"] || req.body?.userId || req.body?.adminUserId || req.query?.userId || req.query?.adminUserId;
@@ -1816,6 +1836,12 @@ async function maintenanceMiddleware(req, res, next) {
         return next();
       }
     }
+    
+    // Allow static file requests during maintenance
+    if (!req.path.startsWith("/api/")) {
+      return next();
+    }
+
     return res.status(503).json({
       error: "System Maintenance",
       message: "OPS STAKE is currently undergoing scheduled maintenance. Access is restricted to administrators only. We will be back online shortly.",
@@ -2107,6 +2133,66 @@ app.get("/api/maintenance-status", async (req, res) => {
     res.json({ maintenanceMode });
   } catch (err) {
     res.json({ maintenanceMode: false });
+  }
+});
+
+// Support Chat Routes
+app.get("/api/support/messages", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ error: "userId required" });
+    const result = await pool.query(
+      `SELECT * FROM support_messages WHERE user_id = $1 OR room = $2 ORDER BY timestamp ASC LIMIT 100`,
+      [userId, `support_user_${userId}`]
+    );
+    res.json({ messages: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/support/admin/messages", async (req, res) => {
+  try {
+    const adminId = req.headers["x-admin-id"] || req.query.userId;
+    const admin = await getUserFromDb(adminId);
+    if (!admin || !["admin", "super_admin", "moderator"].includes(admin.role)) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+    // Get latest messages from each user conversation
+    const result = await pool.query(
+      `SELECT DISTINCT ON (user_id) * FROM support_messages ORDER BY user_id, timestamp DESC LIMIT 200`
+    );
+    res.json({ messages: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/support/messages", async (req, res) => {
+  try {
+    const { userId, senderName, senderRole, text, category, room } = req.body;
+    if (!userId || !text) return res.status(400).json({ error: "Missing fields" });
+    const id = `sup_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const timestamp = Date.now();
+    await pool.query(
+      `INSERT INTO support_messages (id, user_id, sender_name, sender_role, text, category, room, timestamp)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [id, userId, senderName, senderRole, text, category, room, timestamp]
+    );
+    res.json({ success: true, id, timestamp });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/support/messages", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ error: "userId required" });
+    await pool.query(`DELETE FROM support_messages WHERE user_id = $1 OR room = $2`, [userId, `support_user_${userId}`]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 app.get("/api/server-ip", async (req, res) => {
@@ -8986,6 +9072,56 @@ async function startServer() {
   io.on("connection", (socket) => {
     let currentMatchId = null;
     let currentUserId = null;
+
+    socket.on("join_support_room", (data) => {
+      if (data.room) {
+        socket.join(data.room);
+        console.log(`Socket ${socket.id} joined support room: ${data.room}`);
+      }
+    });
+
+    socket.on("support_message", async (data) => {
+      try {
+        if (!data || !data.text || !data.text.trim()) return;
+        const newMsg = {
+          id: data.id || `sup_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+          userId: data.userId || "unknown",
+          senderName: data.senderName || "User",
+          senderRole: data.senderRole || "user",
+          text: data.text.trim(),
+          category: data.category || "General Inquiry",
+          room: data.room || data.targetRoom,
+          timestamp: data.timestamp || Date.now()
+        };
+
+        // Persist support message if not already persisted by REST API
+        try {
+          const existing = await pool.query(`SELECT id FROM support_messages WHERE id = $1`, [newMsg.id]);
+          if (existing.rows.length === 0) {
+            await pool.query(
+              `INSERT INTO support_messages (id, user_id, sender_name, sender_role, text, category, room, timestamp)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+              [newMsg.id, newMsg.userId, newMsg.senderName, newMsg.senderRole, newMsg.text, newMsg.category, newMsg.room, newMsg.timestamp]
+            );
+          }
+        } catch (dbErr) {
+          console.error("Failed to persist support message:", dbErr);
+        }
+
+        // Emit to specific room
+        const target = data.targetRoom || data.room;
+        if (target) {
+          io.to(target).emit("support_message", newMsg);
+          // Also notify admins if it's a user message
+          if (newMsg.senderRole === "user") {
+            io.to("support_admin_room").emit("support_message", newMsg);
+          }
+        }
+      } catch (err) {
+        console.error("Error processing socket support message:", err);
+      }
+    });
+
     socket.on("joinMatch", (data) => {
       const matchId = typeof data === "string" ? data : data?.matchId;
       const userId = data?.userId;

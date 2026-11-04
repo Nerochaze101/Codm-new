@@ -43,7 +43,9 @@ import {
   ShieldAlert,
   Handshake,
   Lock,
-  Copy
+  Copy,
+  Headphones,
+  MessageCircle
 } from 'lucide-react';
 import {
   fetchAdminUsers,
@@ -117,7 +119,7 @@ interface AdminFinanceData {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onRefreshUser }) => {
-  const [activeTab, setActiveTab] = useState<'review_queue' | 'finance' | 'users' | 'gmail' | 'disputes' | 'multi_accounts' | 'maintenance'>('review_queue');
+  const [activeTab, setActiveTab] = useState<'review_queue' | 'finance' | 'users' | 'gmail' | 'disputes' | 'multi_accounts' | 'maintenance' | 'support'>('review_queue');
   const [flaggedAccounts, setFlaggedAccounts] = useState<FlaggedAccountItem[]>([]);
   const [multiAccountClusters, setMultiAccountClusters] = useState<any[]>([]);
   const [flaggedLoading, setFlaggedLoading] = useState(false);
@@ -904,6 +906,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
               { id: 'finance', icon: Wallet, label: 'Treasury', badge: `₦${availableFees.toLocaleString()}`, roles: ['admin'] },
               { id: 'users', icon: Users, label: 'Gladiators', badge: usersList.length, roles: ['admin'] },
               { id: 'disputes', icon: ShieldCheck, label: 'Disputes', badge: disputesList.length, roles: ['admin', 'moderator'] },
+              { id: 'support', icon: Headphones, label: 'Support Inbox', badge: supportMessages.length, roles: ['admin', 'moderator'] },
               { id: 'gmail', icon: Mail, label: 'Sync Engine', badge: emailsList.length, roles: ['admin'] },
               { id: 'multi_accounts', icon: ShieldAlert, label: 'Multi-Accounts', badge: flaggedAccounts.length, roles: ['admin'] },
               { id: 'maintenance', icon: Settings, label: 'Maintenance & IP', badge: maintenanceEnabled ? 'ACTIVE' : 'OFF', roles: ['admin'] }
@@ -2592,6 +2595,101 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
 
 
         {/* TAB CONTENT: MAINTENANCE & SERVER IP */}
+        {activeTab === 'support' && (
+          <section className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-black text-white uppercase tracking-tighter">Support Inbox</h2>
+                <p className="text-xs text-neutral-500 font-medium">Real-time player assistance and query resolution.</p>
+              </div>
+              <button
+                onClick={loadSupportMessages}
+                className="p-3 bg-neutral-900 border border-neutral-800 rounded-xl text-neutral-400 hover:text-white transition-colors"
+              >
+                <RefreshCw size={18} className={loadingSupport ? 'animate-spin' : ''} />
+              </button>
+            </div>
+
+            {loadingSupport && supportMessages.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 bg-neutral-900/50 border border-neutral-800 rounded-[2.5rem] border-dashed">
+                <Loader2 size={40} className="text-amber-400 animate-spin mb-4" />
+                <p className="text-neutral-500 font-black uppercase tracking-widest text-[10px]">Loading Conversations...</p>
+              </div>
+            ) : supportMessages.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 bg-neutral-900/50 border border-neutral-800 rounded-[2.5rem] border-dashed">
+                <MessageCircle size={48} className="text-neutral-800 mb-4" />
+                <p className="text-neutral-500 font-black uppercase tracking-widest text-[10px]">No active support tickets</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {supportMessages.map((msg) => (
+                  <div key={msg.id} className="p-6 bg-neutral-900 border border-neutral-800 rounded-[2rem] space-y-4 hover:border-amber-400/30 transition-all group">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-amber-400/10 flex items-center justify-center text-amber-400 font-black">
+                          {msg.senderName[0].toUpperCase()}
+                        </div>
+                        <div>
+                          <div className="text-sm font-black text-white uppercase">{msg.senderName}</div>
+                          <div className="text-[10px] text-neutral-500 font-mono">User ID: {msg.userId.slice(-8)}</div>
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-neutral-600 font-mono">
+                        {new Date(msg.timestamp).toLocaleString()}
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-black/40 rounded-2xl border border-neutral-800/50">
+                      {msg.category && (
+                        <span className="inline-block px-2 py-0.5 rounded bg-neutral-800 text-neutral-400 font-mono text-[8px] uppercase border border-neutral-700 mb-2">
+                          {msg.category}
+                        </span>
+                      )}
+                      <p className="text-sm text-neutral-300 leading-relaxed italic">"{msg.text}"</p>
+                    </div>
+
+                    <div className="space-y-3">
+                      <textarea
+                        value={replyTexts[msg.id] || ''}
+                        onChange={(e) => setReplyTexts(prev => ({ ...prev, [msg.id]: e.target.value }))}
+                        placeholder="Type tactical response..."
+                        className="w-full bg-black border border-neutral-800 rounded-2xl px-4 py-3 text-xs text-white focus:border-amber-400 outline-none transition-all resize-none h-20"
+                      />
+                      <div className="grid grid-cols-2 gap-3">
+                        <button
+                          onClick={() => handleReply(msg)}
+                          disabled={!replyTexts[msg.id]?.trim()}
+                          className="py-3 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 disabled:hover:bg-amber-400 text-black font-black text-[10px] uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-amber-400/10"
+                        >
+                          <Send size={14} />
+                          Reply
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (!confirm(`Mark ticket for ${msg.senderName} as resolved and clear history?`)) return;
+                            try {
+                              const res = await fetch(`/api/support/messages?userId=${msg.userId}`, { method: 'DELETE' });
+                              if (res.ok) {
+                                setSupportMessages(prev => prev.filter(m => m.userId !== msg.userId));
+                              }
+                            } catch (err) {
+                              alert('Failed to resolve ticket');
+                            }
+                          }}
+                          className="py-3 bg-neutral-800 hover:bg-rose-500/20 hover:text-rose-400 text-neutral-400 font-black text-[10px] uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 border border-neutral-700 hover:border-rose-500/30"
+                        >
+                          <CheckCircle size={14} />
+                          Resolve
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
         {activeTab === 'maintenance' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
             {/* Header */}
