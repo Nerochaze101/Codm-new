@@ -1803,7 +1803,7 @@ async function requireAdminAuth(req, res, next) {
   next();
 }
 async function maintenanceMiddleware(req, res, next) {
-  const publicPaths = ["/api/maintenance-status", "/api/server-ip", "/api/auth/login", "/api/auth/register", "/api/auth/request-verification", "/api/auth/reset-password", "/api/msksksnuwje/claim-admin"];
+  const publicPaths = ["/api/maintenance-status", "/api/server-ip", "/api/auth/login", "/api/auth/register", "/api/auth/request-verification", "/api/auth/reset-password", "/api/msksksnuwje/claim-admin", "/api/auth/login"];
   if (publicPaths.includes(req.path)) {
     return next();
   }

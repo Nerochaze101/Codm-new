@@ -242,3 +242,14 @@ export interface OpaySmsAlert {
   createdAt: number;
   creditedAt?: number;
 }
+
+export interface SupportMessage {
+  id: string;
+  userId: string;
+  senderName: string;
+  senderRole: string;
+  text: string;
+  category?: string;
+  timestamp: number;
+  room?: string;
+}

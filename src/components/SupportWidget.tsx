@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { UserProfile } from '../types';
+import { UserProfile, SupportMessage } from '../types';
 import { MessageCircle, X, Send, ShieldCheck, UserCheck, Loader2, Headphones, Minimize2, Trash2, Check, Tag } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 
@@ -7,15 +7,7 @@ interface SupportWidgetProps {
   currentUser?: UserProfile;
 }
 
-interface SupportMessage {
-  id: string;
-  userId: string;
-  senderName: string;
-  senderRole: string;
-  text: string;
-  category?: string;
-  timestamp: number;
-}
+
 
 const SUPPORT_CATEGORIES = [
   { id: 'Deposit Issue', label: '💳 Deposit Issue' },
