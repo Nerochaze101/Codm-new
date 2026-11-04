@@ -69,7 +69,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   }, []);
 
   // Filter open challenges
-  const openChallenges = matches.filter(
+  const openChallenges = (Array.isArray(matches) ? matches : []).filter(
     (m) => m.status === 'PENDING_OPPONENT_STAKE'
   );
 

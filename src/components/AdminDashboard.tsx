@@ -117,7 +117,7 @@ interface AdminFinanceData {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onRefreshUser }) => {
-  const [activeTab, setActiveTab] = useState<'review_queue' | 'finance' | 'users' | 'gmail' | 'disputes' | 'multi_accounts' | 'maintenance' | 'support_inbox'>('review_queue');
+  const [activeTab, setActiveTab] = useState<'review_queue' | 'finance' | 'users' | 'gmail' | 'disputes' | 'multi_accounts' | 'maintenance'>('review_queue');
   const [flaggedAccounts, setFlaggedAccounts] = useState<FlaggedAccountItem[]>([]);
   const [multiAccountClusters, setMultiAccountClusters] = useState<any[]>([]);
   const [flaggedLoading, setFlaggedLoading] = useState(false);
@@ -906,7 +906,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
               { id: 'disputes', icon: ShieldCheck, label: 'Disputes', badge: disputesList.length, roles: ['admin', 'moderator'] },
               { id: 'gmail', icon: Mail, label: 'Sync Engine', badge: emailsList.length, roles: ['admin'] },
               { id: 'multi_accounts', icon: ShieldAlert, label: 'Multi-Accounts', badge: flaggedAccounts.length, roles: ['admin'] },
-              { id: 'support_inbox', icon: Inbox, label: 'Support Inbox', badge: supportMessages.length, roles: ['admin', 'moderator'] },
               { id: 'maintenance', icon: Settings, label: 'Maintenance & IP', badge: maintenanceEnabled ? 'ACTIVE' : 'OFF', roles: ['admin'] }
             ].filter(tab => tab.roles.includes(currentUser.role || 'user')).map(tab => (
               <button
@@ -2590,55 +2589,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
           </div>
         )}
 
-        {/* TAB CONTENT: SUPPORT INBOX */}
-        {activeTab === 'support_inbox' && (
-          <div className="space-y-6 animate-in fade-in duration-500">
-            <div className="bg-neutral-900 border border-neutral-800 p-8 rounded-[2.5rem] shadow-2xl">
-              <div className="flex justify-between items-center mb-8">
-                <h2 className="text-2xl font-black text-white uppercase tracking-tighter">Support Inbox</h2>
-                <button onClick={loadSupportMessages} className="p-2 text-neutral-500 hover:text-white transition-colors">
-                  <RefreshCw size={20} className={loadingSupport ? 'animate-spin' : ''} />
-                </button>
-              </div>
-              
-              {loadingSupport ? (
-                <div className="flex justify-center py-10"><Loader2 size={32} className="animate-spin text-amber-400" /></div>
-              ) : supportMessages.length === 0 ? (
-                <div className="text-center py-20 text-neutral-500 uppercase tracking-widest font-bold">No active support tickets.</div>
-              ) : (
-                <div className="space-y-4">
-                  {supportMessages.map(msg => (
-                    <div key={msg.id} className="p-5 bg-black/40 rounded-2xl border border-neutral-800 hover:border-neutral-700 transition-all">
-                      <div className="flex justify-between items-start mb-3">
-                         <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-neutral-800 flex items-center justify-center text-amber-400 font-bold">
-                               {msg.senderName.charAt(0).toUpperCase()}
-                            </div>
-                            <div>
-                               <div className="font-bold text-white text-sm">{msg.senderName}</div>
-                               <div className="text-[10px] text-neutral-500 uppercase tracking-wider">{msg.senderRole} • {msg.category || 'General'}</div>
-                            </div>
-                         </div>
-                         <span className="text-[10px] text-neutral-500 font-mono">{new Date(msg.timestamp).toLocaleDateString()} {new Date(msg.timestamp).toLocaleTimeString()}</span>
-                      </div>
-                      <p className="text-sm text-neutral-300 bg-neutral-900/50 p-4 rounded-xl">{msg.text}</p>
-                      <div className="mt-4 pt-4 border-t border-neutral-800 flex gap-2">
-                        <input 
-                           type="text" 
-                           placeholder="Reply to user..." 
-                           className="flex-1 bg-neutral-800 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-amber-400 border border-neutral-700"
-                           value={replyTexts[msg.id] || ''}
-                           onChange={(e) => setReplyTexts(prev => ({ ...prev, [msg.id]: e.target.value }))}
-                        />
-                        <button onClick={() => handleReply(msg)} className="px-4 bg-amber-400 text-black font-black text-xs uppercase rounded-lg hover:bg-amber-300">Reply</button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+
 
         {/* TAB CONTENT: MAINTENANCE & SERVER IP */}
         {activeTab === 'maintenance' && (
