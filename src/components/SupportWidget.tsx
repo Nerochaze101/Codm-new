@@ -238,41 +238,78 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser, hidde
 
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
-  const dragRef = useRef<{ startX: number; startY: number; initialX: number; initialY: number }>({ startX: 0, startY: 0, initialX: 0, initialY: 0 });
+  const dragRef = useRef<{ startX: number; startY: number; initialX: number; initialY: number; hasMoved: boolean }>({
+    startX: 0,
+    startY: 0,
+    initialX: 0,
+    initialY: 0,
+    hasMoved: false,
+  });
 
-  const handleMouseDown = (e: React.MouseEvent) => {
+  const handleStart = (clientX: number, clientY: number) => {
     setIsDragging(true);
     dragRef.current = {
-      startX: e.clientX,
-      startY: e.clientY,
+      startX: clientX,
+      startY: clientY,
       initialX: position.x,
       initialY: position.y,
+      hasMoved: false,
     };
-    e.preventDefault();
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    handleStart(e.clientX, e.clientY);
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 1) {
+      handleStart(e.touches[0].clientX, e.touches[0].clientY);
+    }
   };
 
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
+    const handleMove = (clientX: number, clientY: number) => {
       if (!isDragging) return;
-      const dx = e.clientX - dragRef.current.startX;
-      const dy = e.clientY - dragRef.current.startY;
+      const dx = clientX - dragRef.current.startX;
+      const dy = clientY - dragRef.current.startY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        dragRef.current.hasMoved = true;
+      }
       setPosition({
         x: dragRef.current.initialX + dx,
         y: dragRef.current.initialY + dy,
       });
     };
 
-    const handleMouseUp = () => {
+    const handleMouseMove = (e: MouseEvent) => {
+      handleMove(e.clientX, e.clientY);
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches.length > 0) {
+        handleMove(e.touches[0].clientX, e.touches[0].clientY);
+      }
+    };
+
+    const handleEnd = () => {
       setIsDragging(false);
     };
 
     if (isDragging) {
       window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
+      window.addEventListener('mouseup', handleEnd);
+      window.addEventListener('touchmove', handleTouchMove, { passive: false });
+      window.addEventListener('touchend', handleEnd);
+      window.addEventListener('touchcancel', handleEnd);
     }
+
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('mouseup', handleEnd);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleEnd);
+      window.removeEventListener('touchcancel', handleEnd);
     };
   }, [isDragging]);
 
@@ -287,14 +324,20 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser, hidde
     >
       {!isOpen && (
         <button
-          onClick={() => setIsOpen(true)}
-          className="relative group flex items-center gap-3 px-5 py-4 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-neutral-950 font-black rounded-full shadow-[0_10px_30px_rgba(245,158,11,0.3)] transition-all duration-300 hover:scale-105 active:scale-95 cursor-pointer border border-amber-300/50"
-          title="Open Live Customer Support"
+          onClick={() => {
+            if (!dragRef.current.hasMoved) {
+              setIsOpen(true);
+            }
+          }}
+          onMouseDown={handleMouseDown}
+          onTouchStart={handleTouchStart}
+          className="relative group flex items-center gap-3 px-5 py-4 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-neutral-950 font-black rounded-full shadow-[0_10px_30px_rgba(245,158,11,0.3)] transition-transform duration-200 hover:scale-105 active:scale-95 cursor-grab active:cursor-grabbing border border-amber-300/50 touch-none"
+          title="Open Live Customer Support (Drag to relocate)"
           aria-label="Customer Support"
         >
-          <div className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-emerald-500 border-2 border-neutral-950 animate-pulse" />
-          <Headphones size={22} className="stroke-[2.5]" />
-          <span className="text-xs uppercase tracking-wider font-heading">Support Chat</span>
+          <div className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-emerald-500 border-2 border-neutral-950 animate-pulse pointer-events-none" />
+          <Headphones size={22} className="stroke-[2.5] pointer-events-none" />
+          <span className="text-xs uppercase tracking-wider font-heading pointer-events-none">Support Chat</span>
         </button>
       )}
 
@@ -302,7 +345,8 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser, hidde
         <div className="w-[90vw] sm:w-[400px] h-[580px] bg-neutral-900 border border-neutral-800 rounded-[2rem] shadow-[0_20px_60px_rgba(0,0,0,0.8)] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-300">
           <div
             onMouseDown={handleMouseDown}
-            className="p-4 bg-neutral-950 border-b border-neutral-800 flex items-center justify-between cursor-grab active:cursor-grabbing"
+            onTouchStart={handleTouchStart}
+            className="p-4 bg-neutral-950 border-b border-neutral-800 flex items-center justify-between cursor-grab active:cursor-grabbing touch-none select-none"
             title="Click and drag to move chat window"
           >
             <div className="flex items-center gap-3 pointer-events-none">
@@ -323,6 +367,8 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser, hidde
             <div className="flex items-center gap-1">
               <button
                 onClick={handleClearChat}
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
                 title="Clear Resolved Chat"
                 className="p-2 rounded-xl text-neutral-400 hover:text-rose-400 hover:bg-neutral-800 transition-colors cursor-pointer"
               >
@@ -330,6 +376,8 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser, hidde
               </button>
               <button
                 onClick={handleClose}
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
                 title="Minimize Support Chat"
                 className="p-2 rounded-xl text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors cursor-pointer"
               >
@@ -337,6 +385,8 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser, hidde
               </button>
               <button
                 onClick={handleClose}
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
                 title="Close"
                 className="p-2 rounded-xl text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors cursor-pointer"
               >
