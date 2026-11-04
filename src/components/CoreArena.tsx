@@ -124,7 +124,9 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   };
 
   const activeStatuses = ['PENDING_OPPONENT_STAKE', 'OPPONENT_STAKED_AWAITING_CREATOR', 'READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'];
-  const myActiveMatches = matches.filter(m => {
+  const safeMatches = Array.isArray(matches) ? matches : [];
+  const myActiveMatches = safeMatches.filter(m => {
+    if (!m || !m.creator || !currentUser) return false;
     const isCreator = m.creator.id === currentUser.id;
     const isOpponent = m.opponent?.id === currentUser.id;
     const isInSquad = m.squadData?.slots?.some(s => s.userId === currentUser.id && s.staked);
