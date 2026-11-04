@@ -35,7 +35,7 @@ import { MatchCreatedSuccessModal } from './components/MatchCreatedSuccessModal'
 import { BackgroundUploadBanner } from './components/BackgroundUploadBanner';
 import { DisputesPage } from './components/DisputesPage';
 import { SupportWidget } from './components/SupportWidget';
-import { ShieldAlert } from 'lucide-react';
+import { ShieldAlert, UserCheck, Lock, RefreshCw } from 'lucide-react';
 
 const socket = io('/');
 

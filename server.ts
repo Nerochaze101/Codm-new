@@ -2967,7 +2967,7 @@ async function matchAndCreditOpayDeposit(smsDetails) {
       const depByAmount = await client.query(`
         SELECT * FROM deposit_requests 
         WHERE status = 'pending' 
-          AND amount = ${escapeSql(smsDetails.amount)}
+          AND (amount = ${escapeSql(smsDetails.amount)} OR amount = ${escapeSql(smsDetails.amount - 15.5)})
           AND expires_at > ${now}
         ORDER BY created_at DESC LIMIT 1 FOR UPDATE
       `);
@@ -2977,13 +2977,21 @@ async function matchAndCreditOpayDeposit(smsDetails) {
         if (uRes.rows.length > 0) matchedUser = uRes.rows[0];
       }
     }
-    if (matchedDepositReq && smsDetails.amount && Math.abs(smsDetails.amount - parseFloat(matchedDepositReq.amount)) > 0.01) {
-      console.warn(`\u26A0\uFE0F [Webhook Amount Mismatch] SMS alert has \u20A6${smsDetails.amount} but pending deposit #${matchedDepositReq.id} requested \u20A6${matchedDepositReq.amount}. Rejecting auto-credit to prevent mismatch.`);
-      matchedUser = null;
-      matchedDepositReq = null;
+    if (matchedDepositReq && smsDetails.amount) {
+      const baseReqAmt = parseFloat(matchedDepositReq.amount);
+      const totalReqAmt = baseReqAmt + 15.5;
+      const isBaseMatch = Math.abs(smsDetails.amount - baseReqAmt) <= 1.0;
+      const isTotalMatch = Math.abs(smsDetails.amount - totalReqAmt) <= 1.0;
+      if (!isBaseMatch && !isTotalMatch) {
+        console.warn(`⚠️ [Webhook Amount Mismatch] SMS alert has ₦${smsDetails.amount} but pending deposit #${matchedDepositReq.id} requested ₦${matchedDepositReq.amount} (total expected ₦${totalReqAmt}). Rejecting auto-credit to prevent mismatch.`);
+        matchedUser = null;
+        matchedDepositReq = null;
+      }
     }
     if (matchedUser) {
-      const amountToCredit = smsDetails.amount;
+      const baseAmt = matchedDepositReq ? parseFloat(matchedDepositReq.amount) : smsDetails.amount;
+      const isTotalWithFee = matchedDepositReq && Math.abs(smsDetails.amount - (baseAmt + 15.5)) <= 1.0;
+      const amountToCredit = matchedDepositReq ? baseAmt : smsDetails.amount;
       const refCode = matchedDepositReq?.payment_reference || cleanRef;
       const balRes = await client.query(`
         UPDATE users 
@@ -2991,6 +2999,9 @@ async function matchAndCreditOpayDeposit(smsDetails) {
         WHERE id = ${escapeSql(matchedUser.id)} 
         RETURNING balance;
       `);
+      if (isTotalWithFee) {
+        await updatePlatformFinance(5.5).catch(() => {});
+      }
       const newBalance = parseFloat(balRes.rows[0].balance);
       if (matchedDepositReq) {
         await client.query(`UPDATE deposit_requests SET status = 'completed', sms_alert_id = ${escapeSql(alertId)}, completed_at = ${now} WHERE id = ${escapeSql(matchedDepositReq.id)}`);
@@ -3114,8 +3125,10 @@ app.post("/api/deposits/create", async (req, res) => {
         accountNumber: "9238778409",
         accountName: "Quadri Abdulsalam",
         amount: numAmount,
+        totalPayable: numAmount + 15.5,
+        fee: 15.5,
         paymentReference: paymentRef,
-        instructions: `Transfer exactly \u20A6${numAmount.toLocaleString()} to Flutterwave MFB (9238778409). Enter '${paymentRef}' or '${user.codmIgn}' in transfer remark for instant automated crediting.`
+        instructions: `Transfer exactly ₦${(numAmount + 15.5).toLocaleString(undefined, { minimumFractionDigits: (numAmount + 15.5) % 1 !== 0 ? 2 : 0, maximumFractionDigits: 2 })} (₦${numAmount.toLocaleString()} deposit + ₦15.50 processing fee) to Flutterwave MFB (9238778409). Enter '${paymentRef}' or '${user.codmIgn}' in transfer remark for instant automated crediting.`
       }
     });
   } catch (err) {
@@ -3202,38 +3215,42 @@ app.post(["/api/deposits/verify", "/api/deposits/verify-session"], async (req, r
       });
     }
 
-    // Amount check: Parse amount from email body (very naive, assumes number is present)
-    const emailBody = emailsRes.rows[0].body;
-    const amountMatch = emailBody.match(/(\d{1,3}(?:,\d{3})*(?:\.\d+)?)/);
-    if (amountMatch) {
-      const amountInEmail = parseFloat(amountMatch[1].replace(/,/g, ''));
-      if (Math.abs(amountInEmail - parseFloat(dep.amount)) > 1) { // 1 Naira tolerance
-        await client.query("ROLLBACK");
-        return res.status(400).json({
-            error: `Amount mismatch: Request was for ₦${parseFloat(dep.amount).toLocaleString()}, but transaction was for ₦${amountInEmail.toLocaleString()}. Payment not fulfilled.`
-        });
-      }
-    }
-
     const matchedEmail = emailsRes.rows[0];
     const baseDepositAmount = parseFloat(dep.amount);
-    const expectedTransfer = baseDepositAmount + 15.5;
+    const expectedTransfer = baseDepositAmount + 15.5; // Total due: base deposit + ₦15.50 fee (₦10 gateway + ₦5.50 admin fee)
+
+    // Extract transferred amount from email subject and body using robust multi-pattern extractor
     const parsedEmailAmt = extractAmountFromEmailText(matchedEmail.subject + " " + matchedEmail.body);
-    if (parsedEmailAmt !== null && Math.abs(parsedEmailAmt - expectedTransfer) > 0.01) {
-      await client.query("ROLLBACK");
-      return res.status(400).json({
-        error: `The transferred amount (\u20A6${parsedEmailAmt.toLocaleString()}) does not match the required total of \u20A6${expectedTransfer.toLocaleString()} (\u20A6${baseDepositAmount.toLocaleString()} deposit + \u20A615.50 processing fee). Please transfer the exact amount requested.`
-      });
-    }
-    const fullText = (matchedEmail.subject + " " + matchedEmail.body).toLowerCase();
-    const numStr = expectedTransfer.toString();
-    const numFormatted = expectedTransfer.toLocaleString("en-US");
-    const containsExpected = fullText.includes(numStr) || fullText.includes(numFormatted);
-    if (!containsExpected && parsedEmailAmt === null) {
-      await client.query("ROLLBACK");
-      return res.status(400).json({
-        error: `Could not verify a transfer of \u20A6${expectedTransfer.toLocaleString()} for this transaction. Please confirm the amount on your receipt.`
-      });
+
+    if (parsedEmailAmt !== null) {
+      // Allow matching either the total amount with fee (e.g. ₦115.50) or the base deposit amount (e.g. ₦100)
+      const matchesTotal = Math.abs(parsedEmailAmt - expectedTransfer) <= 1.0;
+      const matchesBase = Math.abs(parsedEmailAmt - baseDepositAmount) <= 1.0;
+
+      if (!matchesTotal && !matchesBase) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          error: `Amount mismatch: Request was for ₦${expectedTransfer.toLocaleString(undefined, { minimumFractionDigits: expectedTransfer % 1 !== 0 ? 2 : 0, maximumFractionDigits: 2 })} total (₦${baseDepositAmount.toLocaleString()} deposit + ₦15.50 fee), but transaction was for ₦${parsedEmailAmt.toLocaleString()}. Payment not fulfilled.`
+        });
+      }
+    } else {
+      // Fallback text check across subject and body
+      const fullText = (matchedEmail.subject + " " + matchedEmail.body).toLowerCase();
+      const expectedVariants = [
+        expectedTransfer.toString(),
+        expectedTransfer.toFixed(2),
+        expectedTransfer.toLocaleString("en-US"),
+        baseDepositAmount.toString(),
+        baseDepositAmount.toFixed(2),
+        baseDepositAmount.toLocaleString("en-US")
+      ];
+      const containsExpected = expectedVariants.some(v => fullText.includes(v.toLowerCase()));
+      if (!containsExpected) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          error: `Could not verify a transfer of ₦${expectedTransfer.toLocaleString(undefined, { minimumFractionDigits: expectedTransfer % 1 !== 0 ? 2 : 0, maximumFractionDigits: 2 })} for this transaction. Please confirm the amount on your receipt.`
+        });
+      }
     }
     const now = Date.now();
     const amountToCredit = baseDepositAmount;
@@ -6256,7 +6273,7 @@ async function handleTelegramMessage(message) {
           });
         }
         console.log(`✅ [Telegram Bot] User ${user.codmIgn} (${user.id}) automatically linked to Chat ID ${chatId}!`);
-        const appUrl = "https://opsstake.online";
+        const appUrl = (process.env.APP_URL || "https://opsstake.online").replace(/\/$/, "");
         await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
