@@ -773,6 +773,8 @@ function MainApp() {
           }}
           onNavigateToArena={() => navigate('/arena')}
         />
+        {/* Customer Support Floating Widget Chat */}
+        <SupportWidget currentUser={currentUser} />
       </div>
     );
   }
@@ -780,17 +782,21 @@ function MainApp() {
   // 2. AUTHENTICATION PAGE VIEW
   if (currentTab === 'auth') {
     return (
-      <AuthPage
-        initialMode={authMode}
-        initialReferralCode={refCode || undefined}
-        onSignUp={handleSignUp}
-        onSignIn={handleSignIn}
-        onBackToLanding={() => {
-          window.history.replaceState({}, '', '/');
-          navigate('/');
-        }}
-        demoUsers={{}}
-      />
+      <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col bg-tactical-grid selection:bg-amber-500 selection:text-black">
+        <AuthPage
+          initialMode={authMode}
+          initialReferralCode={refCode || undefined}
+          onSignUp={handleSignUp}
+          onSignIn={handleSignIn}
+          onBackToLanding={() => {
+            window.history.replaceState({}, '', '/');
+            navigate('/');
+          }}
+          demoUsers={{}}
+        />
+        {/* Customer Support Floating Widget Chat */}
+        <SupportWidget currentUser={currentUser} />
+      </div>
     );
   }
 
@@ -1097,8 +1103,8 @@ function MainApp() {
         }}
       />
 
-      {/* Customer Support Floating Widget Chat */}
-      <SupportWidget currentUser={currentUser} />
+      {/* Customer Support Floating Widget Chat (Hidden on Admin Dashboard where Staff Inbox is used) */}
+      <SupportWidget currentUser={currentUser} hidden={currentTab === 'admin'} />
     </div>
   );
 }

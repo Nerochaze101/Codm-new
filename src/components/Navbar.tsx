@@ -3,7 +3,7 @@ import { UserProfile } from '../types';
 import {
   Menu, X, Swords, CreditCard, ShieldCheck, Clock,
   User, Trophy, Plus, LogOut, ChevronRight, Wallet,
-  Crosshair, ArrowRight, Bell, ShieldAlert
+  Crosshair, ArrowRight, Bell, ShieldAlert, Headphones
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { useSound } from '../hooks/useSound';
@@ -113,6 +113,14 @@ export const Navbar: React.FC<NavbarProps> = ({
       badge: 'EARN',
       badgeColor: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40',
     },
+    {
+      id: 'support',
+      label: 'Live Customer Support',
+      subtitle: '24/7 Admin & Referee Chat Assistance',
+      icon: Headphones,
+      badge: 'ONLINE',
+      badgeColor: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40',
+    },
   ];
 
   if (currentUser.role === 'admin' || currentUser.role === 'super_admin' || currentUser.role === 'moderator') {
@@ -128,6 +136,11 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const handleSelectTab = (tabId: string) => {
     playTabSound();
+    if (tabId === 'support') {
+      window.dispatchEvent(new CustomEvent('open-support-widget'));
+      setIsMenuOpen(false);
+      return;
+    }
     onNavigate(tabId);
     setIsMenuOpen(false);
   };
@@ -198,6 +211,21 @@ export const Navbar: React.FC<NavbarProps> = ({
               <div className="hidden md:block text-left pr-1">
                 <div className="font-bold text-white text-xs leading-tight">{currentUser.codmIgn}</div>
               </div>
+            </button>
+
+            {/* Live Customer Support Button */}
+            <button
+              type="button"
+              onClick={() => {
+                playTabSound();
+                window.dispatchEvent(new CustomEvent('open-support-widget'));
+              }}
+              className="relative p-2 sm:p-2.5 rounded-xl border border-neutral-800 hover:border-amber-400/50 bg-neutral-900 text-neutral-300 hover:text-white transition-all cursor-pointer shadow-md active:scale-95 flex items-center justify-center"
+              title="24/7 Live Customer Support Chat"
+              aria-label="Customer Support"
+            >
+              <Headphones className="w-4 h-4 sm:w-5 sm:h-5 text-amber-400" />
+              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-emerald-500 rounded-full ring-2 ring-neutral-950 animate-pulse" />
             </button>
 
             {/* Live Match Alerts Bell Button */}

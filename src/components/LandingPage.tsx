@@ -697,7 +697,14 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             <span>·</span>
             <span>10% Platform Rake</span>
             <span>·</span>
-            <button onClick={() => onOpenAuth('signin')} className="text-amber-400 hover:underline cursor-pointer">
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent('open-support-widget'))}
+              className="text-amber-400 hover:text-amber-300 hover:underline cursor-pointer flex items-center gap-1 font-bold"
+            >
+              <span>🎧 24/7 Live Support</span>
+            </button>
+            <span>·</span>
+            <button onClick={() => onOpenAuth('signin')} className="text-neutral-400 hover:text-white hover:underline cursor-pointer">
               Sign In
             </button>
             <span>·</span>

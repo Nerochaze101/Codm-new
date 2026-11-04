@@ -5,9 +5,8 @@ import { io, Socket } from 'socket.io-client';
 
 interface SupportWidgetProps {
   currentUser?: UserProfile;
+  hidden?: boolean;
 }
-
-
 
 const SUPPORT_CATEGORIES = [
   { id: 'Deposit Issue', label: '💳 Deposit Issue' },
@@ -16,7 +15,7 @@ const SUPPORT_CATEGORIES = [
   { id: 'General Inquiry', label: '💬 General Inquiry' },
 ];
 
-export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser }) => {
+export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser, hidden = false }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isCancelled, setIsCancelled] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('General Inquiry');
@@ -27,12 +26,42 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser }) => 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<Socket | null>(null);
 
+  // Persistent guest identity so guests keep their ticket conversation across re-renders
+  const [guestId] = useState<string>(() => {
+    try {
+      let stored = localStorage.getItem('codm_guest_support_id');
+      if (!stored) {
+        stored = `guest_${Math.random().toString(36).substring(2, 8)}`;
+        localStorage.setItem('codm_guest_support_id', stored);
+      }
+      return stored;
+    } catch {
+      return `guest_${Date.now()}`;
+    }
+  });
+
   const isAdminOrMod = currentUser && (currentUser.role === 'admin' || currentUser.role === 'super_admin' || currentUser.role === 'moderator');
-  const userId = currentUser ? currentUser.id : 'guest_' + Math.random().toString(36).substr(2, 6);
-  const userName = currentUser ? (currentUser.codmIgn || currentUser.username || 'User') : 'Guest User';
-  const userRole = currentUser ? (currentUser.role || 'user') : 'guest';
+  const userId = (currentUser && currentUser.id && currentUser.id !== 'guest')
+    ? currentUser.id
+    : guestId;
+  const userName = (currentUser && currentUser.id && currentUser.id !== 'guest')
+    ? (currentUser.codmIgn || currentUser.username || 'User')
+    : 'Guest Player';
+  const userRole = (currentUser && currentUser.id && currentUser.id !== 'guest')
+    ? (currentUser.role || 'user')
+    : 'guest';
 
   const supportRoom = isAdminOrMod ? 'support_admin_room' : `support_user_${userId}`;
+
+  // Allow opening widget from anywhere in the app (e.g. Navbar support button, FAQ links)
+  useEffect(() => {
+    const handleOpen = () => {
+      setIsCancelled(false);
+      setIsOpen(true);
+    };
+    window.addEventListener('open-support-widget', handleOpen);
+    return () => window.removeEventListener('open-support-widget', handleOpen);
+  }, []);
 
   useEffect(() => {
     const cancelledTime = localStorage.getItem(`codm_support_cancelled_${userId}`);
@@ -156,7 +185,11 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser }) => 
     }
   };
 
-  const handleCancelWidget = () => {
+  const handleClose = () => {
+    setIsOpen(false);
+  };
+
+  const handleSnooze = () => {
     setIsOpen(false);
     setIsCancelled(true);
     localStorage.setItem(`codm_support_cancelled_${userId}`, Date.now().toString());
@@ -166,14 +199,16 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser }) => 
     }, 60000);
   };
 
-  if (isCancelled) return null;
+  if (hidden || isCancelled) return null;
 
   return (
-    <div className="fixed bottom-6 right-6 z-50">
+    <div className="fixed bottom-6 right-6 z-[60]">
       {!isOpen && (
         <button
           onClick={() => setIsOpen(true)}
           className="relative group flex items-center gap-3 px-5 py-4 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-neutral-950 font-black rounded-full shadow-[0_10px_30px_rgba(245,158,11,0.3)] transition-all duration-300 hover:scale-105 active:scale-95 cursor-pointer border border-amber-300/50"
+          title="Open Live Customer Support"
+          aria-label="Customer Support"
         >
           <div className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-emerald-500 border-2 border-neutral-950 animate-pulse" />
           <Headphones size={22} className="stroke-[2.5]" />
@@ -202,14 +237,21 @@ export const SupportWidget: React.FC<SupportWidgetProps> = ({ currentUser }) => 
             <div className="flex items-center gap-1">
               <button
                 onClick={handleClearChat}
-                title="Clear Chat"
+                title="Clear Resolved Chat"
                 className="p-2 rounded-xl text-neutral-400 hover:text-rose-400 hover:bg-neutral-800 transition-colors cursor-pointer"
               >
                 <Trash2 size={16} />
               </button>
               <button
-                onClick={handleCancelWidget}
-                title="Close Widget (Snooze for 60s)"
+                onClick={handleClose}
+                title="Minimize Support Chat"
+                className="p-2 rounded-xl text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors cursor-pointer"
+              >
+                <Minimize2 size={16} />
+              </button>
+              <button
+                onClick={handleClose}
+                title="Close"
                 className="p-2 rounded-xl text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors cursor-pointer"
               >
                 <X size={16} />
