@@ -35,6 +35,7 @@ import { MatchCreatedSuccessModal } from './components/MatchCreatedSuccessModal'
 import { BackgroundUploadBanner } from './components/BackgroundUploadBanner';
 import { DisputesPage } from './components/DisputesPage';
 import { SupportWidget } from './components/SupportWidget';
+import { GlobalBroadcastBanner } from './components/GlobalBroadcastBanner';
 import { ShieldAlert, UserCheck, Lock, RefreshCw } from 'lucide-react';
 
 const socket = io('/');
@@ -763,6 +764,7 @@ function MainApp() {
   if (currentTab === 'landing') {
     return (
       <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col bg-tactical-grid selection:bg-amber-500 selection:text-black">
+        <GlobalBroadcastBanner />
         <LandingPage
           matches={matches}
           currentUser={currentUser}
@@ -783,6 +785,7 @@ function MainApp() {
   if (currentTab === 'auth') {
     return (
       <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col bg-tactical-grid selection:bg-amber-500 selection:text-black">
+        <GlobalBroadcastBanner />
         <AuthPage
           initialMode={authMode}
           initialReferralCode={refCode || undefined}
@@ -803,6 +806,7 @@ function MainApp() {
   // 3. IN-APP PAGES WITH ROUTING & NAVBAR / BOTTOM DOCK
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col bg-tactical-grid selection:bg-amber-500 selection:text-black relative">
+      <GlobalBroadcastBanner />
       <BackgroundUploadBanner
         isUploading={globalUploading}
         progress={globalProgress}

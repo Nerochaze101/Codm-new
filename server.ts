@@ -215,6 +215,16 @@ async function initDatabase() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS flagged_with_user_id VARCHAR(255);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS flag_matches JSONB;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS conflict_strikes INT DEFAULT 0;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS flag_dismissed BOOLEAN DEFAULT false;
+
+      CREATE TABLE IF NOT EXISTS global_broadcasts (
+        id VARCHAR(255) PRIMARY KEY,
+        message TEXT NOT NULL,
+        type VARCHAR(50) DEFAULT 'info',
+        active BOOLEAN DEFAULT true,
+        created_at BIGINT,
+        created_by VARCHAR(255)
+      );
 
       CREATE TABLE IF NOT EXISTS matches (
         id VARCHAR(255) PRIMARY KEY,
@@ -2027,9 +2037,12 @@ app.get("/api/msksksnuwje/flagged-accounts", async (req, res) => {
           clusters.push({
             attribute: attrName,
             value: val,
-            users: group.map((g) => ({ id: g.id, codmIgn: g.codm_ign || g.username, email: g.email, phone: g.phone, accountNumber: g.account_number }))
+            users: group.map((g) => ({ id: g.id, codmIgn: g.codm_ign || g.username, email: g.email, phone: g.phone, accountNumber: g.account_number, role: g.role }))
           });
           for (const u of group) {
+            // Do not auto-flag if admin explicitly dismissed flag, unless account is banned
+            if (u.flag_dismissed && u.role !== 'banned') continue;
+
             flaggedUsersMap.set(u.id, {
               id: u.id,
               username: u.username || u.codm_ign,
@@ -2040,8 +2053,10 @@ app.get("/api/msksksnuwje/flagged-accounts", async (req, res) => {
               accountNumber: u.account_number,
               accountName: u.account_name,
               balance: parseFloat(u.balance || 0),
+              role: u.role || 'user',
               isFlagged: true,
-              flagReason: `Shared ${attrName}: ${val} with ${group.filter((g) => g.id !== u.id).map((g) => g.codm_ign).join(", ")}`,
+              flagDismissed: !!u.flag_dismissed,
+              flagReason: u.role === 'banned' ? (u.flag_reason || 'Banned account') : `Shared ${attrName}: ${val} with ${group.filter((g) => g.id !== u.id).map((g) => g.codm_ign).join(", ")}`,
               flaggedWithUserId: group.find((g) => g.id !== u.id)?.id,
               createdAt: parseInt(u.created_at || "0", 10)
             });
@@ -2054,7 +2069,7 @@ app.get("/api/msksksnuwje/flagged-accounts", async (req, res) => {
     checkAndAddCluster("CODM IGN", ignMap);
     checkAndAddCluster("Bank Account Number", accMap);
     for (const u of users) {
-      if (u.is_flagged && !flaggedUsersMap.has(u.id)) {
+      if ((u.is_flagged || u.role === 'banned') && !flaggedUsersMap.has(u.id)) {
         flaggedUsersMap.set(u.id, {
           id: u.id,
           username: u.username || u.codm_ign,
@@ -2065,7 +2080,9 @@ app.get("/api/msksksnuwje/flagged-accounts", async (req, res) => {
           accountNumber: u.account_number,
           accountName: u.account_name,
           balance: parseFloat(u.balance || 0),
+          role: u.role || 'user',
           isFlagged: true,
+          flagDismissed: !!u.flag_dismissed,
           flagReason: u.flag_reason || "Flagged by multi-accounting detection system",
           flaggedWithUserId: u.flagged_with_user_id,
           createdAt: parseInt(u.created_at || "0", 10)
@@ -2085,9 +2102,10 @@ app.post("/api/msksksnuwje/flagged-accounts/:userId/dismiss", async (req, res) =
     const { userId } = req.params;
     await pool.query(`
       UPDATE users 
-      SET is_flagged = false, flag_reason = NULL, flagged_with_user_id = NULL, flag_matches = NULL 
+      SET is_flagged = false, flag_dismissed = true, flag_reason = NULL, flagged_with_user_id = NULL, flag_matches = NULL 
       WHERE id = ${escapeSql(userId)}
     `);
+    broadcastUserUpdate(userId);
     res.json({ success: true, message: "Account flag dismissed" });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to dismiss flag" });
@@ -2098,9 +2116,10 @@ app.post("/api/msksksnuwje/flagged-accounts/:userId/ban", async (req, res) => {
     const { userId } = req.params;
     await pool.query(`
       UPDATE users 
-      SET role = 'banned', is_flagged = true, flag_reason = 'Account banned for multi-accounting violation'
+      SET role = 'banned', is_flagged = true, flag_dismissed = false, flag_reason = 'Account banned for multi-accounting violation'
       WHERE id = ${escapeSql(userId)}
     `);
+    broadcastUserUpdate(userId);
     res.json({ success: true, message: "Account banned successfully" });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to ban account" });
@@ -2111,12 +2130,77 @@ app.post("/api/msksksnuwje/flagged-accounts/:userId/unban", async (req, res) => 
     const { userId } = req.params;
     await pool.query(`
       UPDATE users 
-      SET role = 'user', is_flagged = false, flag_reason = NULL 
+      SET role = 'user', is_flagged = false, flag_dismissed = true, flag_reason = NULL 
       WHERE id = ${escapeSql(userId)}
     `);
+    broadcastUserUpdate(userId);
     res.json({ success: true, message: "Account unbanned successfully" });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to unban account" });
+  }
+});
+app.get("/api/broadcast", async (req, res) => {
+  try {
+    const resB = await pool.query(`SELECT * FROM global_broadcasts WHERE active = true ORDER BY created_at DESC LIMIT 1`);
+    if (resB.rows.length > 0) {
+      const b = resB.rows[0];
+      return res.json({
+        broadcast: {
+          id: b.id,
+          message: b.message,
+          type: b.type || 'info',
+          active: b.active,
+          createdAt: parseInt(b.created_at || "0", 10)
+        }
+      });
+    }
+    res.json({ broadcast: null });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to fetch active broadcast" });
+  }
+});
+app.post("/api/msksksnuwje/broadcast", async (req, res) => {
+  try {
+    const { message, type = 'info' } = req.body || {};
+    if (!message || !message.trim()) {
+      return res.status(400).json({ error: "Broadcast message text is required" });
+    }
+    const bId = `bcast_${Date.now()}`;
+    const cleanMsg = message.trim();
+    const cleanType = ['info', 'warning', 'urgent', 'success'].includes(type) ? type : 'info';
+    const createdAt = Date.now();
+
+    await pool.query(`UPDATE global_broadcasts SET active = false WHERE active = true`);
+    await pool.query(`
+      INSERT INTO global_broadcasts (id, message, type, active, created_at, created_by)
+      VALUES (
+        ${escapeSql(bId)},
+        ${escapeSql(cleanMsg)},
+        ${escapeSql(cleanType)},
+        true,
+        ${createdAt},
+        ${escapeSql(req.adminUser.id)}
+      )
+    `);
+
+    const payload = { id: bId, message: cleanMsg, type: cleanType, active: true, createdAt };
+    if (globalIo) {
+      globalIo.emit("global_broadcast", payload);
+    }
+    res.json({ success: true, broadcast: payload, message: "Live broadcast published to all online gladiators!" });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to publish broadcast" });
+  }
+});
+app.delete("/api/msksksnuwje/broadcast", async (req, res) => {
+  try {
+    await pool.query(`UPDATE global_broadcasts SET active = false WHERE active = true`);
+    if (globalIo) {
+      globalIo.emit("global_broadcast", null);
+    }
+    res.json({ success: true, message: "Active broadcast cleared and hidden from all players" });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to clear broadcast" });
   }
 });
 app.post("/api/msksksnuwje/withdraw", async (req, res) => {
@@ -2862,6 +2946,8 @@ app.post("/api/msksksnuwje/users/:id/adjust-balance", async (req, res) => {
     } catch (_) {
     }
     const refreshed = await getUserFromDb(targetUserId);
+    broadcastUserUpdate(targetUserId);
+    broadcastFinanceUpdate();
     res.json({
       success: true,
       message: `Balance adjusted for ${refreshed.codmIgn || refreshed.email}. New balance: \u20A6${refreshed.balance.toLocaleString()}`,
@@ -5239,7 +5325,9 @@ app.post("/api/users/:id/deposit", async (req, res) => {
     description: descNote,
     timestamp: Date.now()
   };
-  console.log(`\u2705 [Deposit API] Credited \u20A6${numAmount} to user ${user.id} (${user.codmIgn}). New balance: \u20A6${newBalance}`);
+  console.log(`✅ [Deposit API] Credited ₦${numAmount} to user ${user.id} (${user.codmIgn}). New balance: ₦${newBalance}`);
+  broadcastUserUpdate(user.id);
+  broadcastFinanceUpdate();
   res.json({ success: true, balance: newBalance, transaction: tx });
 });
 app.get("/api/paystack/banks", async (req, res) => {
@@ -5575,6 +5663,8 @@ app.post("/api/users/:id/withdraw", rateLimitMiddleware(5, 6e4), secureSignature
 
     await client.query("COMMIT");
     const updatedUser = await getUserFromDb(userId);
+    broadcastUserUpdate(userId);
+    broadcastFinanceUpdate();
 
     return res.json({
       success: true,
