@@ -90,21 +90,28 @@ export const GlobalBroadcastBanner: React.FC = () => {
 
   return (
     <div className={`w-full border-b backdrop-blur-md shadow-2xl transition-all duration-500 relative z-50 ${theme.bg}`}>
-      <div className="max-w-7xl mx-auto px-4 py-2.5 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3 overflow-hidden flex-1">
-          <span className={`text-[10px] tracking-widest uppercase px-2.5 py-1 rounded-full font-black flex items-center gap-1.5 shrink-0 ${theme.badge}`}>
+      <div className="max-w-7xl mx-auto px-4 py-2.5 flex items-center justify-between gap-4 overflow-hidden">
+        <div className="flex items-center gap-3 overflow-hidden flex-1 relative">
+          <span className={`text-[10px] tracking-widest uppercase px-2.5 py-1 rounded-full font-black flex items-center gap-1.5 shrink-0 z-10 shadow-lg ${theme.badge}`}>
             <IconComponent size={12} className="animate-pulse" />
             {theme.label}
           </span>
-          <div className="overflow-hidden relative w-full">
-            <p className="text-xs font-bold tracking-wide truncate md:whitespace-normal md:overflow-visible font-mono">
-              {broadcast.message}
-            </p>
+          <div className="overflow-hidden relative w-full flex items-center">
+            <div className="animate-marquee flex items-center gap-16 whitespace-nowrap py-0.5">
+              <span className="text-xs font-mono font-black tracking-wider">{broadcast.message}</span>
+              <span className="text-xs font-mono font-black tracking-wider opacity-60">•</span>
+              <span className="text-xs font-mono font-black tracking-wider">{broadcast.message}</span>
+              <span className="text-xs font-mono font-black tracking-wider opacity-60">•</span>
+              <span className="text-xs font-mono font-black tracking-wider">{broadcast.message}</span>
+              <span className="text-xs font-mono font-black tracking-wider opacity-60">•</span>
+              <span className="text-xs font-mono font-black tracking-wider">{broadcast.message}</span>
+              <span className="text-xs font-mono font-black tracking-wider opacity-60">•</span>
+            </div>
           </div>
         </div>
         <button
           onClick={() => setDismissedId(broadcast.id)}
-          className="p-1 rounded-lg hover:bg-white/10 text-current opacity-70 hover:opacity-100 transition-all shrink-0"
+          className="p-1.5 rounded-lg hover:bg-white/10 text-current opacity-70 hover:opacity-100 transition-all shrink-0 z-10"
           title="Dismiss Announcement"
         >
           <X size={16} />

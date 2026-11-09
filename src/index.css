@@ -72,3 +72,24 @@
 .codm-border-yellow {
   border-image: linear-gradient(to right, #f59e0b, #d97706) 1;
 }
+
+/* Infinite Scrolling Marquee Ticker */
+@keyframes marquee {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee {
+  display: flex;
+  width: max-content;
+  animation: marquee 25s linear infinite;
+  will-change: transform;
+}
+
+.animate-marquee:hover {
+  animation-play-state: paused;
+}

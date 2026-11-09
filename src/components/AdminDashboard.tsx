@@ -120,7 +120,7 @@ interface AdminFinanceData {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onRefreshUser }) => {
-  const [activeTab, setActiveTab] = useState<'review_queue' | 'finance' | 'users' | 'gmail' | 'disputes' | 'multi_accounts' | 'maintenance' | 'support'>('review_queue');
+  const [activeTab, setActiveTab] = useState<'review_queue' | 'finance' | 'users' | 'gmail' | 'disputes' | 'multi_accounts' | 'broadcast' | 'maintenance' | 'support'>('review_queue');
   const [flaggedAccounts, setFlaggedAccounts] = useState<FlaggedAccountItem[]>([]);
   const [multiAccountClusters, setMultiAccountClusters] = useState<any[]>([]);
   const [flaggedLoading, setFlaggedLoading] = useState(false);
@@ -1159,6 +1159,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
               { id: 'users', icon: Users, label: 'Gladiators', badge: usersList.length, roles: ['admin', 'super_admin'] },
               { id: 'disputes', icon: ShieldCheck, label: 'Disputes', badge: disputesList.length, roles: ['admin', 'moderator', 'super_admin'] },
               { id: 'support', icon: Headphones, label: 'Support Inbox', badge: supportConversations.length, roles: ['admin', 'moderator', 'super_admin'] },
+              { id: 'broadcast', icon: Megaphone, label: 'Global Broadcast', badge: currentActiveBroadcast ? 'LIVE' : 'OFF', roles: ['admin', 'moderator', 'super_admin'] },
               { id: 'gmail', icon: Mail, label: 'Sync Engine', badge: emailsList.length, roles: ['admin', 'super_admin'] },
               { id: 'multi_accounts', icon: ShieldAlert, label: 'Multi-Accounts', badge: flaggedAccounts.length, roles: ['admin', 'super_admin'] },
               { id: 'maintenance', icon: Settings, label: 'Maintenance & IP', badge: maintenanceEnabled ? 'ACTIVE' : 'OFF', roles: ['admin', 'super_admin'] }
@@ -1215,6 +1216,89 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
 
       {/* MAIN CONTENT AREA */}
       <main className="flex-1 space-y-8 animate-in fade-in slide-in-from-bottom-6 duration-700">
+        
+        {/* TOP LIVE GLOBAL MARQUEE BROADCAST CONTROL BAR */}
+        <div className="bg-gradient-to-r from-neutral-900 via-neutral-900 to-black border border-cyan-500/40 p-6 md:p-8 rounded-[2.5rem] shadow-2xl space-y-5 relative overflow-hidden">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-cyan-400/10 border border-cyan-400/30 flex items-center justify-center text-cyan-400 shrink-0">
+                <Megaphone size={24} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-xl font-black text-white uppercase tracking-tight">Site-Wide Live Marquee Broadcast</h3>
+                  {currentActiveBroadcast ? (
+                    <span className="px-3 py-0.5 rounded-full bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 text-[9px] font-black uppercase tracking-widest flex items-center gap-1.5 animate-pulse">
+                      <div className="w-2 h-2 rounded-full bg-cyan-400" />
+                      LIVE NOW
+                    </span>
+                  ) : (
+                    <span className="px-3 py-0.5 rounded-full bg-neutral-800 text-neutral-500 text-[9px] font-black uppercase tracking-widest">
+                      IDLE
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-neutral-400 font-medium">Broadcast live announcements across the top of all player screens in real-time.</p>
+              </div>
+            </div>
+
+            {currentActiveBroadcast && (
+              <button
+                onClick={handleClearBroadcast}
+                disabled={isPublishingBroadcast}
+                className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black uppercase tracking-widest transition-all active:scale-95 shadow-lg shadow-rose-600/20 shrink-0"
+              >
+                Clear Broadcast
+              </button>
+            )}
+          </div>
+
+          {currentActiveBroadcast && (
+            <div className="p-4 rounded-xl bg-cyan-950/40 border border-cyan-500/30 font-mono text-xs text-cyan-200 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2 overflow-hidden">
+                <span className="text-[10px] font-black uppercase tracking-wider text-cyan-400 shrink-0">Active Message:</span>
+                <span className="truncate font-bold text-white">{currentActiveBroadcast.message}</span>
+              </div>
+              <span className="text-[10px] text-cyan-400 font-bold uppercase shrink-0">Type: {currentActiveBroadcast.type}</span>
+            </div>
+          )}
+
+          <form onSubmit={handlePublishBroadcast} className="flex flex-col md:flex-row gap-3">
+            <div className="flex items-center gap-2 shrink-0">
+              <select
+                value={broadcastType}
+                onChange={e => setBroadcastType(e.target.value as any)}
+                className="bg-black border border-neutral-800 rounded-xl px-3 py-3 text-xs font-mono text-cyan-400 font-bold focus:outline-none focus:border-cyan-400"
+              >
+                <option value="warning">⚠️ Warning (Amber)</option>
+                <option value="urgent">🚨 Urgent (Rose)</option>
+                <option value="info">📢 Announcement (Cyan)</option>
+                <option value="success">🎉 Event (Emerald)</option>
+              </select>
+            </div>
+            <input
+              type="text"
+              value={broadcastText}
+              onChange={e => setBroadcastText(e.target.value)}
+              placeholder="Enter site-wide broadcast message (e.g. 🚨 Maintenance in 15 mins! Please finish active matches.)"
+              className="flex-1 bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-mono text-white placeholder-neutral-600 focus:outline-none focus:border-cyan-400 transition-all"
+            />
+            <button
+              type="submit"
+              disabled={isPublishingBroadcast || !broadcastText.trim()}
+              className="px-6 py-3 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-neutral-950 font-black text-xs uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2 shrink-0 shadow-lg shadow-cyan-400/20"
+            >
+              {isPublishingBroadcast ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+              <span>Publish Live</span>
+            </button>
+          </form>
+
+          {broadcastStatusMsg && (
+            <div className={`p-3 rounded-xl border text-[11px] font-black uppercase tracking-wider text-center ${broadcastStatusMsg.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-rose-500/10 border-rose-500/30 text-rose-400'}`}>
+              {broadcastStatusMsg.text}
+            </div>
+          )}
+        </div>
         
         {/* Telegram Group Banner for Screen Records & Disputes */}
         <div className="bg-gradient-to-r from-cyan-950/80 via-neutral-900 to-cyan-950/80 border border-cyan-500/30 p-6 rounded-[2rem] shadow-xl flex flex-col md:flex-row items-center justify-between gap-4">
@@ -1452,6 +1536,128 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* TAB CONTENT: GLOBAL MARQUEE BROADCAST */}
+        {activeTab === 'broadcast' && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
+            <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-cyan-400/10 border border-cyan-400/30 flex items-center justify-center text-cyan-400">
+                    <Megaphone size={22} />
+                  </div>
+                  <h3 className="text-3xl font-black text-white uppercase tracking-tighter leading-none">Global Marquee Broadcast</h3>
+                </div>
+                <p className="text-neutral-400 text-xs font-medium">
+                  Publish real-time announcements, maintenance notices, and promotional event tickers to all connected players across the app.
+                </p>
+              </div>
+              <button
+                onClick={loadActiveBroadcast}
+                className="flex items-center gap-2 px-5 py-3 rounded-xl bg-neutral-900 border border-neutral-800 hover:border-neutral-700 text-neutral-300 hover:text-white text-xs font-black uppercase tracking-wider transition-all active:scale-95 shadow-lg"
+              >
+                <RefreshCw size={14} />
+                <span>Refresh Broadcast</span>
+              </button>
+            </header>
+
+            {/* GLOBAL BROADCAST MARQUEE CONTROLLER */}
+            <section className="bg-neutral-900 border border-neutral-800 p-8 md:p-10 rounded-[2.5rem] shadow-2xl space-y-6">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-neutral-800/80 pb-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
+                    <Megaphone size={24} />
+                  </div>
+                  <div>
+                    <h4 className="text-2xl font-black text-white uppercase tracking-tight">Live Marquee Broadcast Manager</h4>
+                    <p className="text-xs text-neutral-400 font-medium">Broadcasts instantly appear on top of all active player screens via WebSockets (0ms latency).</p>
+                  </div>
+                </div>
+                {currentActiveBroadcast && (
+                  <span className="px-3.5 py-1.5 rounded-full bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 text-[10px] font-black uppercase tracking-widest flex items-center gap-2 animate-pulse">
+                    <div className="w-2 h-2 rounded-full bg-cyan-400" />
+                    BROADCAST LIVE NOW
+                  </span>
+                )}
+              </div>
+
+              {/* Active Broadcast Indicator */}
+              {currentActiveBroadcast ? (
+                <div className="p-6 rounded-2xl bg-cyan-950/40 border border-cyan-500/30 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-xl">
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-black text-cyan-400 uppercase tracking-widest">Active Live Announcement ({currentActiveBroadcast.type?.toUpperCase()})</span>
+                    <p className="text-base font-bold text-white font-mono">{currentActiveBroadcast.message}</p>
+                  </div>
+                  <button
+                    onClick={handleClearBroadcast}
+                    disabled={isPublishingBroadcast}
+                    className="px-6 py-3.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black uppercase tracking-widest transition-all active:scale-95 shadow-lg shadow-rose-600/20 shrink-0"
+                  >
+                    Clear Active Broadcast
+                  </button>
+                </div>
+              ) : (
+                <div className="p-5 rounded-2xl bg-black/40 border border-neutral-800/60 text-xs text-neutral-500 font-mono flex items-center gap-3">
+                  <Sparkles size={16} className="text-amber-400 shrink-0" />
+                  <span>No active broadcast marquee currently running. Enter a message below to broadcast live to all players.</span>
+                </div>
+              )}
+
+              {/* Broadcast Composer Form */}
+              <form onSubmit={handlePublishBroadcast} className="space-y-6 pt-2">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-neutral-400">Select Banner Style & Icon</label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                    {[
+                      { id: 'warning', label: '⚠️ Warning', desc: 'Amber Alert Bar', color: 'border-amber-500/50 bg-amber-500/10 text-amber-300' },
+                      { id: 'urgent', label: '🚨 Urgent', desc: 'Rose Emergency Bar', color: 'border-rose-500/50 bg-rose-500/10 text-rose-300' },
+                      { id: 'info', label: '📢 Announcement', desc: 'Cyan Notice Bar', color: 'border-cyan-500/50 bg-cyan-500/10 text-cyan-300' },
+                      { id: 'success', label: '🎉 Special Event', desc: 'Emerald Promo Bar', color: 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300' },
+                    ].map(typeItem => (
+                      <button
+                        key={typeItem.id}
+                        type="button"
+                        onClick={() => setBroadcastType(typeItem.id as any)}
+                        className={`p-4 rounded-2xl border text-left transition-all ${broadcastType === typeItem.id ? `${typeItem.color} ring-2 ring-white/20 shadow-xl scale-[1.02]` : 'border-neutral-800 bg-neutral-900/60 text-neutral-500 hover:text-neutral-300'}`}
+                      >
+                        <span className="block text-xs font-black uppercase tracking-wider">{typeItem.label}</span>
+                        <span className="block text-[10px] opacity-70 font-mono mt-0.5">{typeItem.desc}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-neutral-400">Marquee Message Content</label>
+                  <textarea
+                    rows={3}
+                    value={broadcastText}
+                    onChange={e => setBroadcastText(e.target.value)}
+                    placeholder="e.g. 🚨 Scheduled maintenance in 15 minutes! Please complete active matches and refrain from placing new wagers."
+                    className="w-full bg-black border border-neutral-800 rounded-2xl p-5 text-sm font-mono text-white placeholder-neutral-600 focus:outline-none focus:border-cyan-400 transition-all shadow-inner"
+                  />
+                </div>
+
+                {broadcastStatusMsg && (
+                  <div className={`p-4 rounded-xl border text-xs font-black uppercase tracking-wider text-center ${broadcastStatusMsg.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-rose-500/10 border-rose-500/30 text-rose-400'}`}>
+                    {broadcastStatusMsg.text}
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-4 pt-2">
+                  <button
+                    type="submit"
+                    disabled={isPublishingBroadcast || !broadcastText.trim()}
+                    className="w-full md:w-auto px-10 py-5 rounded-2xl bg-cyan-400 hover:bg-cyan-300 text-neutral-950 font-black text-xs uppercase tracking-[0.2em] shadow-xl shadow-cyan-400/20 transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-3"
+                  >
+                    {isPublishingBroadcast ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
+                    <span>Publish Live Broadcast</span>
+                  </button>
+                </div>
+              </form>
+            </section>
           </div>
         )}
 
