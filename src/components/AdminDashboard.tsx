@@ -212,10 +212,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
   const [maintenanceEnabled, setMaintenanceEnabled] = useState(false);
   const [isTogglingMaintenance, setIsTogglingMaintenance] = useState(false);
 
-  // Support Inbox state
-  const [supportMessages, setSupportMessages] = useState<SupportMessage[]>([]);
-  const [loadingSupport, setLoadingSupport] = useState(false);
-  const [replyTexts, setReplyTexts] = useState<Record<string, string>>({});
+  // Standardized Support Helpdesk State
+  const [supportConversations, setSupportConversations] = useState<SupportMessage[]>([]);
+  const [selectedSupportUserId, setSelectedSupportUserId] = useState<string | null>(null);
+  const [activeThreadMessages, setActiveThreadMessages] = useState<SupportMessage[]>([]);
+  const [loadingSupport, setLoadingSupport] = useState<boolean>(false);
+  const [loadingThread, setLoadingThread] = useState<boolean>(false);
+  const [supportSearch, setSupportSearch] = useState<string>('');
+  const [supportCategoryFilter, setSupportCategoryFilter] = useState<string>('all');
+  const [supportStatusFilter, setSupportStatusFilter] = useState<string>('all');
+  const [composerText, setComposerText] = useState<string>('');
+  const [copiedSupportUserId, setCopiedSupportUserId] = useState<boolean>(false);
+  const threadEndRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<Socket | null>(null);
 
   const normalizeAdminSupportMsg = (m: any): SupportMessage => ({
@@ -231,31 +239,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     playerName: m.playerName || m.player_name || (m.senderRole === 'user' ? (m.senderName || m.sender_name) : undefined)
   } as any);
 
-  const handleReply = async (msg: SupportMessage) => {
-    const text = replyTexts[msg.id];
-    if (!text || !text.trim()) return;
-
-    const targetUserId = msg.userId || (msg as any).user_id;
-    if (!targetUserId) {
-      alert('Error: Could not identify target player ID.');
-      return;
+  const loadSupportThread = async (targetUid: string) => {
+    if (!targetUid) return;
+    setLoadingThread(true);
+    try {
+      const res = await fetch(`/api/support/messages?userId=${targetUid}`);
+      const data = await res.json();
+      if (data && Array.isArray(data.messages)) {
+        setActiveThreadMessages(data.messages.map(normalizeAdminSupportMsg));
+        setTimeout(() => {
+          threadEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, 100);
+      }
+    } catch (err) {
+      console.error('Failed to load support conversation thread:', err);
+    } finally {
+      setLoadingThread(false);
     }
-    const targetRoom = msg.room || `support_user_${targetUserId}`;
+  };
+
+  const handleSendSupportReply = async () => {
+    if (!selectedSupportUserId || !composerText.trim()) return;
+
+    const textToSend = composerText.trim();
+    setComposerText('');
+
+    const activeConv = supportConversations.find(c => (c.userId || (c as any).user_id) === selectedSupportUserId);
+    const targetRoom = activeConv?.room || `support_user_${selectedSupportUserId}`;
     const senderName = currentUser.codmIgn || currentUser.username || 'Admin Support';
     const replyId = `rep_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
     const timestamp = Date.now();
 
     const replyPayload = {
       id: replyId,
-      userId: targetUserId, // Attach reply to target player's ticket thread
+      userId: selectedSupportUserId,
       senderName,
       senderRole: currentUser.role || 'admin',
-      text: text.trim(),
-      category: msg.category || 'General Inquiry',
+      text: textToSend,
+      category: activeConv?.category || 'General Inquiry',
       room: targetRoom,
-      targetRoom: targetRoom,
+      targetRoom,
       timestamp,
-      status: 'open' as const
+      status: 'open' as const,
+      playerName: (activeConv as any)?.playerName || activeConv?.senderName || 'Player'
     };
 
     // 1. Send via WebSocket immediately
@@ -263,7 +289,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
       socketRef.current.emit('support_message', replyPayload);
     }
 
-    // 2. Persist to REST API
+    // 2. Optimistically append to active thread
+    const normalizedReply = normalizeAdminSupportMsg(replyPayload);
+    setActiveThreadMessages(prev => [...prev, normalizedReply]);
+    setTimeout(() => {
+      threadEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 100);
+
+    // 3. Update conversation roster (move active user to top with latest reply)
+    setSupportConversations(prev => {
+      const filtered = prev.filter(c => (c.userId || (c as any).user_id) !== selectedSupportUserId);
+      return [normalizedReply, ...filtered];
+    });
+
+    // 4. Persist to REST API
     try {
       await fetch('/api/support/messages', {
         method: 'POST',
@@ -271,24 +310,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
         body: JSON.stringify(replyPayload)
       });
     } catch (err) {
-      console.error('Failed to post reply to server:', err);
+      console.error('Failed to post support reply to server:', err);
     }
-
-    setReplyTexts(prev => ({ ...prev, [msg.id]: '' }));
-
-    // Optimistically update card with latest message
-    setSupportMessages(prev =>
-      prev.map(m => {
-        if ((m.userId || (m as any).user_id) === targetUserId) {
-          return {
-            ...m,
-            ...replyPayload,
-            playerName: (m as any).playerName || (m.senderRole === 'user' ? m.senderName : 'Player')
-          };
-        }
-        return m;
-      })
-    );
   };
 
   // Disputes Hub state
@@ -554,7 +577,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
       });
       const data = await res.json();
       if (data && Array.isArray(data.messages)) {
-        setSupportMessages(data.messages.map(normalizeAdminSupportMsg));
+        const conversations = data.messages.map(normalizeAdminSupportMsg);
+        setSupportConversations(conversations);
+        if (conversations.length > 0) {
+          setSelectedSupportUserId(prev => {
+            const initialId = prev || conversations[0].userId;
+            loadSupportThread(initialId);
+            return initialId;
+          });
+        }
       }
     } catch (err) {
       console.error('Failed to load support messages:', err);
@@ -593,7 +624,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     if (currentUser.role === 'moderator') {
       await Promise.all([loadDisputes(), loadReviewQueue()]);
     } else {
-      await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings(), loadFlaggedAccounts(), loadMaintenanceStatus(), loadServerIp()]);
+      await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings(), loadFlaggedAccounts(), loadMaintenanceStatus(), loadServerIp(), loadSupportMessages()]);
     }
     if (onRefreshUser) onRefreshUser();
     setRefreshing(false);
@@ -609,16 +640,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
       const targetUid = newMsg.userId;
       if (!targetUid) return;
 
-      setSupportMessages((prev) => {
-        // Replace existing latest message for this user or add new one
+      // Update active thread messages if the socket message belongs to currently open conversation
+      setSelectedSupportUserId((currentSelectedId) => {
+        if (currentSelectedId === targetUid) {
+          setActiveThreadMessages((prev) => {
+            if (prev.some((m) => m.id === newMsg.id)) return prev;
+            return [...prev, newMsg];
+          });
+          setTimeout(() => {
+            threadEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+          }, 100);
+        }
+        return currentSelectedId;
+      });
+
+      // Update support conversations roster
+      setSupportConversations((prev) => {
         const filtered = prev.filter(m => (m.userId || (m as any).user_id) !== targetUid);
-        return [newMsg, ...filtered].sort((a, b) => b.timestamp - a.timestamp);
+        return [newMsg, ...filtered];
       });
     });
 
     socket.on('support_cleared', (data: { userId: string }) => {
       if (data && data.userId) {
-        setSupportMessages((prev) => prev.filter(m => (m.userId || (m as any).user_id) !== data.userId));
+        setSupportConversations((prev) => prev.filter(m => (m.userId || (m as any).user_id) !== data.userId));
+        setSelectedSupportUserId((currentSelectedId) => {
+          if (currentSelectedId === data.userId) {
+            setActiveThreadMessages([]);
+          }
+          return currentSelectedId;
+        });
       }
     });
 
@@ -1038,7 +1089,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
               { id: 'finance', icon: Wallet, label: 'Treasury', badge: `₦${availableFees.toLocaleString()}`, roles: ['admin', 'super_admin'] },
               { id: 'users', icon: Users, label: 'Gladiators', badge: usersList.length, roles: ['admin', 'super_admin'] },
               { id: 'disputes', icon: ShieldCheck, label: 'Disputes', badge: disputesList.length, roles: ['admin', 'moderator', 'super_admin'] },
-              { id: 'support', icon: Headphones, label: 'Support Inbox', badge: supportMessages.length, roles: ['admin', 'moderator', 'super_admin'] },
+              { id: 'support', icon: Headphones, label: 'Support Inbox', badge: supportConversations.length, roles: ['admin', 'moderator', 'super_admin'] },
               { id: 'gmail', icon: Mail, label: 'Sync Engine', badge: emailsList.length, roles: ['admin', 'super_admin'] },
               { id: 'multi_accounts', icon: ShieldAlert, label: 'Multi-Accounts', badge: flaggedAccounts.length, roles: ['admin', 'super_admin'] },
               { id: 'maintenance', icon: Settings, label: 'Maintenance & IP', badge: maintenanceEnabled ? 'ACTIVE' : 'OFF', roles: ['admin', 'super_admin'] }
@@ -2726,139 +2777,420 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
 
 
 
-        {/* TAB CONTENT: MAINTENANCE & SERVER IP */}
+        {/* TAB CONTENT: STANDARDIZED SUPPORT HELPDESK INBOX */}
         {activeTab === 'support' && (
           <section className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-2xl font-black text-white uppercase tracking-tighter">Support Inbox</h2>
-                <p className="text-xs text-neutral-500 font-medium">Real-time player assistance and query resolution.</p>
+            {/* Header */}
+            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-neutral-900 border border-neutral-800 p-6 rounded-[2.5rem] shadow-xl">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-2xl bg-amber-400/10 border border-amber-400/30 flex items-center justify-center text-amber-400 font-black shrink-0">
+                  <Headphones size={24} />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-black text-white uppercase tracking-tighter flex items-center gap-3">
+                    <span>Helpdesk Support Inbox</span>
+                    <span className="px-2.5 py-0.5 rounded-full bg-amber-400/10 border border-amber-400/30 text-amber-400 text-[10px] font-mono font-bold">
+                      {supportConversations.length} {supportConversations.length === 1 ? 'Ticket' : 'Tickets'}
+                    </span>
+                  </h2>
+                  <p className="text-xs text-neutral-500 font-medium">
+                    Standardized two-pane player communication desk & live resolution workspace.
+                  </p>
+                </div>
               </div>
-              <button
-                onClick={loadSupportMessages}
-                className="p-3 bg-neutral-900 border border-neutral-800 rounded-xl text-neutral-400 hover:text-white transition-colors"
-              >
-                <RefreshCw size={18} className={loadingSupport ? 'animate-spin' : ''} />
-              </button>
+
+              <div className="flex items-center gap-3 w-full md:w-auto">
+                <button
+                  onClick={loadSupportMessages}
+                  className="px-5 py-3 bg-neutral-950 border border-neutral-800 hover:border-neutral-700 text-neutral-300 hover:text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer active:scale-95 shadow-md"
+                >
+                  <RefreshCw size={15} className={loadingSupport ? 'animate-spin' : ''} />
+                  <span>Sync Conversations</span>
+                </button>
+              </div>
             </div>
 
-            {loadingSupport && supportMessages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-20 bg-neutral-900/50 border border-neutral-800 rounded-[2.5rem] border-dashed">
-                <Loader2 size={40} className="text-amber-400 animate-spin mb-4" />
-                <p className="text-neutral-500 font-black uppercase tracking-widest text-[10px]">Loading Conversations...</p>
-              </div>
-            ) : supportMessages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-20 bg-neutral-900/50 border border-neutral-800 rounded-[2.5rem] border-dashed">
-                <MessageCircle size={48} className="text-neutral-800 mb-4" />
-                <p className="text-neutral-500 font-black uppercase tracking-widest text-[10px]">No active support tickets</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {(supportMessages || []).map((msg) => {
-                  if (!msg) return null;
-                  const initial = (msg.senderName?.[0] || msg.userId?.[0] || "U").toUpperCase();
-                  return (
-                    <div key={msg.id} className="p-6 bg-neutral-900 border border-neutral-800 rounded-[2rem] space-y-4 hover:border-amber-400/30 transition-all group">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-amber-400/10 flex items-center justify-center text-amber-400 font-black">
-                            {initial}
-                          </div>
-                          <div>
-                            <div className="text-sm font-black text-white uppercase">{msg.senderName || "Unknown User"}</div>
-                            <div className="text-[10px] text-neutral-500 font-mono">User ID: {msg.userId ? msg.userId.slice(-8) : "N/A"}</div>
-                          </div>
-                        </div>
-                        <div className="flex flex-col items-end gap-1">
-                          <div className="text-[10px] text-neutral-600 font-mono">
-                            {msg.timestamp ? new Date(msg.timestamp).toLocaleString() : "N/A"}
-                          </div>
-                          <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest border ${
-                            msg.status === "resolved" 
-                              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" 
-                              : "bg-amber-500/10 text-amber-400 border-amber-500/20 animate-pulse"
-                          }`}>
-                            {msg.status || "open"}
-                          </span>
-                        </div>
-                      </div>
+            {/* TWO-PANE HELPDESK LAYOUT */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 min-h-[680px]">
+              {/* LEFT PANE: CONVERSATION ROSTER & FILTERS */}
+              <div className="lg:col-span-5 xl:col-span-4 bg-neutral-900 border border-neutral-800 rounded-[2.5rem] p-5 shadow-2xl flex flex-col space-y-4">
+                {/* Search & Filter Bar */}
+                <div className="space-y-3">
+                  <div className="relative group">
+                    <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-600 group-focus-within:text-amber-400 transition-colors" />
+                    <input
+                      type="text"
+                      value={supportSearch}
+                      onChange={(e) => setSupportSearch(e.target.value)}
+                      placeholder="Search player IGN, ID, or text..."
+                      className="w-full bg-black border border-neutral-800 rounded-2xl pl-11 pr-4 py-3 text-xs font-bold text-white focus:border-amber-400 focus:outline-none transition-all placeholder:text-neutral-600"
+                    />
+                  </div>
 
-                      <div className="p-4 bg-black/40 rounded-2xl border border-neutral-800/50">
-                        {msg.category && (
-                          <span className="inline-block px-2 py-0.5 rounded bg-neutral-800 text-neutral-400 font-mono text-[8px] uppercase border border-neutral-700 mb-2">
-                            {msg.category}
-                          </span>
-                        )}
-                        <p className="text-sm text-neutral-300 leading-relaxed italic">\"{msg.text}\"</p>
-                      </div>
+                  {/* Category Filter Pills */}
+                  <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                    {['all', 'Deposit Issue', 'Result Dispute', 'Withdrawal Issue', 'General Inquiry'].map((cat) => (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => setSupportCategoryFilter(cat)}
+                        className={`px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider shrink-0 transition-all cursor-pointer ${
+                          supportCategoryFilter === cat
+                            ? 'bg-amber-400 text-neutral-950 shadow-md font-bold'
+                            : 'bg-neutral-950 text-neutral-500 hover:text-white border border-neutral-800'
+                        }`}
+                      >
+                        {cat === 'all' ? 'All Queries' : cat.replace(' Issue', '')}
+                      </button>
+                    ))}
+                  </div>
 
-                      <div className="space-y-3">
-                        <textarea
-                          value={replyTexts[msg.id] || ""}
-                          onChange={(e) => setReplyTexts(prev => ({ ...prev, [msg.id]: e.target.value }))}
-                          placeholder="Type tactical response..."
-                          className="w-full bg-black border border-neutral-800 rounded-2xl px-4 py-3 text-xs text-white focus:border-amber-400 outline-none transition-all resize-none h-20"
-                        />
-                        <div className="grid grid-cols-2 gap-3">
-                          <button
-                            onClick={() => handleReply(msg)}
-                            disabled={!replyTexts[msg.id]?.trim()}
-                            className="py-3 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 disabled:hover:bg-amber-400 text-black font-black text-[10px] uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-amber-400/10"
+                  {/* Status Filter Pills */}
+                  <div className="flex items-center gap-2 pt-1 border-t border-neutral-800/60">
+                    <span className="text-[9px] font-mono text-neutral-500 uppercase tracking-widest">Status:</span>
+                    {['all', 'open', 'resolved'].map((st) => (
+                      <button
+                        key={st}
+                        type="button"
+                        onClick={() => setSupportStatusFilter(st)}
+                        className={`px-3 py-1 rounded-lg text-[9px] font-mono font-bold uppercase transition-all cursor-pointer ${
+                          supportStatusFilter === st
+                            ? 'bg-neutral-800 text-amber-400 border border-amber-400/30'
+                            : 'text-neutral-600 hover:text-neutral-300'
+                        }`}
+                      >
+                        {st}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Conversation List Stream */}
+                <div className="flex-1 overflow-y-auto space-y-2 pr-1 max-h-[500px] lg:max-h-[550px]">
+                  {loadingSupport && supportConversations.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 text-center space-y-3">
+                      <Loader2 size={32} className="text-amber-400 animate-spin" />
+                      <p className="text-xs font-mono font-bold text-neutral-500 uppercase">Loading Support Tickets...</p>
+                    </div>
+                  ) : supportConversations.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 text-center space-y-3 opacity-40">
+                      <MessageCircle size={40} className="text-neutral-600" />
+                      <p className="text-xs font-black uppercase tracking-widest text-neutral-400">No Support Queries</p>
+                    </div>
+                  ) : (
+                    supportConversations
+                      .filter((c) => {
+                        const q = supportSearch.toLowerCase().trim();
+                        const pName = ((c as any).playerName || c.senderName || '').toLowerCase();
+                        const uid = (c.userId || (c as any).user_id || '').toLowerCase();
+                        const txt = (c.text || '').toLowerCase();
+                        const matchesSearch = !q || pName.includes(q) || uid.includes(q) || txt.includes(q);
+
+                        const matchesCategory = supportCategoryFilter === 'all' || (c.category || 'General Inquiry') === supportCategoryFilter;
+                        const matchesStatus = supportStatusFilter === 'all' || (c.status || 'open') === supportStatusFilter;
+
+                        return matchesSearch && matchesCategory && matchesStatus;
+                      })
+                      .map((conv) => {
+                        const uid = conv.userId || (conv as any).user_id;
+                        const isSelected = selectedSupportUserId === uid;
+                        const pName = (conv as any).playerName || conv.senderName || 'Player';
+                        const initial = pName.charAt(0).toUpperCase() || 'P';
+                        const isStaffLast = conv.senderRole === 'admin' || conv.senderRole === 'super_admin' || conv.senderRole === 'moderator';
+
+                        return (
+                          <div
+                            key={conv.id}
+                            onClick={() => {
+                              setSelectedSupportUserId(uid);
+                              loadSupportThread(uid);
+                            }}
+                            className={`p-4 rounded-2xl border transition-all cursor-pointer group flex flex-col space-y-2 ${
+                              isSelected
+                                ? 'bg-amber-400/10 border-amber-400/60 shadow-lg shadow-amber-400/5'
+                                : 'bg-black/40 border-neutral-800/80 hover:border-neutral-700 hover:bg-black/60'
+                            }`}
                           >
-                            <Send size={14} />
-                            Reply
-                          </button>
-                          {msg.status !== "resolved" ? (
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-black text-sm shrink-0 border ${
+                                  isSelected ? 'bg-amber-400 text-neutral-950 border-amber-300' : 'bg-neutral-800 text-amber-400 border-neutral-700'
+                                }`}>
+                                  {initial}
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="text-xs font-black text-white uppercase truncate flex items-center gap-1.5">
+                                    <span>{pName}</span>
+                                    {conv.status === 'resolved' ? (
+                                      <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" title="Ticket Resolved" />
+                                    ) : (
+                                      <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" title="Open Ticket" />
+                                    )}
+                                  </div>
+                                  <div className="text-[9px] text-neutral-500 font-mono">
+                                    ID: {uid ? uid.slice(-8) : 'N/A'}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <span className="text-[9px] text-neutral-600 font-mono shrink-0">
+                                {conv.timestamp ? new Date(conv.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center justify-between text-[10px] gap-2 pt-1 border-t border-neutral-800/40">
+                              <span className="truncate text-neutral-400 font-medium">
+                                <b className={isStaffLast ? 'text-amber-400 font-bold' : 'text-neutral-300 font-bold'}>
+                                  {isStaffLast ? 'Staff: ' : 'User: '}
+                                </b>
+                                {conv.text}
+                              </span>
+                              {conv.category && (
+                                <span className="px-2 py-0.5 rounded bg-neutral-800 text-neutral-400 font-mono text-[8px] uppercase border border-neutral-700 shrink-0">
+                                  {conv.category.replace(' Issue', '')}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                  )}
+                </div>
+              </div>
+
+              {/* RIGHT PANE: ACTIVE CONVERSATION THREAD & LIVE WORKSPACE */}
+              <div className="lg:col-span-7 xl:col-span-8 bg-neutral-900 border border-neutral-800 rounded-[2.5rem] p-6 shadow-2xl flex flex-col justify-between space-y-4">
+                {!selectedSupportUserId ? (
+                  <div className="flex-1 flex flex-col items-center justify-center p-12 text-center space-y-4 opacity-50">
+                    <div className="w-20 h-20 rounded-3xl bg-neutral-800 border border-neutral-700 flex items-center justify-center text-amber-400">
+                      <Headphones size={40} />
+                    </div>
+                    <div className="space-y-1">
+                      <h3 className="text-lg font-black text-white uppercase tracking-tight">Select a Support Ticket</h3>
+                      <p className="text-xs text-neutral-400 max-w-xs mx-auto">
+                        Choose a player conversation from the left roster to view full thread history and reply.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {/* Thread Header */}
+                    {(() => {
+                      const activeConv = supportConversations.find((c) => (c.userId || (c as any).user_id) === selectedSupportUserId);
+                      const pName = (activeConv as any)?.playerName || activeConv?.senderName || 'Player';
+
+                      return (
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-neutral-800/80">
+                          <div className="flex items-center gap-3">
+                            <div className="w-11 h-11 rounded-2xl bg-amber-400/20 border border-amber-400/40 text-amber-400 font-black text-lg flex items-center justify-center shrink-0">
+                              {pName.charAt(0).toUpperCase() || 'P'}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h3 className="text-base font-black text-white uppercase tracking-tight">{pName}</h3>
+                                <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest border ${
+                                  activeConv?.status === 'resolved'
+                                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                                    : 'bg-amber-500/10 text-amber-400 border-amber-500/20 animate-pulse'
+                                }`}>
+                                  {activeConv?.status || 'open'}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 text-[10px] text-neutral-500 font-mono mt-0.5">
+                                <span>User ID: {selectedSupportUserId}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(selectedSupportUserId);
+                                    setCopiedSupportUserId(true);
+                                    setTimeout(() => setCopiedSupportUserId(false), 2000);
+                                  }}
+                                  className="text-amber-400 hover:text-white flex items-center gap-1 font-bold cursor-pointer transition-colors"
+                                  title="Copy User ID"
+                                >
+                                  {copiedSupportUserId ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
+                                  <span>{copiedSupportUserId ? 'Copied!' : 'Copy'}</span>
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
                             <button
-                              onClick={async () => {
-                                if (!confirm(`Mark ticket for ${msg.senderName} as resolved?`)) return;
-                                try {
-                                  const res = await fetch("/api/support/resolve", { 
-                                    method: "POST",
-                                    headers: { "Content-Type": "application/json" },
-                                    body: JSON.stringify({ userId: msg.userId })
-                                  });
-                                  if (res.ok) {
-                                    setSupportMessages(prev => prev.map(m => m.userId === msg.userId ? { ...m, status: "resolved" } : m));
-                                  }
-                                } catch (err) {
-                                  alert("Failed to resolve ticket");
-                                }
-                              }}
-                              className="py-3 bg-neutral-800 hover:bg-emerald-500/20 hover:text-emerald-400 text-neutral-400 font-black text-[10px] uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 border border-neutral-700 hover:border-emerald-500/30"
+                              type="button"
+                              onClick={() => loadSupportThread(selectedSupportUserId)}
+                              className="p-2.5 rounded-xl bg-neutral-950 border border-neutral-800 hover:border-neutral-700 text-neutral-400 hover:text-white transition-all cursor-pointer"
+                              title="Refresh Thread"
                             >
-                              <CheckCircle size={14} />
-                              Resolve
+                              <RefreshCw size={15} className={loadingThread ? 'animate-spin' : ''} />
                             </button>
-                          ) : (
-                            <button
-                              onClick={async () => {
-                                if (!confirm(`Delete chat history for ${msg.senderName}?`)) return;
-                                try {
-                                  const res = await fetch(`/api/support/messages?userId=${msg.userId}`, { method: "DELETE" });
-                                  if (res.ok) {
-                                    setSupportMessages(prev => prev.filter(m => m.userId !== msg.userId));
-                                  } else {
-                                    const data = await res.json();
-                                    alert(data.error || "Failed to clear history");
+
+                            {activeConv?.status !== 'resolved' ? (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (!confirm(`Mark support ticket for ${pName} as resolved?`)) return;
+                                  try {
+                                    const res = await fetch('/api/support/resolve', {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ userId: selectedSupportUserId })
+                                    });
+                                    if (res.ok) {
+                                      setSupportConversations((prev) =>
+                                        prev.map((c) => (c.userId || (c as any).user_id) === selectedSupportUserId ? { ...c, status: 'resolved' } : c)
+                                      );
+                                      loadSupportThread(selectedSupportUserId);
+                                    }
+                                  } catch {
+                                    alert('Failed to resolve ticket');
                                   }
-                                } catch (err) {
-                                  alert("Failed to clear history");
-                                }
-                              }}
-                              className="py-3 bg-neutral-800 hover:bg-rose-500/20 hover:text-rose-400 text-neutral-400 font-black text-[10px] uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 border border-neutral-700 hover:border-rose-500/30"
-                            >
-                              <Trash2 size={14} />
-                              Clear History
-                            </button>
-                          )}
+                                }}
+                                className="px-4 py-2.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer"
+                              >
+                                <CheckCircle size={14} />
+                                <span>Resolve Ticket</span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (!confirm(`Clear entire chat history for ${pName}?`)) return;
+                                  try {
+                                    const res = await fetch(`/api/support/messages?userId=${selectedSupportUserId}`, { method: 'DELETE' });
+                                    if (res.ok) {
+                                      setSupportConversations((prev) => prev.filter((c) => (c.userId || (c as any).user_id) !== selectedSupportUserId));
+                                      setActiveThreadMessages([]);
+                                      setSelectedSupportUserId(null);
+                                    }
+                                  } catch {
+                                    alert('Failed to clear history');
+                                  }
+                                }}
+                                className="px-4 py-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer"
+                              >
+                                <Trash2 size={14} />
+                                <span>Clear Chat</span>
+                              </button>
+                            )}
+                          </div>
                         </div>
+                      );
+                    })()}
+
+                    {/* Thread Message Stream */}
+                    <div className="flex-1 overflow-y-auto space-y-3 p-4 bg-black/60 rounded-2xl border border-neutral-800/80 max-h-[380px] min-h-[320px]">
+                      {loadingThread && activeThreadMessages.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-12 text-center space-y-2">
+                          <Loader2 size={28} className="text-amber-400 animate-spin" />
+                          <p className="text-xs font-mono font-bold text-neutral-500 uppercase">Fetching Full Conversation...</p>
+                        </div>
+                      ) : activeThreadMessages.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-12 text-center space-y-2 opacity-40">
+                          <MessageCircle size={32} className="text-neutral-600" />
+                          <p className="text-xs font-black uppercase tracking-widest text-neutral-400">No Messages in Thread</p>
+                        </div>
+                      ) : (
+                        activeThreadMessages.map((msg) => {
+                          const isStaff = msg.senderRole === 'admin' || msg.senderRole === 'super_admin' || msg.senderRole === 'moderator';
+
+                          return (
+                            <div
+                              key={msg.id}
+                              className={`flex flex-col ${isStaff ? 'items-end' : 'items-start'}`}
+                            >
+                              <div className="flex items-center gap-1.5 mb-1 px-1 text-[10px] font-mono">
+                                <span className="font-bold text-neutral-400 uppercase">
+                                  {msg.senderName}
+                                </span>
+                                {isStaff && (
+                                  <span className="px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-400 font-bold text-[8px] uppercase border border-amber-400/30">
+                                    STAFF
+                                  </span>
+                                )}
+                                {msg.category && !isStaff && (
+                                  <span className="px-1.5 py-0.2 rounded bg-neutral-800 text-neutral-500 text-[8px] uppercase border border-neutral-700">
+                                    {msg.category}
+                                  </span>
+                                )}
+                                <span className="text-neutral-600">
+                                  {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                              </div>
+
+                              <div
+                                className={`p-3.5 rounded-2xl text-xs leading-relaxed max-w-[85%] break-words ${
+                                  isStaff
+                                    ? 'bg-amber-400 text-neutral-950 font-medium rounded-tr-sm shadow-md'
+                                    : 'bg-neutral-900 border border-neutral-800 text-neutral-200 rounded-tl-sm shadow-sm'
+                                }`}
+                              >
+                                {msg.text}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                      <div ref={threadEndRef} />
+                    </div>
+
+                    {/* Quick Canned Response Templates */}
+                    <div className="space-y-1.5 pt-1">
+                      <div className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest">
+                        Quick Response Templates:
+                      </div>
+                      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                        {[
+                          { label: '💳 Verify Deposit', text: 'Your deposit session is being verified with our payment gateway. Please allow a moment.' },
+                          { label: '🛡️ Referee Review', text: 'Your match dispute and scoreboard screenshot are currently under manual referee audit.' },
+                          { label: '💸 Payout Sent', text: 'Your withdrawal request has been authorized and dispatched to your bank account.' },
+                          { label: '✅ Issue Resolved', text: 'Your support inquiry has been resolved. Please let us know if you need any further assistance!' }
+                        ].map((tpl, i) => (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => setComposerText(tpl.text)}
+                            className="px-3 py-1.5 rounded-xl bg-neutral-950 hover:bg-neutral-800 border border-neutral-800 text-[10px] text-neutral-300 font-mono font-bold shrink-0 transition-all cursor-pointer"
+                          >
+                            {tpl.label}
+                          </button>
+                        ))}
                       </div>
                     </div>
-                  );
-                })}
+
+                    {/* Reply Composer */}
+                    <div className="space-y-2 pt-1 border-t border-neutral-800/80">
+                      <textarea
+                        value={composerText}
+                        onChange={(e) => setComposerText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            handleSendSupportReply();
+                          }
+                        }}
+                        placeholder="Type tactical support reply to gladiator... (Press Enter to send)"
+                        className="w-full bg-black border border-neutral-800 focus:border-amber-400 rounded-2xl px-4 py-3 text-xs text-white outline-none transition-all resize-none h-20 placeholder:text-neutral-600"
+                      />
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] text-neutral-500 font-mono">
+                          Press <b>Enter</b> to send message · <b>Shift+Enter</b> for new line
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleSendSupportReply}
+                          disabled={!composerText.trim()}
+                          className="px-6 py-3 bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-neutral-950 font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg shadow-amber-400/10 flex items-center gap-2 cursor-pointer active:scale-95"
+                        >
+                          <Send size={15} />
+                          <span>Dispatch Reply</span>
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
-            )}
+            </div>
           </section>
         )}
 
