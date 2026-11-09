@@ -226,6 +226,20 @@ async function initDatabase() {
         created_by VARCHAR(255)
       );
 
+      CREATE TABLE IF NOT EXISTS admin_audit_logs (
+        id VARCHAR(255) PRIMARY KEY,
+        admin_id VARCHAR(255) NOT NULL,
+        admin_name VARCHAR(255) NOT NULL,
+        action VARCHAR(255) NOT NULL,
+        target_user_id VARCHAR(255),
+        target_user_name VARCHAR(255),
+        details TEXT,
+        category VARCHAR(100) DEFAULT 'GENERAL',
+        ip_address VARCHAR(100),
+        timestamp BIGINT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON admin_audit_logs(timestamp DESC);
+
       CREATE TABLE IF NOT EXISTS matches (
         id VARCHAR(255) PRIMARY KEY,
         challenge_code VARCHAR(100) NOT NULL,
@@ -1848,6 +1862,46 @@ async function broadcastUserUpdate(userId: string) {
   }
 }
 
+async function logAdminAction(params: {
+  adminId: string;
+  adminName?: string;
+  action: string;
+  targetUserId?: string;
+  targetUserName?: string;
+  details?: string;
+  category?: 'BALANCE' | 'BAN' | 'DISPUTE' | 'BROADCAST' | 'ROLE' | 'MAINTENANCE' | 'GENERAL';
+  ipAddress?: string;
+}) {
+  try {
+    let name = params.adminName;
+    if (!name) {
+      const adminUser = await getUserFromDb(params.adminId);
+      name = adminUser?.codmIgn || adminUser?.username || adminUser?.email || params.adminId;
+    }
+    const logId = `audit_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const category = params.category || 'GENERAL';
+    const timestamp = Date.now();
+
+    await pool.query(`
+      INSERT INTO admin_audit_logs (id, admin_id, admin_name, action, target_user_id, target_user_name, details, category, ip_address, timestamp)
+      VALUES (
+        ${escapeSql(logId)},
+        ${escapeSql(params.adminId)},
+        ${escapeSql(name || 'Admin')},
+        ${escapeSql(params.action)},
+        ${escapeSql(params.targetUserId || null)},
+        ${escapeSql(params.targetUserName || null)},
+        ${escapeSql(params.details || null)},
+        ${escapeSql(category)},
+        ${escapeSql(params.ipAddress || null)},
+        ${timestamp}
+      )
+    `);
+  } catch (err) {
+    console.error('Failed to write admin audit log:', err);
+  }
+}
+
 async function updatePlatformFinance(fee) {
   try {
     await pool.query(`
@@ -2100,12 +2154,22 @@ app.get("/api/msksksnuwje/flagged-accounts", async (req, res) => {
 app.post("/api/msksksnuwje/flagged-accounts/:userId/dismiss", async (req, res) => {
   try {
     const { userId } = req.params;
+    const targetUser = await getUserFromDb(userId);
     await pool.query(`
       UPDATE users 
       SET is_flagged = false, flag_dismissed = true, flag_reason = NULL, flagged_with_user_id = NULL, flag_matches = NULL 
       WHERE id = ${escapeSql(userId)}
     `);
     broadcastUserUpdate(userId);
+    logAdminAction({
+      adminId: req.adminUser.id,
+      adminName: req.adminUser.codmIgn || req.adminUser.username,
+      action: 'Dismiss Flag',
+      targetUserId: userId,
+      targetUserName: targetUser?.codmIgn || targetUser?.username,
+      details: `Dismissed multi-accounting detection flag for ${targetUser?.codmIgn || targetUser?.username || userId}`,
+      category: 'BAN'
+    });
     res.json({ success: true, message: "Account flag dismissed" });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to dismiss flag" });
@@ -2114,12 +2178,22 @@ app.post("/api/msksksnuwje/flagged-accounts/:userId/dismiss", async (req, res) =
 app.post("/api/msksksnuwje/flagged-accounts/:userId/ban", async (req, res) => {
   try {
     const { userId } = req.params;
+    const targetUser = await getUserFromDb(userId);
     await pool.query(`
       UPDATE users 
       SET role = 'banned', is_flagged = true, flag_dismissed = false, flag_reason = 'Account banned for multi-accounting violation'
       WHERE id = ${escapeSql(userId)}
     `);
     broadcastUserUpdate(userId);
+    logAdminAction({
+      adminId: req.adminUser.id,
+      adminName: req.adminUser.codmIgn || req.adminUser.username,
+      action: 'Ban Account',
+      targetUserId: userId,
+      targetUserName: targetUser?.codmIgn || targetUser?.username,
+      details: `Banned account ${targetUser?.codmIgn || targetUser?.username || userId} for multi-accounting violation`,
+      category: 'BAN'
+    });
     res.json({ success: true, message: "Account banned successfully" });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to ban account" });
@@ -2128,12 +2202,22 @@ app.post("/api/msksksnuwje/flagged-accounts/:userId/ban", async (req, res) => {
 app.post("/api/msksksnuwje/flagged-accounts/:userId/unban", async (req, res) => {
   try {
     const { userId } = req.params;
+    const targetUser = await getUserFromDb(userId);
     await pool.query(`
       UPDATE users 
       SET role = 'user', is_flagged = false, flag_dismissed = true, flag_reason = NULL 
       WHERE id = ${escapeSql(userId)}
     `);
     broadcastUserUpdate(userId);
+    logAdminAction({
+      adminId: req.adminUser.id,
+      adminName: req.adminUser.codmIgn || req.adminUser.username,
+      action: 'Unban Account',
+      targetUserId: userId,
+      targetUserName: targetUser?.codmIgn || targetUser?.username,
+      details: `Unbanned account ${targetUser?.codmIgn || targetUser?.username || userId} and restored regular player status`,
+      category: 'BAN'
+    });
     res.json({ success: true, message: "Account unbanned successfully" });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to unban account" });
@@ -2141,22 +2225,20 @@ app.post("/api/msksksnuwje/flagged-accounts/:userId/unban", async (req, res) => 
 });
 app.get("/api/broadcast", async (req, res) => {
   try {
-    const resB = await pool.query(`SELECT * FROM global_broadcasts WHERE active = true ORDER BY created_at DESC LIMIT 1`);
-    if (resB.rows.length > 0) {
-      const b = resB.rows[0];
-      return res.json({
-        broadcast: {
-          id: b.id,
-          message: b.message,
-          type: b.type || 'info',
-          active: b.active,
-          createdAt: parseInt(b.created_at || "0", 10)
-        }
-      });
-    }
-    res.json({ broadcast: null });
+    const resB = await pool.query(`SELECT * FROM global_broadcasts WHERE active = true ORDER BY created_at DESC`);
+    const broadcasts = resB.rows.map(b => ({
+      id: b.id,
+      message: b.message,
+      type: b.type || 'info',
+      active: b.active,
+      createdAt: parseInt(b.created_at || "0", 10)
+    }));
+    res.json({
+      broadcasts,
+      broadcast: broadcasts.length > 0 ? broadcasts[0] : null
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message || "Failed to fetch active broadcast" });
+    res.status(500).json({ error: err.message || "Failed to fetch active broadcasts" });
   }
 });
 app.post("/api/msksksnuwje/broadcast", async (req, res) => {
@@ -2165,12 +2247,11 @@ app.post("/api/msksksnuwje/broadcast", async (req, res) => {
     if (!message || !message.trim()) {
       return res.status(400).json({ error: "Broadcast message text is required" });
     }
-    const bId = `bcast_${Date.now()}`;
+    const bId = `bcast_${Date.now()}_${Math.floor(Math.random()*1000)}`;
     const cleanMsg = message.trim();
     const cleanType = ['info', 'warning', 'urgent', 'success'].includes(type) ? type : 'info';
     const createdAt = Date.now();
 
-    await pool.query(`UPDATE global_broadcasts SET active = false WHERE active = true`);
     await pool.query(`
       INSERT INTO global_broadcasts (id, message, type, active, created_at, created_by)
       VALUES (
@@ -2183,24 +2264,103 @@ app.post("/api/msksksnuwje/broadcast", async (req, res) => {
       )
     `);
 
-    const payload = { id: bId, message: cleanMsg, type: cleanType, active: true, createdAt };
+    const allActiveRes = await pool.query(`SELECT * FROM global_broadcasts WHERE active = true ORDER BY created_at DESC`);
+    const broadcasts = allActiveRes.rows.map(b => ({
+      id: b.id,
+      message: b.message,
+      type: b.type || 'info',
+      active: b.active,
+      createdAt: parseInt(b.created_at || "0", 10)
+    }));
+
     if (globalIo) {
-      globalIo.emit("global_broadcast", payload);
+      globalIo.emit("global_broadcasts", broadcasts);
+      globalIo.emit("global_broadcast", broadcasts[0]);
     }
-    res.json({ success: true, broadcast: payload, message: "Live broadcast published to all online gladiators!" });
+    logAdminAction({
+      adminId: req.adminUser.id,
+      adminName: req.adminUser.codmIgn || req.adminUser.username,
+      action: 'Create Broadcast',
+      details: `Published live marquee broadcast [Type: ${cleanType}]: "${cleanMsg}"`,
+      category: 'BROADCAST'
+    });
+    res.json({ success: true, broadcast: broadcasts[0], broadcasts, message: "New live broadcast added!" });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to publish broadcast" });
   }
 });
-app.delete("/api/msksksnuwje/broadcast", async (req, res) => {
+app.delete(["/api/msksksnuwje/broadcast/:id", "/api/msksksnuwje/broadcast"], async (req, res) => {
   try {
-    await pool.query(`UPDATE global_broadcasts SET active = false WHERE active = true`);
-    if (globalIo) {
-      globalIo.emit("global_broadcast", null);
+    const { id } = req.params;
+    if (id) {
+      await pool.query(`UPDATE global_broadcasts SET active = false WHERE id = ${escapeSql(id)}`);
+    } else {
+      await pool.query(`UPDATE global_broadcasts SET active = false WHERE active = true`);
     }
-    res.json({ success: true, message: "Active broadcast cleared and hidden from all players" });
+
+    const allActiveRes = await pool.query(`SELECT * FROM global_broadcasts WHERE active = true ORDER BY created_at DESC`);
+    const broadcasts = allActiveRes.rows.map(b => ({
+      id: b.id,
+      message: b.message,
+      type: b.type || 'info',
+      active: b.active,
+      createdAt: parseInt(b.created_at || "0", 10)
+    }));
+
+    if (globalIo) {
+      globalIo.emit("global_broadcasts", broadcasts);
+      globalIo.emit("global_broadcast", broadcasts.length > 0 ? broadcasts[0] : null);
+    }
+    logAdminAction({
+      adminId: req.adminUser.id,
+      adminName: req.adminUser.codmIgn || req.adminUser.username,
+      action: id ? 'Delete Broadcast' : 'Clear All Broadcasts',
+      details: id ? `Removed live broadcast ID ${id}` : 'Cleared all active live broadcasts',
+      category: 'BROADCAST'
+    });
+    res.json({ success: true, broadcasts, message: id ? "Broadcast removed" : "All broadcasts cleared" });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to clear broadcast" });
+  }
+});
+app.get("/api/msksksnuwje/audit-logs", async (req, res) => {
+  try {
+    const { category, search, limit = "100" } = req.query;
+    let queryStr = `SELECT * FROM admin_audit_logs WHERE 1=1`;
+    
+    if (category && String(category).toUpperCase() !== 'ALL') {
+      queryStr += ` AND category = ${escapeSql(String(category).toUpperCase())}`;
+    }
+    
+    if (search && String(search).trim()) {
+      const q = String(search).trim().toLowerCase();
+      queryStr += ` AND (
+        LOWER(admin_name) LIKE ${escapeSql(`%${q}%`)} OR 
+        LOWER(action) LIKE ${escapeSql(`%${q}%`)} OR 
+        LOWER(target_user_name) LIKE ${escapeSql(`%${q}%`)} OR 
+        LOWER(details) LIKE ${escapeSql(`%${q}%`)}
+      )`;
+    }
+    
+    queryStr += ` ORDER BY timestamp DESC LIMIT ${Math.min(200, Math.max(1, parseInt(String(limit), 10) || 100))}`;
+    
+    const result = await pool.query(queryStr);
+    const logs = result.rows.map(r => ({
+      id: r.id,
+      adminId: r.admin_id,
+      adminName: r.admin_name,
+      action: r.action,
+      targetUserId: r.target_user_id,
+      targetUserName: r.target_user_name,
+      details: r.details,
+      category: r.category,
+      ipAddress: r.ip_address,
+      timestamp: parseInt(r.timestamp || "0", 10)
+    }));
+
+    res.json({ logs });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to fetch audit logs" });
   }
 });
 app.post("/api/msksksnuwje/withdraw", async (req, res) => {
@@ -2948,6 +3108,15 @@ app.post("/api/msksksnuwje/users/:id/adjust-balance", async (req, res) => {
     const refreshed = await getUserFromDb(targetUserId);
     broadcastUserUpdate(targetUserId);
     broadcastFinanceUpdate();
+    logAdminAction({
+      adminId: req.adminUser.id,
+      adminName: req.adminUser.codmIgn || req.adminUser.username,
+      action: `Adjust Balance (${type.toUpperCase()})`,
+      targetUserId: targetUserId,
+      targetUserName: refreshed.codmIgn || refreshed.username,
+      details: `Adjusted user balance by ₦${numAmount.toLocaleString()} (${type}). Reason: ${reason || 'Admin manual adjustment'}. New Balance: ₦${refreshed.balance.toLocaleString()}`,
+      category: 'BALANCE'
+    });
     res.json({
       success: true,
       message: `Balance adjusted for ${refreshed.codmIgn || refreshed.email}. New balance: \u20A6${refreshed.balance.toLocaleString()}`,

@@ -46,7 +46,8 @@ import {
   Copy,
   Headphones,
   MessageCircle,
-  Megaphone
+  Megaphone,
+  ClipboardList
 } from 'lucide-react';
 import {
   fetchAdminUsers,
@@ -79,6 +80,8 @@ import {
   deleteUser,
   fetchMaintenanceStatus,
   updateMaintenanceMode,
+  fetchAdminAuditLogs,
+  AdminAuditLog,
   GmailIntegrationStatus,
   AdminEmailItem,
   FlaggedAccountItem,
@@ -120,12 +123,30 @@ interface AdminFinanceData {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onRefreshUser }) => {
-  const [activeTab, setActiveTab] = useState<'review_queue' | 'finance' | 'users' | 'gmail' | 'disputes' | 'multi_accounts' | 'broadcast' | 'maintenance' | 'support'>('review_queue');
+  const [activeTab, setActiveTab] = useState<'review_queue' | 'finance' | 'users' | 'gmail' | 'disputes' | 'multi_accounts' | 'broadcast' | 'audit_logs' | 'maintenance' | 'support'>('review_queue');
   const [flaggedAccounts, setFlaggedAccounts] = useState<FlaggedAccountItem[]>([]);
   const [multiAccountClusters, setMultiAccountClusters] = useState<any[]>([]);
   const [flaggedLoading, setFlaggedLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Audit Logs State
+  const [auditLogs, setAuditLogs] = useState<AdminAuditLog[]>([]);
+  const [auditLoading, setAuditLoading] = useState<boolean>(false);
+  const [auditCategory, setAuditCategory] = useState<string>('ALL');
+  const [auditSearch, setAuditSearch] = useState<string>('');
+
+  const loadAuditLogs = async () => {
+    try {
+      setAuditLoading(true);
+      const logs = await fetchAdminAuditLogs(currentUser.id, auditSearch, auditCategory);
+      setAuditLogs(logs);
+    } catch (err) {
+      console.error('Failed to load audit logs:', err);
+    } finally {
+      setAuditLoading(false);
+    }
+  };
 
   // Review Queue Moderation state
   const [reviewQueueMatches, setReviewQueueMatches] = useState<Match[]>([]);
@@ -219,12 +240,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
   const [isPublishingBroadcast, setIsPublishingBroadcast] = useState(false);
   const [broadcastStatusMsg, setBroadcastStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [currentActiveBroadcast, setCurrentActiveBroadcast] = useState<any>(null);
+  const [activeBroadcasts, setActiveBroadcasts] = useState<any[]>([]);
 
   const loadActiveBroadcast = async () => {
     try {
       const res = await fetch('/api/broadcast');
       const data = await res.json();
-      setCurrentActiveBroadcast(data?.broadcast || null);
+      if (data && Array.isArray(data.broadcasts)) {
+        setActiveBroadcasts(data.broadcasts);
+        setCurrentActiveBroadcast(data.broadcasts[0] || null);
+      } else {
+        setActiveBroadcasts([]);
+        setCurrentActiveBroadcast(null);
+      }
     } catch (err) {
       console.error('Failed to load active broadcast:', err);
     }
@@ -249,7 +277,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
       if (!res.ok) throw new Error(data.error || 'Failed to publish broadcast');
       setBroadcastStatusMsg({ type: 'success', text: data.message || 'Published broadcast live!' });
       setBroadcastText('');
-      loadActiveBroadcast();
+      await loadActiveBroadcast();
       setTimeout(() => setBroadcastStatusMsg(null), 4000);
     } catch (err: any) {
       setBroadcastStatusMsg({ type: 'error', text: err.message || 'Failed to publish broadcast' });
@@ -258,11 +286,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     }
   };
 
-  const handleClearBroadcast = async () => {
+  const handleClearBroadcast = async (bcastId?: string) => {
     setIsPublishingBroadcast(true);
     setBroadcastStatusMsg(null);
     try {
-      const res = await fetch('/api/msksksnuwje/broadcast', {
+      const endpoint = bcastId && typeof bcastId === 'string' ? `/api/msksksnuwje/broadcast/${bcastId}` : '/api/msksksnuwje/broadcast';
+      const res = await fetch(endpoint, {
         method: 'DELETE',
         headers: {
           'X-Admin-Id': currentUser.id,
@@ -271,8 +300,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to clear broadcast');
-      setBroadcastStatusMsg({ type: 'success', text: data.message || 'Cleared broadcast' });
-      setCurrentActiveBroadcast(null);
+      setBroadcastStatusMsg({ type: 'success', text: data.message || 'Updated broadcasts' });
+      await loadActiveBroadcast();
       setTimeout(() => setBroadcastStatusMsg(null), 4000);
     } catch (err: any) {
       setBroadcastStatusMsg({ type: 'error', text: err.message || 'Failed to clear broadcast' });
@@ -693,7 +722,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
     if (currentUser.role === 'moderator') {
       await Promise.all([loadDisputes(), loadReviewQueue()]);
     } else {
-      await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings(), loadFlaggedAccounts(), loadMaintenanceStatus(), loadServerIp(), loadSupportMessages()]);
+      await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings(), loadFlaggedAccounts(), loadMaintenanceStatus(), loadServerIp(), loadSupportMessages(), loadAuditLogs()]);
     }
     if (onRefreshUser) onRefreshUser();
     setRefreshing(false);
@@ -807,7 +836,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
       if (currentUser.role === 'moderator') {
         await Promise.all([loadDisputes(), loadReviewQueue(), loadServerIp()]);
       } else if (currentUser.role === 'admin' || currentUser.role === 'super_admin') {
-        await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings(), loadFlaggedAccounts(), loadMaintenanceStatus(), loadServerIp(), loadSupportMessages()]);
+        await Promise.all([loadFinance(), loadUsers(), loadGmail(), loadDisputes(), loadReviewQueue(), loadFeeSettings(), loadFlaggedAccounts(), loadMaintenanceStatus(), loadServerIp(), loadSupportMessages(), loadAuditLogs()]);
       }
       setLoading(false);
     };
@@ -1162,6 +1191,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
               { id: 'broadcast', icon: Megaphone, label: 'Global Broadcast', badge: currentActiveBroadcast ? 'LIVE' : 'OFF', roles: ['admin', 'moderator', 'super_admin'] },
               { id: 'gmail', icon: Mail, label: 'Sync Engine', badge: emailsList.length, roles: ['admin', 'super_admin'] },
               { id: 'multi_accounts', icon: ShieldAlert, label: 'Multi-Accounts', badge: flaggedAccounts.length, roles: ['admin', 'super_admin'] },
+              { id: 'audit_logs', icon: ClipboardList, label: 'Audit Logs', badge: auditLogs.length, roles: ['admin', 'super_admin'] },
               { id: 'maintenance', icon: Settings, label: 'Maintenance & IP', badge: maintenanceEnabled ? 'ACTIVE' : 'OFF', roles: ['admin', 'super_admin'] }
             ].filter(tab => tab.roles.includes(currentUser.role || 'user')).map(tab => (
               <button
@@ -1244,7 +1274,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
 
             {currentActiveBroadcast && (
               <button
-                onClick={handleClearBroadcast}
+                onClick={() => handleClearBroadcast()}
                 disabled={isPublishingBroadcast}
                 className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black uppercase tracking-widest transition-all active:scale-95 shadow-lg shadow-rose-600/20 shrink-0"
               >
@@ -1253,13 +1283,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
             )}
           </div>
 
-          {currentActiveBroadcast && (
-            <div className="p-4 rounded-xl bg-cyan-950/40 border border-cyan-500/30 font-mono text-xs text-cyan-200 flex items-center justify-between gap-4">
-              <div className="flex items-center gap-2 overflow-hidden">
-                <span className="text-[10px] font-black uppercase tracking-wider text-cyan-400 shrink-0">Active Message:</span>
-                <span className="truncate font-bold text-white">{currentActiveBroadcast.message}</span>
+          {activeBroadcasts.length > 0 && (
+            <div className="space-y-2 pt-2 border-t border-neutral-800/80">
+              <span className="text-[10px] font-black uppercase tracking-wider text-cyan-400 block">
+                Active Live Announcements ({activeBroadcasts.length})
+              </span>
+              <div className="flex flex-col gap-2">
+                {activeBroadcasts.map((bcast) => (
+                  <div key={bcast.id} className="p-3.5 rounded-xl bg-cyan-950/40 border border-cyan-500/30 font-mono text-xs text-cyan-200 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-2 overflow-hidden">
+                      <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 shrink-0">
+                        {bcast.type}
+                      </span>
+                      <span className="truncate font-bold text-white">{bcast.message}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleClearBroadcast(bcast.id)}
+                      className="text-[10px] text-rose-400 hover:text-rose-300 font-bold uppercase underline shrink-0 cursor-pointer"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
               </div>
-              <span className="text-[10px] text-cyan-400 font-bold uppercase shrink-0">Type: {currentActiveBroadcast.type}</span>
             </div>
           )}
 
@@ -1539,6 +1586,153 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
           </div>
         )}
 
+        {/* TAB CONTENT: AUDIT LOGS */}
+        {activeTab === 'audit_logs' && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
+            <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-purple-400/10 border border-purple-400/30 flex items-center justify-center text-purple-400">
+                    <ClipboardList size={22} />
+                  </div>
+                  <h3 className="text-3xl font-black text-white uppercase tracking-tighter leading-none">Staff Security Audit Logs</h3>
+                </div>
+                <p className="text-neutral-400 text-xs font-medium">
+                  Complete immutable audit trail tracking all sensitive admin operations (balance edits, bans, dispute resolutions, role grants, and broadcast announcements).
+                </p>
+              </div>
+              <button
+                onClick={loadAuditLogs}
+                disabled={auditLoading}
+                className="flex items-center gap-2 px-5 py-3 rounded-xl bg-neutral-900 border border-neutral-800 hover:border-neutral-700 text-neutral-300 hover:text-white text-xs font-black uppercase tracking-wider transition-all active:scale-95 shadow-lg"
+              >
+                <RefreshCw size={14} className={auditLoading ? 'animate-spin' : ''} />
+                <span>Refresh Logs</span>
+              </button>
+            </header>
+
+            {/* AUDIT LOG CONTROLS: SEARCH & CATEGORY FILTER */}
+            <div className="bg-neutral-900 border border-neutral-800 p-6 rounded-[2rem] shadow-2xl flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4">
+              <div className="relative flex-1">
+                <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-500" />
+                <input
+                  type="text"
+                  value={auditSearch}
+                  onChange={e => {
+                    setAuditSearch(e.target.value);
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') loadAuditLogs();
+                  }}
+                  placeholder="Search audit logs by Admin IGN, Target Gladiator, Action, or Details..."
+                  className="w-full bg-black border border-neutral-800 rounded-xl pl-11 pr-4 py-3 text-xs font-mono text-white placeholder-neutral-600 focus:outline-none focus:border-purple-400 transition-all"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 overflow-x-auto pb-1 md:pb-0">
+                {[
+                  { id: 'ALL', label: 'All Actions' },
+                  { id: 'BALANCE', label: '💰 Balance' },
+                  { id: 'BAN', label: '🚨 Bans' },
+                  { id: 'DISPUTE', label: '🛡️ Disputes' },
+                  { id: 'BROADCAST', label: '📢 Broadcasts' },
+                  { id: 'ROLE', label: '🔑 Roles' },
+                  { id: 'MAINTENANCE', label: '⚙️ System' },
+                ].map(cat => (
+                  <button
+                    key={cat.id}
+                    onClick={() => {
+                      setAuditCategory(cat.id);
+                    }}
+                    className={`px-3.5 py-2 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${auditCategory === cat.id ? 'bg-purple-500 text-white shadow-lg shadow-purple-500/20' : 'bg-black border border-neutral-800 text-neutral-400 hover:text-white'}`}
+                  >
+                    {cat.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* AUDIT LOGS TABLE / LIST */}
+            {auditLoading ? (
+              <div className="p-16 bg-neutral-900 border border-neutral-800 rounded-[2.5rem] text-center space-y-4 shadow-2xl">
+                <Loader2 size={36} className="animate-spin text-purple-400 mx-auto" />
+                <p className="text-xs font-mono font-bold text-neutral-400 uppercase tracking-widest">Retrieving Audit Logs...</p>
+              </div>
+            ) : auditLogs.length === 0 ? (
+              <div className="p-16 bg-neutral-900 border border-neutral-800 rounded-[2.5rem] text-center space-y-4 shadow-2xl">
+                <div className="w-16 h-16 rounded-2xl bg-neutral-800 border border-neutral-700 flex items-center justify-center text-neutral-500 mx-auto">
+                  <ClipboardList size={32} />
+                </div>
+                <h4 className="text-xl font-black text-white uppercase tracking-tight">No Audit Logs Found</h4>
+                <p className="text-xs text-neutral-500 max-w-sm mx-auto">No sensitive admin actions match your current search or category filter criteria.</p>
+              </div>
+            ) : (
+              <div className="bg-neutral-900 border border-neutral-800 rounded-[2.5rem] shadow-2xl overflow-hidden">
+                <div className="p-6 border-b border-neutral-800 flex justify-between items-center">
+                  <span className="text-xs font-black text-white uppercase tracking-wider">
+                    Showing {auditLogs.length} Logged Actions
+                  </span>
+                  <span className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest">
+                    Timezone: Local System
+                  </span>
+                </div>
+
+                <div className="divide-y divide-neutral-800/60">
+                  {auditLogs.map(log => {
+                    const getCatBadge = (cat: string) => {
+                      switch (cat) {
+                        case 'BALANCE':
+                          return 'bg-amber-500/10 border-amber-500/30 text-amber-400';
+                        case 'BAN':
+                          return 'bg-rose-500/10 border-rose-500/30 text-rose-400';
+                        case 'DISPUTE':
+                          return 'bg-blue-500/10 border-blue-500/30 text-blue-400';
+                        case 'BROADCAST':
+                          return 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400';
+                        case 'ROLE':
+                          return 'bg-purple-500/10 border-purple-500/30 text-purple-400';
+                        case 'MAINTENANCE':
+                          return 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400';
+                        default:
+                          return 'bg-neutral-800 border-neutral-700 text-neutral-400';
+                      }
+                    };
+
+                    return (
+                      <div key={log.id} className="p-6 hover:bg-black/30 transition-all flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                        <div className="space-y-2 flex-1">
+                          <div className="flex flex-wrap items-center gap-3">
+                            <span className={`px-2.5 py-0.5 rounded-md border text-[10px] font-black uppercase tracking-widest ${getCatBadge(log.category)}`}>
+                              {log.category}
+                            </span>
+                            <span className="text-sm font-black text-white tracking-wide">{log.action}</span>
+                            {log.targetUserName && (
+                              <span className="text-xs font-mono font-bold text-amber-400 bg-amber-400/10 border border-amber-400/20 px-2 py-0.5 rounded-md">
+                                Target: {log.targetUserName}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs font-mono text-neutral-300 leading-relaxed max-w-3xl">{log.details}</p>
+                        </div>
+
+                        <div className="flex flex-col items-end shrink-0 text-right space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-black text-neutral-500 uppercase tracking-widest">Admin:</span>
+                            <span className="text-xs font-black text-amber-400 font-mono">{log.adminName}</span>
+                          </div>
+                          <span className="text-[10px] font-mono text-neutral-500">
+                            {new Date(log.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} • {new Date(log.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* TAB CONTENT: GLOBAL MARQUEE BROADCAST */}
         {activeTab === 'broadcast' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
@@ -1575,28 +1769,57 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                     <p className="text-xs text-neutral-400 font-medium">Broadcasts instantly appear on top of all active player screens via WebSockets (0ms latency).</p>
                   </div>
                 </div>
-                {currentActiveBroadcast && (
+                {activeBroadcasts.length > 0 ? (
                   <span className="px-3.5 py-1.5 rounded-full bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 text-[10px] font-black uppercase tracking-widest flex items-center gap-2 animate-pulse">
                     <div className="w-2 h-2 rounded-full bg-cyan-400" />
-                    BROADCAST LIVE NOW
+                    {activeBroadcasts.length} BROADCASTS LIVE NOW
+                  </span>
+                ) : (
+                  <span className="px-3.5 py-1.5 rounded-full bg-neutral-800 text-neutral-500 text-[10px] font-black uppercase tracking-widest">
+                    IDLE
                   </span>
                 )}
               </div>
 
-              {/* Active Broadcast Indicator */}
-              {currentActiveBroadcast ? (
-                <div className="p-6 rounded-2xl bg-cyan-950/40 border border-cyan-500/30 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-xl">
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-black text-cyan-400 uppercase tracking-widest">Active Live Announcement ({currentActiveBroadcast.type?.toUpperCase()})</span>
-                    <p className="text-base font-bold text-white font-mono">{currentActiveBroadcast.message}</p>
+              {/* Active Broadcasts List */}
+              {activeBroadcasts.length > 0 ? (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-cyan-400 uppercase tracking-widest">
+                      Active Live Announcements ({activeBroadcasts.length})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleClearBroadcast()}
+                      disabled={isPublishingBroadcast}
+                      className="text-xs text-rose-400 hover:text-rose-300 font-bold uppercase underline cursor-pointer"
+                    >
+                      Clear All Broadcasts
+                    </button>
                   </div>
-                  <button
-                    onClick={handleClearBroadcast}
-                    disabled={isPublishingBroadcast}
-                    className="px-6 py-3.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black uppercase tracking-widest transition-all active:scale-95 shadow-lg shadow-rose-600/20 shrink-0"
-                  >
-                    Clear Active Broadcast
-                  </button>
+                  <div className="grid grid-cols-1 gap-3">
+                    {activeBroadcasts.map((bcast) => (
+                      <div key={bcast.id} className="p-5 rounded-2xl bg-cyan-950/40 border border-cyan-500/30 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-xl">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="px-2.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 text-[10px] font-black uppercase tracking-wider">
+                              {bcast.type}
+                            </span>
+                            <span className="text-[10px] text-neutral-500 font-mono">ID: {bcast.id}</span>
+                          </div>
+                          <p className="text-sm font-bold text-white font-mono">{bcast.message}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleClearBroadcast(bcast.id)}
+                          disabled={isPublishingBroadcast}
+                          className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black uppercase tracking-widest transition-all active:scale-95 shadow-lg shadow-rose-600/20 shrink-0 cursor-pointer"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ) : (
                 <div className="p-5 rounded-2xl bg-black/40 border border-neutral-800/60 text-xs text-neutral-500 font-mono flex items-center gap-3">
@@ -3527,7 +3750,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                     <p className="text-sm font-bold text-white font-mono">{currentActiveBroadcast.message}</p>
                   </div>
                   <button
-                    onClick={handleClearBroadcast}
+                    onClick={() => handleClearBroadcast()}
                     disabled={isPublishingBroadcast}
                     className="px-5 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black uppercase tracking-widest transition-all active:scale-95 shadow-lg shadow-rose-600/20 shrink-0"
                   >

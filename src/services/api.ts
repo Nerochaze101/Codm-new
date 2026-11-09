@@ -459,8 +459,13 @@ export async function deleteUser(adminUserId: string, targetUserId: string) {
 }
 
 export async function fetchMaintenanceStatus(): Promise<{ maintenanceMode: boolean }> {
-  const res = await fetch('/api/maintenance-status');
-  return await parseResponse(res);
+  try {
+    const res = await fetch('/api/maintenance-status');
+    return await parseResponse(res);
+  } catch (err) {
+    console.warn('Silently failed to fetch maintenance status, defaulting to false:', err);
+    return { maintenanceMode: false };
+  }
 }
 
 export async function updateMaintenanceMode(adminUserId: string, enabled: boolean): Promise<{ success: boolean; maintenanceMode: boolean }> {
@@ -979,5 +984,34 @@ export function uploadMatchVideoWithProgress(
     xhr.open('POST', `/api/matches/${matchId}/upload-video`);
     xhr.send(formData);
   });
+}
+
+export interface AdminAuditLog {
+  id: string;
+  adminId: string;
+  adminName: string;
+  action: string;
+  targetUserId?: string;
+  targetUserName?: string;
+  details?: string;
+  category: 'BALANCE' | 'BAN' | 'DISPUTE' | 'BROADCAST' | 'ROLE' | 'MAINTENANCE' | 'GENERAL';
+  ipAddress?: string;
+  timestamp: number;
+}
+
+export async function fetchAdminAuditLogs(
+  adminUserId: string,
+  search?: string,
+  category?: string
+): Promise<AdminAuditLog[]> {
+  const params = new URLSearchParams({ userId: adminUserId });
+  if (search) params.append('search', search);
+  if (category) params.append('category', category);
+  
+  const res = await fetch(`/api/msksksnuwje/audit-logs?${params.toString()}`, {
+    headers: { 'X-Admin-Id': adminUserId, 'X-User-Id': adminUserId },
+  });
+  const data = await parseResponse(res);
+  return data.logs || [];
 }
 

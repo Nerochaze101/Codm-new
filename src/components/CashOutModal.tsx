@@ -254,6 +254,11 @@ export const CashOutModal: React.FC<CashOutModalProps> = ({
                   <span className="text-neutral-400">Withdrawal Fee</span>
                   <span className="font-bold text-amber-300 font-mono">₦{withdrawalCalc.totalFee.toFixed(2)}</span>
                 </div>
+                <div className="text-[9px] text-neutral-500 font-mono pt-1">
+                  {withdrawalCalc.isHighTier 
+                    ? "Fee: ₦50.00 (Standard for ₦20,000+)" 
+                    : "Fee: ₦15.50 (Standard for < ₦20,000)"}
+                </div>
 
                 <div className="flex items-center justify-between text-xs pb-2 border-b border-neutral-800/80">
                   <span className="text-neutral-400 font-bold">Total Wallet Deduction</span>
