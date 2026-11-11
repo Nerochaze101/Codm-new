@@ -144,11 +144,6 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const handleSelectTab = (tabId: string) => {
     playTabSound();
-    if (tabId === 'support') {
-      window.dispatchEvent(new CustomEvent('open-support-widget'));
-      setIsMenuOpen(false);
-      return;
-    }
     onNavigate(tabId);
     setIsMenuOpen(false);
   };
@@ -226,7 +221,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               type="button"
               onClick={() => {
                 playTabSound();
-                window.dispatchEvent(new CustomEvent('open-support-widget'));
+                onNavigate('support');
               }}
               className="relative p-2 sm:p-2.5 rounded-xl border border-neutral-800 hover:border-amber-400/50 bg-neutral-900 text-neutral-300 hover:text-white transition-all cursor-pointer shadow-md active:scale-95 flex items-center justify-center"
               title="24/7 Live Customer Support Chat"

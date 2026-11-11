@@ -17,6 +17,7 @@ export interface LandingPageProps {
   currentUser?: UserProfile;
   onOpenAuth: (mode?: 'signin' | 'signup') => void;
   onNavigateToArena?: () => void;
+  onNavigateToSupport?: () => void;
   maintenanceMode?: boolean;
 }
 
@@ -52,6 +53,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   currentUser,
   onOpenAuth,
   onNavigateToArena,
+  onNavigateToSupport,
   maintenanceMode = false,
 }) => {
   const [activeFormatTab, setActiveFormatTab] = useState<'1v1' | 'normal'>('1v1');
@@ -698,7 +700,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             <span>10% Platform Rake</span>
             <span>·</span>
             <button
-              onClick={() => window.dispatchEvent(new CustomEvent('open-support-widget'))}
+              onClick={() => {
+                if (onNavigateToSupport) onNavigateToSupport();
+                else window.location.pathname = '/support';
+              }}
               className="text-amber-400 hover:text-amber-300 hover:underline cursor-pointer flex items-center gap-1 font-bold"
             >
               <span>🎧 24/7 Live Support</span>

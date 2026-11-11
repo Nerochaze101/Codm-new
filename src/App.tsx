@@ -35,7 +35,7 @@ import { MatchCreatedSuccessModal } from './components/MatchCreatedSuccessModal'
 import { BackgroundUploadBanner } from './components/BackgroundUploadBanner';
 import { DisputesPage } from './components/DisputesPage';
 import { SocialTab } from './components/SocialTab';
-import { SupportWidget } from './components/SupportWidget';
+import { SupportPage } from './components/SupportPage';
 import { GlobalBroadcastBanner } from './components/GlobalBroadcastBanner';
 import { ShieldAlert, UserCheck, Lock, RefreshCw, Users as UsersIcon } from 'lucide-react';
 
@@ -381,6 +381,7 @@ function MainApp() {
   else if (pathname === '/wallet') currentTab = 'wallet';
   else if (pathname === '/profile') currentTab = 'profile';
   else if (pathname === '/social') currentTab = 'social';
+  else if (pathname === '/support') currentTab = 'support';
   else if (pathname === '/msksksnuwje') currentTab = 'admin';
 
   // Initial Data Fetch & URL Deep Link Check
@@ -778,9 +779,8 @@ function MainApp() {
             navigate('/auth');
           }}
           onNavigateToArena={() => navigate('/arena')}
+          onNavigateToSupport={() => navigate('/support')}
         />
-        {/* Customer Support Floating Widget Chat */}
-        <SupportWidget currentUser={currentUser} />
       </div>
     );
   }
@@ -801,8 +801,6 @@ function MainApp() {
           }}
           demoUsers={{}}
         />
-        {/* Customer Support Floating Widget Chat */}
-        <SupportWidget currentUser={currentUser} />
       </div>
     );
   }
@@ -946,6 +944,16 @@ function MainApp() {
                 <MaintenanceOverlay />
               ) : (
                 <SocialTab currentUser={currentUser} onOpenCreateBet={handleOpenCreateBet} />
+              )
+            }
+          />
+          <Route
+            path="/support"
+            element={
+              maintenanceActive && !['admin', 'super_admin', 'moderator'].includes(currentUser.role || '') ? (
+                <MaintenanceOverlay />
+              ) : (
+                <SupportPage currentUser={currentUser} />
               )
             }
           />
@@ -1123,8 +1131,6 @@ function MainApp() {
         }}
       />
 
-      {/* Customer Support Floating Widget Chat (Hidden on Admin Dashboard where Staff Inbox is used) */}
-      <SupportWidget currentUser={currentUser} hidden={currentTab === 'admin'} />
     </div>
   );
 }

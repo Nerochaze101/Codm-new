@@ -8915,6 +8915,33 @@ async function expirePendingMatches() {
 async function sweepAbandonedMatches() {
   await expirePendingMatches();
 }
+
+async function cleanHistoryOlderThan7Days() {
+  try {
+    const cutoff = Date.now() - (7 * 24 * 60 * 60 * 1000);
+    const txDel = await pool.query("DELETE FROM transactions WHERE timestamp < $1", [cutoff]);
+    const matchDel = await pool.query(
+      `DELETE FROM matches 
+       WHERE ((settled_at IS NOT NULL AND settled_at < $1) OR (settled_at IS NULL AND created_at < $1))
+         AND status IN ('SETTLED', 'CANCELLED', 'ABANDONED', 'ABANDONED_AND_SETTLED')`,
+      [cutoff]
+    );
+    const depDel = await pool.query("DELETE FROM deposit_requests WHERE created_at < $1 AND status IN ('completed', 'expired')", [cutoff]);
+    const withDel = await pool.query("DELETE FROM withdrawal_requests WHERE created_at < $1 AND status IN ('approved', 'rejected')", [cutoff]);
+    console.log(`[History Cleanup] Purged records older than 7 days: ${txDel.rowCount || 0} txs, ${matchDel.rowCount || 0} matches, ${depDel.rowCount || 0} deposits, ${withDel.rowCount || 0} withdrawals`);
+  } catch (err) {
+    console.warn("[History Cleanup] Failed to run automated 7-day history purge:", err.message);
+  }
+}
+
+app.post("/api/clean-history-7days", async (req, res) => {
+  try {
+    await cleanHistoryOlderThan7Days();
+    res.json({ success: true, message: "History older than 7 days cleaned successfully across all app" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 app.post("/api/matches/:id/abandon", async (req, res) => {
   return res.status(403).json({
     error: "Unilateral match settlement and refunds are disabled. Under Arena rules, both players must mutually agree to restart the timer or refund stakes, or submit evidence to the Moderator Review Queue."
@@ -9790,6 +9817,12 @@ async function startServer() {
       setInterval(sweepAbandonedMatches, 3 * 60 * 1e3);
     } catch (err) {
       console.warn("\u26A0\uFE0F Match sweeper init error:", err.message);
+    }
+    try {
+      cleanHistoryOlderThan7Days().catch((e) => console.warn("Initial 7-day history cleanup error:", e));
+      setInterval(cleanHistoryOlderThan7Days, 60 * 60 * 1e3); // Every hour
+    } catch (err) {
+      console.warn("\u26A0\uFE0F 7-day history cleanup init error:", err.message);
     }
     try {
       startTelegramBotPolling();
