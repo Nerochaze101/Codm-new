@@ -240,6 +240,14 @@ async function initDatabase() {
       );
       CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON admin_audit_logs(timestamp DESC);
 
+      CREATE TABLE IF NOT EXISTS friendships (
+        id VARCHAR(255) PRIMARY KEY,
+        user_id_1 VARCHAR(255) NOT NULL,
+        user_id_2 VARCHAR(255) NOT NULL,
+        status VARCHAR(50) DEFAULT 'pending',
+        created_at BIGINT
+      );
+
       CREATE TABLE IF NOT EXISTS matches (
         id VARCHAR(255) PRIMARY KEY,
         challenge_code VARCHAR(100) NOT NULL,
@@ -416,10 +424,24 @@ async function initDatabase() {
         status VARCHAR(50) DEFAULT 'open',
         timestamp BIGINT NOT NULL
       );
+      
+      CREATE TABLE IF NOT EXISTS rival_chat_messages (
+        id VARCHAR(255) PRIMARY KEY,
+        rival_id VARCHAR(255) NOT NULL,
+        user_id VARCHAR(255) NOT NULL,
+        sender_id VARCHAR(255) NOT NULL,
+        sender_name VARCHAR(255) NOT NULL,
+        text TEXT NOT NULL,
+        timestamp BIGINT NOT NULL
+      );
+
       ALTER TABLE support_messages ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'open';
       CREATE INDEX IF NOT EXISTS idx_support_user_id ON support_messages(user_id);
       CREATE INDEX IF NOT EXISTS idx_support_timestamp ON support_messages(timestamp);
       CREATE INDEX IF NOT EXISTS idx_support_status ON support_messages(status);
+      
+      CREATE INDEX IF NOT EXISTS idx_rival_chat_rival_id ON rival_chat_messages(rival_id);
+      CREATE INDEX IF NOT EXISTS idx_rival_chat_timestamp ON rival_chat_messages(timestamp);
     `);
     const usersCountRes = await client.query("SELECT COUNT(*) FROM users");
     if (parseInt(usersCountRes.rows[0].count, 10) === 0) {
@@ -9560,6 +9582,194 @@ app.post(["/api/inbound-mail", "/api/msksksnuwje/mail/webhook"], async (req, res
     res.status(500).json({ error: err.message });
   }
 });
+
+// ==========================================
+// 👥 FRIENDS & RIVALS API ENDPOINTS
+// ==========================================
+app.get("/api/friends/search", async (req, res) => {
+  try {
+    const rawQuery = (req.query.query || "").toString().trim();
+    const currentUserId = (req.query.userId || "").toString().trim();
+    if (!rawQuery) {
+      return res.json({ users: [] });
+    }
+
+    const userExcludeClause = currentUserId ? `AND id != ${escapeSql(currentUserId)}` : "";
+    const usersRes = await pool.query(`
+      SELECT id, username, codm_ign, avatar, tier, clan, wins, losses
+      FROM users
+      WHERE (
+        LOWER(codm_ign) LIKE LOWER(${escapeSql(`%${rawQuery}%`)})
+        OR LOWER(username) LIKE LOWER(${escapeSql(`%${rawQuery}%`)})
+      )
+      ${userExcludeClause}
+      ORDER BY codm_ign ASC
+      LIMIT 15
+    `);
+
+    // Fetch existing friendship statuses for the found users
+    let existingFriendships = new Map();
+    if (currentUserId && usersRes.rows.length > 0) {
+      const userIds = usersRes.rows.map(u => escapeSql(u.id)).join(",");
+      const friendsRes = await pool.query(`
+        SELECT user_id_1, user_id_2, status
+        FROM friendships
+        WHERE (user_id_1 = ${escapeSql(currentUserId)} AND user_id_2 IN (${userIds}))
+           OR (user_id_2 = ${escapeSql(currentUserId)} AND user_id_1 IN (${userIds}))
+      `);
+      friendsRes.rows.forEach(f => {
+        const otherId = f.user_id_1 === currentUserId ? f.user_id_2 : f.user_id_1;
+        existingFriendships.set(otherId, { status: f.status, isRequester: f.user_id_1 === currentUserId });
+      });
+    }
+
+    const mapped = usersRes.rows.map(u => {
+      const friendData = existingFriendships.get(u.id);
+      return {
+        id: u.id,
+        username: u.username || u.codm_ign,
+        codmIgn: u.codm_ign,
+        avatar: u.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(u.codm_ign || u.id)}`,
+        tier: u.tier || "LEGENDARY TIER",
+        clan: u.clan || "[1V1_PRO]",
+        wins: Number(u.wins || 0),
+        losses: Number(u.losses || 0),
+        friendshipStatus: friendData ? friendData.status : "none",
+        isRequester: friendData ? friendData.isRequester : false,
+      };
+    });
+
+    console.log(`[Friends] Search for "${rawQuery}" returned ${mapped.length} user(s)`);
+    res.json({ users: mapped });
+  } catch (err) {
+    console.error("[Friends] Error searching friends:", err);
+    res.status(500).json({ error: "Failed to search friends" });
+  }
+});
+
+app.post("/api/friends/request", async (req, res) => {
+  try {
+    const { userId, targetUserId } = req.body;
+    if (!userId || !targetUserId || userId === targetUserId) {
+      return res.status(400).json({ error: "Invalid user IDs for friend request" });
+    }
+
+    // Check existing
+    const existing = await pool.query(`
+      SELECT * FROM friendships
+      WHERE (user_id_1 = ${escapeSql(userId)} AND user_id_2 = ${escapeSql(targetUserId)})
+         OR (user_id_1 = ${escapeSql(targetUserId)} AND user_id_2 = ${escapeSql(userId)})
+    `);
+
+    if (existing.rows.length > 0) {
+      return res.json({ success: true, message: "Request already recorded", status: existing.rows[0].status });
+    }
+
+    const friendId = `friend_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    await pool.query(`
+      INSERT INTO friendships (id, user_id_1, user_id_2, status, created_at)
+      VALUES (${escapeSql(friendId)}, ${escapeSql(userId)}, ${escapeSql(targetUserId)}, 'pending', ${Date.now()})
+    `);
+
+    if (globalIo) {
+      globalIo.emit(`friend_update_${targetUserId}`, { type: "NEW_REQUEST", fromUserId: userId });
+    }
+
+    console.log(`[Friends] Friend request sent from ${userId} to ${targetUserId}`);
+    res.json({ success: true, message: "Friend request sent successfully!" });
+  } catch (err) {
+    console.error("[Friends] Failed to send friend request:", err);
+    res.status(500).json({ error: "Failed to send request" });
+  }
+});
+
+app.post("/api/friends/action", async (req, res) => {
+  try {
+    const { userId, targetUserId, action } = req.body; // 'accept' or 'reject'
+    if (!userId || !targetUserId) {
+      return res.status(400).json({ error: "Missing parameters" });
+    }
+
+    if (action === "accept") {
+      await pool.query(`
+        UPDATE friendships 
+        SET status = 'accepted' 
+        WHERE (user_id_1 = ${escapeSql(targetUserId)} AND user_id_2 = ${escapeSql(userId)})
+           OR (user_id_1 = ${escapeSql(userId)} AND user_id_2 = ${escapeSql(targetUserId)})
+      `);
+    } else {
+      await pool.query(`
+        DELETE FROM friendships 
+        WHERE (user_id_1 = ${escapeSql(targetUserId)} AND user_id_2 = ${escapeSql(userId)})
+           OR (user_id_1 = ${escapeSql(userId)} AND user_id_2 = ${escapeSql(targetUserId)})
+      `);
+    }
+
+    if (globalIo) {
+      globalIo.emit(`friend_update_${targetUserId}`, { type: action === "accept" ? "ACCEPTED" : "REJECTED", withUserId: userId });
+      globalIo.emit(`friend_update_${userId}`, { type: action === "accept" ? "ACCEPTED" : "REJECTED", withUserId: targetUserId });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[Friends] Failed to perform friend action:", err);
+    res.status(500).json({ error: "Failed to perform action" });
+  }
+});
+
+app.get("/api/friends/list", async (req, res) => {
+  try {
+    const userId = (req.query.userId || "").toString().trim();
+    if (!userId) return res.json({ friends: [] });
+
+    const friendsRes = await pool.query(`
+      SELECT 
+        u.id, 
+        u.username, 
+        u.codm_ign, 
+        u.avatar, 
+        u.tier,
+        f.id AS friendship_id,
+        f.status, 
+        f.user_id_1 AS requester_id,
+        f.created_at
+      FROM friendships f
+      JOIN users u ON (f.user_id_1 = u.id OR f.user_id_2 = u.id)
+      WHERE (f.user_id_1 = ${escapeSql(userId)} OR f.user_id_2 = ${escapeSql(userId)})
+        AND u.id != ${escapeSql(userId)}
+      ORDER BY f.created_at DESC
+    `);
+
+    res.json({ friends: friendsRes.rows });
+  } catch (err) {
+    console.error("[Friends] Failed to fetch friends list:", err);
+    res.status(500).json({ error: "Failed to fetch friends" });
+  }
+});
+
+app.get("/api/friends/chat/:rivalId", async (req, res) => {
+  try {
+    const userId = (req.query.userId || "").toString().trim();
+    const rivalId = (req.params.rivalId || "").toString().trim();
+    if (!userId || !rivalId) {
+      return res.json({ messages: [] });
+    }
+
+    const messagesRes = await pool.query(`
+      SELECT * FROM rival_chat_messages 
+      WHERE (user_id = ${escapeSql(userId)} AND rival_id = ${escapeSql(rivalId)})
+         OR (user_id = ${escapeSql(rivalId)} AND rival_id = ${escapeSql(userId)})
+      ORDER BY timestamp ASC
+      LIMIT 200
+    `);
+
+    res.json({ messages: messagesRes.rows });
+  } catch (err) {
+    console.error("[Friends] Failed to fetch chat messages:", err);
+    res.status(500).json({ error: "Failed to fetch chat messages" });
+  }
+});
+
 async function startServer() {
   (async () => {
     try {
@@ -9620,6 +9830,13 @@ async function startServer() {
       if (data.room) {
         socket.join(data.room);
         console.log(`Socket ${socket.id} joined support room: ${data.room}`);
+      }
+    });
+
+    socket.on("join_rival_room", (data) => {
+      if (data.room) {
+        socket.join(data.room);
+        console.log(`Socket ${socket.id} joined rival room: ${data.room}`);
       }
     });
 
@@ -9725,6 +9942,31 @@ async function startServer() {
         console.error("Error processing socket chat message:", err);
       }
     });
+    socket.on("rival_chat", async (data) => {
+        try {
+            if (!data || !data.rivalId || !data.userId || !data.text || !data.text.trim()) return;
+            const newMsg = {
+                id: data.id || `rival_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+                rivalId: data.rivalId,
+                userId: data.userId,
+                senderId: data.userId,
+                senderName: data.senderName || "Rival",
+                text: data.text.trim(),
+                timestamp: data.timestamp || Date.now()
+            };
+            
+            await pool.query(`
+                INSERT INTO rival_chat_messages (id, rival_id, user_id, sender_id, sender_name, text, timestamp)
+                VALUES (${escapeSql(newMsg.id)}, ${escapeSql(newMsg.rivalId)}, ${escapeSql(newMsg.userId)}, ${escapeSql(newMsg.senderId)}, ${escapeSql(newMsg.senderName)}, ${escapeSql(newMsg.text)}, ${newMsg.timestamp})
+            `);
+
+            const room = `rival_chat_${[newMsg.rivalId, newMsg.userId].sort().join('_')}`;
+            io.to(room).emit("rival_chat", newMsg);
+        } catch (err) {
+            console.error("Error processing rival chat message:", err);
+        }
+    });
+
     socket.on("audio_stream", (data) => {
       if (data && data.matchId && data.pcm) {
         socket.to(data.matchId).emit("audio_stream", {
@@ -9791,6 +10033,7 @@ async function startServer() {
       }
     });
   });
+
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`[CODM Stake 1v1] Server running on port ${PORT} with WebSockets enabled`);
   });

@@ -254,3 +254,14 @@ export interface SupportMessage {
   room?: string;
   status?: 'open' | 'resolved';
 }
+
+export interface RivalChatMessage {
+  id: string;
+  rivalId: string;
+  userId: string;
+  senderId: string;
+  senderName: string;
+  text: string;
+  timestamp: number;
+}
+

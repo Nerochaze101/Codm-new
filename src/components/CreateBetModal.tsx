@@ -12,6 +12,7 @@ interface CreateBetModalProps {
   isOpen: boolean;
   initialMode?: string;
   initialStake?: number;
+  initialRivalId?: string;
   onClose: () => void;
   onSubmit: (data: {
     stakeAmount: number;
@@ -21,6 +22,7 @@ interface CreateBetModalProps {
     matchDurationMinutes?: number;
     isPublic?: boolean;
     matchType?: 'solo' | 'squad';
+    rivalId?: string;
   }) => Promise<void>;
   onOpenWallet?: () => void;
 }
@@ -31,6 +33,7 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
   isOpen,
   initialMode,
   initialStake,
+  initialRivalId,
   onClose,
   onSubmit,
   onOpenWallet,
@@ -100,6 +103,7 @@ export const CreateBetModal: React.FC<CreateBetModalProps> = ({
         matchDurationMinutes: durationInput,
         isPublic,
         matchType: betType,
+        rivalId: initialRivalId,
       });
 
       onClose();

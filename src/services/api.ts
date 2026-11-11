@@ -1015,3 +1015,36 @@ export async function fetchAdminAuditLogs(
   return data.logs || [];
 }
 
+export async function searchFriends(query: string, currentUserId?: string): Promise<any[]> {
+  const url = currentUserId 
+    ? `/api/friends/search?query=${encodeURIComponent(query)}&userId=${encodeURIComponent(currentUserId)}`
+    : `/api/friends/search?query=${encodeURIComponent(query)}`;
+  const res = await fetch(url);
+  const data = await parseResponse(res);
+  return data.users || [];
+}
+
+export async function sendFriendRequest(userId: string, targetUserId: string): Promise<void> {
+  const res = await fetch('/api/friends/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, targetUserId }),
+  });
+  await parseResponse(res);
+}
+
+export async function handleFriendAction(userId: string, targetUserId: string, action: 'accept' | 'reject'): Promise<void> {
+  const res = await fetch('/api/friends/action', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, targetUserId, action }),
+  });
+  await parseResponse(res);
+}
+
+export async function fetchFriends(userId: string): Promise<any[]> {
+  const res = await fetch(`/api/friends/list?userId=${encodeURIComponent(userId)}`);
+  const data = await parseResponse(res);
+  return data.friends || [];
+}
+

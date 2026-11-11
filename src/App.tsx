@@ -34,9 +34,10 @@ import { NotificationCenterModal } from './components/NotificationCenterModal';
 import { MatchCreatedSuccessModal } from './components/MatchCreatedSuccessModal';
 import { BackgroundUploadBanner } from './components/BackgroundUploadBanner';
 import { DisputesPage } from './components/DisputesPage';
+import { SocialTab } from './components/SocialTab';
 import { SupportWidget } from './components/SupportWidget';
 import { GlobalBroadcastBanner } from './components/GlobalBroadcastBanner';
-import { ShieldAlert, UserCheck, Lock, RefreshCw } from 'lucide-react';
+import { ShieldAlert, UserCheck, Lock, RefreshCw, Users as UsersIcon } from 'lucide-react';
 
 const socket = io('/');
 
@@ -358,6 +359,7 @@ function MainApp() {
   const [isCreateBetOpen, setIsCreateBetOpen] = useState(false);
   const [createBetInitialMode, setCreateBetInitialMode] = useState<string | undefined>(undefined);
   const [createBetInitialStake, setCreateBetInitialStake] = useState<number | undefined>(undefined);
+  const [createBetInitialRivalId, setCreateBetInitialRivalId] = useState<string | undefined>(undefined);
   const [isOnboardingModalOpen, setIsOnboardingModalOpen] = useState(false);
   const [onboardingTargetMatch, setOnboardingTargetMatch] = useState<Match | null>(null);
   const [isFundWalletModalOpen, setIsFundWalletModalOpen] = useState(false);
@@ -378,6 +380,7 @@ function MainApp() {
   else if (pathname === '/referrals') currentTab = 'referrals';
   else if (pathname === '/wallet') currentTab = 'wallet';
   else if (pathname === '/profile') currentTab = 'profile';
+  else if (pathname === '/social') currentTab = 'social';
   else if (pathname === '/msksksnuwje') currentTab = 'admin';
 
   // Initial Data Fetch & URL Deep Link Check
@@ -451,9 +454,10 @@ function MainApp() {
     }
   };
 
-  const handleOpenCreateBet = (mode?: string, stake?: number) => {
+  const handleOpenCreateBet = (mode?: string, stake?: number, rivalId?: string) => {
     setCreateBetInitialMode(mode);
     setCreateBetInitialStake(stake);
+    setCreateBetInitialRivalId(rivalId);
     setIsCreateBetOpen(true);
   };
 
@@ -936,6 +940,16 @@ function MainApp() {
             }
           />
           <Route
+            path="/social"
+            element={
+              maintenanceActive && !['admin', 'super_admin', 'moderator'].includes(currentUser.role || '') ? (
+                <MaintenanceOverlay />
+              ) : (
+                <SocialTab currentUser={currentUser} onOpenCreateBet={handleOpenCreateBet} />
+              )
+            }
+          />
+          <Route
             path="/wallet"
             element={
               maintenanceActive && !['admin', 'super_admin', 'moderator'].includes(currentUser.role || '') ? (
@@ -1021,10 +1035,12 @@ function MainApp() {
         isOpen={isCreateBetOpen}
         initialMode={createBetInitialMode}
         initialStake={createBetInitialStake}
+        initialRivalId={createBetInitialRivalId}
         onClose={() => {
           setIsCreateBetOpen(false);
           setCreateBetInitialMode(undefined);
           setCreateBetInitialStake(undefined);
+          setCreateBetInitialRivalId(undefined);
         }}
         onSubmit={handleCreateBet}
       />

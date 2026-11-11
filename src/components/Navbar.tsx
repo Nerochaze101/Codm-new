@@ -3,7 +3,7 @@ import { UserProfile } from '../types';
 import {
   Menu, X, Swords, CreditCard, ShieldCheck, Clock,
   User, Trophy, Plus, LogOut, ChevronRight, Wallet,
-  Crosshair, ArrowRight, Bell, ShieldAlert, Headphones
+  Crosshair, ArrowRight, Bell, ShieldAlert, Headphones, Users as UsersIcon
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { useSound } from '../hooks/useSound';
@@ -96,6 +96,14 @@ export const Navbar: React.FC<NavbarProps> = ({
       icon: User,
       badge: 'LVL 150',
       badgeColor: 'bg-amber-500/20 text-amber-400 border-amber-500/40',
+    },
+    {
+      id: 'social',
+      label: 'Rivals & Chat',
+      subtitle: 'Friend Requests & 1v1 Challenges',
+      icon: UsersIcon,
+      badge: 'NEW',
+      badgeColor: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/40',
     },
     {
       id: 'disputes',
@@ -381,52 +389,21 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <button
                       key={tab.id}
                       onClick={() => handleSelectTab(tab.id)}
-                      className={`w-full flex items-center justify-between p-3.5 rounded-2xl transition-all cursor-pointer text-left border group ${
+                      className={`w-full flex items-center justify-between p-3 rounded-sm transition-all cursor-pointer text-left border ${
                         isActive
-                          ? 'bg-amber-500/15 border-amber-500/50 shadow-lg shadow-amber-500/10'
-                          : 'bg-neutral-900/70 hover:bg-neutral-900 border-neutral-800/80 hover:border-neutral-700'
+                          ? 'bg-neutral-800 border-l-4 border-l-amber-500'
+                          : 'bg-neutral-900/50 hover:bg-neutral-800 border-l-4 border-l-transparent'
                       }`}
                     >
-                      <div className="flex items-center gap-3.5">
-                        <div
-                          className={`w-10 h-10 rounded-xl flex items-center justify-center transition-transform group-hover:scale-105 ${
-                            isActive
-                              ? 'bg-amber-400 text-neutral-950 font-bold shadow-md shadow-amber-400/20'
-                              : 'bg-neutral-800/90 text-neutral-300 border border-neutral-700/60'
-                          }`}
-                        >
-                          <Icon className="w-5 h-5 stroke-[2.2]" />
+                      <div className="flex items-center gap-3">
+                        <div className={`p-1 ${isActive ? 'text-amber-500' : 'text-neutral-400'}`}>
+                          <Icon className="w-5 h-5" />
                         </div>
-                        <div>
-                          <div
-                            className={`font-heading font-black text-sm uppercase tracking-wide flex items-center gap-2 ${
-                              isActive ? 'text-amber-400' : 'text-white group-hover:text-amber-400'
-                            }`}
-                          >
-                            <span>{tab.label}</span>
-                            {isActive && (
-                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shadow-[0_0_8px_#f59e0b]" />
-                            )}
-                          </div>
-                          <div className="text-xs text-neutral-400 mt-0.5">
-                            {tab.subtitle}
-                          </div>
+                        <div className={`font-black text-sm uppercase tracking-wider ${
+                            isActive ? 'text-white' : 'text-neutral-300'
+                        }`}>
+                          {tab.label}
                         </div>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        {tab.badge && (
-                          <span
-                            className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold uppercase border ${tab.badgeColor}`}
-                          >
-                            {tab.badge}
-                          </span>
-                        )}
-                        <ChevronRight
-                          className={`w-4 h-4 transition-transform ${
-                            isActive ? 'text-amber-400 translate-x-0.5' : 'text-neutral-600 group-hover:text-neutral-400'
-                          }`}
-                        />
                       </div>
                     </button>
                   );
