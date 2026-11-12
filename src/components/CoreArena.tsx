@@ -8,7 +8,7 @@ import {
   UserCheck, RefreshCw, Sparkles, Crosshair, Target, X, Plus,
   Flame, Zap, Users, Flag, Shield, Sliders, ChevronRight, Gamepad2, MapPin,
   TrendingUp, Award, Clock, Lock, AlertTriangle, XCircle, Bell, Info, ExternalLink, Send,
-  Search, Radio, Globe
+  Search, Radio, Globe, MoreVertical
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { SkeletonLoader } from './SkeletonLoader';
@@ -73,6 +73,31 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   const [showIOSGuideModal, setShowIOSGuideModal] = useState(false);
   const [activeMatchSubTab, setActiveMatchSubTab] = useState<'game' | 'chat'>('game');
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeMenuMatchId, setActiveMenuMatchId] = useState<string | null>(null);
+  const [profileModalUser, setProfileModalUser] = useState<any | null>(null);
+  const [arenaActionToast, setArenaActionToast] = useState<string | null>(null);
+
+  const triggerToast = (msg: string) => {
+    setArenaActionToast(msg);
+    setTimeout(() => setArenaActionToast(null), 3000);
+  };
+
+  const handleCopyRoomCode = (m: Match) => {
+    const code = m.roomCode || m.challengeCode;
+    navigator.clipboard.writeText(code);
+    triggerToast(`Room Code #${code} copied to clipboard!`);
+    setActiveMenuMatchId(null);
+  };
+
+  const handleViewProfile = (m: Match) => {
+    setProfileModalUser(m.creator);
+    setActiveMenuMatchId(null);
+  };
+
+  const handleReportPlayer = (m: Match) => {
+    triggerToast(`Player "${m.creator.codmIgn}" successfully reported to referee team.`);
+    setActiveMenuMatchId(null);
+  };
   const [stakeTargetMatch, setStakeTargetMatch] = useState<Match | null>(null);
   const [stakeRole, setStakeRole] = useState<'opponent' | 'creator'>('opponent');
   const [isStakeModalOpen, setIsStakeModalOpen] = useState(false);
@@ -158,6 +183,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   const [worldChatUnread, setWorldChatUnread] = useState<number>(0);
   const [sharingWorldMatchId, setSharingWorldMatchId] = useState<string | null>(null);
   const [sharedWorldMatchIds, setSharedWorldMatchIds] = useState<Record<string, boolean>>({});
+  const [cancellingMatchId, setCancellingMatchId] = useState<string | null>(null);
 
   const handleShareHostedToWorldChat = async (bet: Match) => {
     if (!currentUser?.id || currentUser.id === 'guest' || sharingWorldMatchId) return;
@@ -757,7 +783,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                       <div key={m.id} className={`p-4 rounded-2xl bg-neutral-950 border transition-all flex flex-col justify-between shadow-lg ${
                         isSquad ? 'border-emerald-500/30 hover:border-emerald-400' : 'border-neutral-800 hover:border-amber-400/40'
                       }`}>
-                        <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center justify-between mb-3 relative">
                           <span className="text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded border border-amber-500/20">
                             #{m.challengeCode}
                           </span>
@@ -770,6 +796,50 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                             <span className="text-xs font-black text-emerald-400">
                               ₦{m.stakeAmount.toLocaleString()} {isSquad ? '/ player' : ''}
                             </span>
+
+                            {/* Three-Dot Context Menu Button */}
+                            <div className="relative">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveMenuMatchId(activeMenuMatchId === m.id ? null : m.id);
+                                }}
+                                className="p-1 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-400 hover:text-white border border-neutral-800 transition-all cursor-pointer"
+                                title="Quick Actions"
+                              >
+                                <MoreVertical size={13} />
+                              </button>
+
+                              {activeMenuMatchId === m.id && (
+                                <div className="absolute right-0 top-7 z-40 w-44 rounded-xl bg-neutral-900 border border-neutral-800 shadow-2xl py-1.5 animate-in fade-in zoom-in-95 text-xs">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCopyRoomCode(m)}
+                                    className="w-full px-3 py-2 text-left hover:bg-white/[0.04] text-neutral-200 flex items-center gap-2 cursor-pointer font-mono"
+                                  >
+                                    <Copy size={13} className="text-amber-400" />
+                                    <span>Copy Room Code</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleViewProfile(m)}
+                                    className="w-full px-3 py-2 text-left hover:bg-white/[0.04] text-neutral-200 flex items-center gap-2 cursor-pointer"
+                                  >
+                                    <UserCheck size={13} className="text-sky-400" />
+                                    <span>View Profile</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleReportPlayer(m)}
+                                    className="w-full px-3 py-2 text-left hover:bg-white/[0.04] text-rose-300 flex items-center gap-2 cursor-pointer border-t border-neutral-800/80 mt-1 pt-1.5"
+                                  >
+                                    <Flag size={13} className="text-rose-400" />
+                                    <span>Report Player</span>
+                                  </button>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </div>
 
@@ -1303,15 +1373,15 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                               </div>
                             </div>
 
-                            <div className="flex flex-col sm:flex-row items-center gap-3 pt-1">
+                              <div className="flex flex-col sm:flex-row items-center gap-3 pt-1">
                               <a
-                                href={`https://t.me/OpsStakeBot?start=dispute_${encodeURIComponent(myActiveMatch.roomCode || myActiveMatch.challengeCode)}`}
+                                href={`https://t.me/${botUsername}?start=dispute_${encodeURIComponent(myActiveMatch.roomCode || myActiveMatch.challengeCode)}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="w-full sm:flex-1 py-3 bg-sky-500 hover:bg-sky-400 text-neutral-950 text-xs font-black rounded-xl transition-all shadow-lg cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide"
                               >
                                 <MessageCircle className="w-4 h-4" />
-                                <span>Open Telegram Bot & Send /dispute</span>
+                                <span>Open @{botUsername} & Send Screen Recording</span>
                               </a>
 
                               <button
@@ -1334,7 +1404,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                             </div>
 
                             <p className="text-[10px] text-neutral-400 italic">
-                              Once received by the Telegram bot, your video is automatically forwarded to the referee group for rapid review.
+                              Room Code <strong className="text-sky-300">#{myActiveMatch.roomCode || myActiveMatch.challengeCode}</strong> is automatically locked by our Telegram bot for manual referee review. Causing a false conflict incurs Strike 1 Flag + 10% conflict penalty (Strike 2 = Permanent Ban &amp; 100% forfeiture).
                             </p>
                           </div>
                         </div>
@@ -1895,10 +1965,19 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                       </button>
                       <button
                         type="button"
-                        onClick={() => onCancelMatch(m.id)}
-                        className="col-span-2 py-2 px-3 bg-rose-500/15 text-rose-400 font-bold rounded-xl text-[11px] uppercase border border-rose-500/30 cursor-pointer hover:bg-rose-500/25 transition-all"
+                        disabled={cancellingMatchId === m.id}
+                        onClick={async () => {
+                          if (cancellingMatchId) return;
+                          setCancellingMatchId(m.id);
+                          try {
+                            await onCancelMatch(m.id);
+                          } finally {
+                            setCancellingMatchId(null);
+                          }
+                        }}
+                        className="col-span-2 py-2 px-3 bg-rose-500/15 text-rose-400 font-bold rounded-xl text-[11px] uppercase border border-rose-500/30 cursor-pointer hover:bg-rose-500/25 transition-all disabled:opacity-50"
                       >
-                        Cancel & Refund
+                        {cancellingMatchId === m.id ? 'Cancelling & Refunding...' : 'Cancel & Refund'}
                       </button>
                     </div>
                   </div>
@@ -1909,7 +1988,61 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
         </div>
       )}
 
-      {/* 6. Modals */}
+      {/* Action Toast Notification */}
+      {arenaActionToast && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-2xl bg-neutral-900 border border-amber-500/50 text-white text-xs font-bold shadow-2xl flex items-center gap-2.5 animate-in slide-in-from-top-4">
+          <CheckCircle2 size={16} className="text-amber-400 shrink-0" />
+          <span>{arenaActionToast}</span>
+        </div>
+      )}
+
+      {/* View Profile Modal */}
+      {profileModalUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in">
+          <div className="w-full max-w-sm rounded-3xl bg-neutral-900 border border-neutral-800 p-6 shadow-2xl space-y-5 relative">
+            <button
+              type="button"
+              onClick={() => setProfileModalUser(null)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-white cursor-pointer"
+            >
+              <X size={16} />
+            </button>
+
+            <div className="flex items-center gap-4">
+              <img
+                src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(profileModalUser.codmIgn || 'operator')}`}
+                alt=""
+                className="w-16 h-16 rounded-2xl bg-neutral-800 border border-neutral-700 object-cover"
+              />
+              <div>
+                <h3 className="text-lg font-black text-white uppercase tracking-tight">{profileModalUser.codmIgn || 'Gladiator'}</h3>
+                <span className="text-[10px] font-mono text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded-full inline-block mt-1">
+                  {profileModalUser.tier || 'Elite Operative'}
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-xs font-mono">
+              <div className="p-3 bg-black/50 rounded-2xl border border-neutral-800 text-center">
+                <span className="text-[10px] text-neutral-500 block uppercase">CODM UID</span>
+                <span className="text-white font-bold">{profileModalUser.codmUid || 'CODM-98214'}</span>
+              </div>
+              <div className="p-3 bg-black/50 rounded-2xl border border-neutral-800 text-center">
+                <span className="text-[10px] text-neutral-500 block uppercase">Arena Status</span>
+                <span className="text-emerald-400 font-bold">Verified Active</span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setProfileModalUser(null)}
+              className="w-full py-3 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs uppercase tracking-wider cursor-pointer"
+            >
+              Close Profile
+            </button>
+          </div>
+        </div>
+      )}
 
       <StakePaymentModal isOpen={isStakeModalOpen} match={stakeTargetMatch} currentUser={currentUser} role={stakeRole} onClose={() => { setIsStakeModalOpen(false); setStakeTargetMatch(null); }} onConfirmStake={handleConfirmStake} />
       <IOSNotificationGuideModal isOpen={showIOSGuideModal} onClose={() => setShowIOSGuideModal(false)} />

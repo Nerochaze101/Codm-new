@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import { UserProfile } from '../types';
 import { searchFriends, sendFriendRequest, handleFriendAction, fetchFriends } from '../services/api';
@@ -16,6 +17,8 @@ interface SocialTabProps {
 }
 
 export const SocialTab: React.FC<SocialTabProps> = ({ currentUser, onOpenCreateBet, onSyncAppState }) => {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [friends, setFriends] = useState<any[]>([]);
@@ -51,23 +54,27 @@ export const SocialTab: React.FC<SocialTabProps> = ({ currentUser, onOpenCreateB
     };
   }, [currentUser.id]);
 
+  // Consume ?chat=<rivalId> deep-link parameter once and strip it from the URL
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const chatId = params.get('chat');
+    if (!chatId || friends.length === 0) return;
+
+    const matched = friends.find((f) => f.id === chatId);
+    if (matched) {
+      setSelectedRival(matched);
+      if (params.get('challenge') === '1') {
+        setOpenChallengeInChat(true);
+      }
+      navigate('/social', { replace: true });
+    }
+  }, [location.search, friends, navigate]);
+
   const loadFriends = async () => {
     try {
       const data = await fetchFriends(currentUser.id);
       const list = Array.isArray(data) ? data : [];
       setFriends(list);
-
-      // Deep link support for chat notifications
-      if (typeof window !== 'undefined') {
-        const params = new URLSearchParams(window.location.search);
-        const chatId = params.get('chat');
-        if (chatId) {
-          const matched = list.find((f) => f.id === chatId);
-          if (matched) {
-            setSelectedRival(matched);
-          }
-        }
-      }
     } catch (e) {
       console.error('Failed to load rivals roster:', e);
     }
@@ -181,6 +188,9 @@ export const SocialTab: React.FC<SocialTabProps> = ({ currentUser, onOpenCreateB
           onBack={() => {
             setSelectedRival(null);
             setOpenChallengeInChat(false);
+            if (location.search) {
+              navigate('/social', { replace: true });
+            }
             loadFriends();
           }}
         />

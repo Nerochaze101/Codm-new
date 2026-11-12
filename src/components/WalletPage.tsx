@@ -69,6 +69,10 @@ export const WalletPage: React.FC<WalletPageProps> = ({
       return { label: 'ESCROW LOCKED', color: 'bg-neutral-800 text-neutral-400 border-neutral-700', icon: ShieldCheck };
     }
 
+    if (tx.type === 'CONFLICT_PENALTY' || tx.type === 'FRAUD_BAN_FORFEIT') {
+      return { label: tx.type === 'FRAUD_BAN_FORFEIT' ? 'FORFEITED' : 'CONFLICT PENALTY', color: 'bg-rose-500/15 text-rose-400 border-rose-500/30', icon: AlertCircle };
+    }
+
     return { label: 'COMPLETED', color: 'bg-neutral-800 text-neutral-300 border-neutral-700', icon: CheckCircle2 };
   };
 
@@ -288,19 +292,19 @@ export const WalletPage: React.FC<WalletPageProps> = ({
               ) : (
                 filteredTransactions.map((tx) => {
                   const badge = getStatusBadge(tx);
-                  const isDebit = tx.type === 'WITHDRAWAL' || tx.type === 'ESCROW_LOCK';
+                  const isDebit = tx.type === 'WITHDRAWAL' || tx.type === 'ESCROW_LOCK' || tx.type === 'CONFLICT_PENALTY' || tx.type === 'FRAUD_BAN_FORFEIT';
                   
                   return (
                     <tr key={tx.id} className="hover:bg-white/[0.02] transition-all duration-300 group">
                       <td className="px-10 py-8">
                          <div className="flex items-center gap-5">
                             <div className={`w-12 h-12 rounded-2xl flex items-center justify-center border transition-all duration-500 ${
-                              tx.type === 'WITHDRAWAL' ? 'bg-rose-500/10 border-rose-500/20 text-rose-400 group-hover:bg-rose-500/20' :
+                              tx.type === 'WITHDRAWAL' || tx.type === 'CONFLICT_PENALTY' || tx.type === 'FRAUD_BAN_FORFEIT' ? 'bg-rose-500/10 border-rose-500/20 text-rose-400 group-hover:bg-rose-500/20' :
                               tx.type === 'DEPOSIT' ? 'bg-blue-500/10 border-blue-500/20 text-blue-400 group-hover:bg-blue-500/20' :
                               tx.type === 'MATCH_WIN_PAYOUT' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 group-hover:bg-emerald-500/20' :
                               'bg-neutral-800 border-neutral-700 text-neutral-400'
                             }`}>
-                               {tx.type === 'WITHDRAWAL' ? <ArrowUpRight size={22} /> :
+                               {tx.type === 'WITHDRAWAL' || tx.type === 'CONFLICT_PENALTY' || tx.type === 'FRAUD_BAN_FORFEIT' ? <ArrowUpRight size={22} /> :
                                 tx.type === 'DEPOSIT' ? <ArrowDownLeft size={22} /> :
                                 tx.type === 'MATCH_WIN_PAYOUT' ? <Trophy size={22} /> :
                                 <Zap size={22} />}

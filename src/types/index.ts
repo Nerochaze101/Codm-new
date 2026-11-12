@@ -1,6 +1,6 @@
 export interface Transaction {
   id: string;
-  type: 'DEPOSIT' | 'ESCROW_LOCK' | 'ESCROW_REFUND' | 'MATCH_WIN_PAYOUT' | 'WITHDRAWAL' | 'REFERRAL_EARNING' | 'FRAUD_BAN_FORFEIT';
+  type: 'DEPOSIT' | 'ESCROW_LOCK' | 'ESCROW_REFUND' | 'MATCH_WIN_PAYOUT' | 'WITHDRAWAL' | 'REFERRAL_EARNING' | 'FRAUD_BAN_FORFEIT' | 'CONFLICT_PENALTY';
   amount: number;
   description: string;
   timestamp: number;
@@ -94,6 +94,8 @@ export interface MatchPlayer {
   resubmissionRequested?: boolean;
   resubmissionReason?: string;
   submittedAt?: number;
+  videoSubmitted?: boolean;
+  videoSubmittedAt?: number;
 }
 
 export interface ChatMessage {

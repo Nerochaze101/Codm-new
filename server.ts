@@ -9,7 +9,18 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import crypto2 from "crypto";
+import multer from "multer";
 import { GoogleGenAI } from "@google/genai";
+
+const TEMP_UPLOAD_DIR = "/tmp/opsstake_uploads";
+try {
+  fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
+} catch {}
+const uploadVideoMiddleware = multer({
+  dest: TEMP_UPLOAD_DIR,
+  limits: { fileSize: 200 * 1024 * 1024 }
+});
+const telegramPendingDisputeByChat = new Map<string, { matchId: string; roomCode: string; playerId?: string; updatedAt: number }>();
 
 // db.ts
 import pg from "pg";
@@ -6022,12 +6033,14 @@ async function sendTelegramVideo(match, playerIgn, buffer, mimeType) {
     console.warn("[Telegram Bot] Cannot send dispute video: TELEGRAM_REVIEW_GROUP_ID not configured.");
     return;
   }
+  const disputeCode = match.roomCode || match.challengeCode;
   const fileSizeMb = buffer.length / (1024 * 1024);
-  console.log(`[Telegram Bot] Preparing dispute video for Match #${match.challengeCode} (${playerIgn}). Size: ${fileSizeMb.toFixed(2)} MB`);
+  console.log(`[Telegram Bot] Preparing dispute video for Match #${disputeCode} (${playerIgn}). Size: ${fileSizeMb.toFixed(2)} MB`);
   const messageText = `\u{1F6A8} <b>MATCH DISPUTE VIDEO SUBMITTED</b> \u{1F6A8}
 
 \u{1F464} <b>Gladiator:</b> ${playerIgn}
-\u{1F3F7}\uFE0F <b>Match Code:</b> #${match.challengeCode}
+\u{1F3F7}\uFE0F <b>Room Code:</b> <code>#${disputeCode}</code>
+\u{1F516} <b>Challenge Code:</b> #${match.challengeCode}
 \u{1F3AE} <b>Mode:</b> ${match.gameMode}
 \u{1F5FA}\uFE0F <b>Map:</b> ${match.map}
 \u{1F4B0} <b>Pot Amount:</b> <b>\u20A6${match.potAmount.toLocaleString()}</b>
@@ -6035,8 +6048,8 @@ async function sendTelegramVideo(match, playerIgn, buffer, mimeType) {
 
 \u{1F4F9} <i>This player has uploaded a screen recording of their history and game result for manual referee review.</i>
 
-\u{1F50D} <b>Search Tag:</b> <code>#DISPUTE_${match.challengeCode}</code>
-#Dispute #${match.challengeCode} #${playerIgn.replace(/\s+/g, "")}`;
+\u{1F50D} <b>Search Tag:</b> <code>#DISPUTE_${disputeCode}</code>
+#Dispute #${disputeCode} #${playerIgn.replace(/\s+/g, "")}`;
   if (fileSizeMb > 49.5) {
     console.warn(`[Telegram Bot] Video exceeds 50MB limit (${fileSizeMb.toFixed(2)}MB). Sending notification only.`);
     await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -6058,7 +6071,7 @@ async function sendTelegramVideo(match, playerIgn, buffer, mimeType) {
   formData.append("parse_mode", "HTML");
   const blob = new Blob([buffer], { type: mimeType });
   const extension = mimeType.split("/")[1] || "mp4";
-  formData.append("video", blob, `dispute_${match.challengeCode}_${playerIgn.replace(/\s+/g, "_")}.${extension}`);
+  formData.append("video", blob, `dispute_${disputeCode}_${playerIgn.replace(/\s+/g, "_")}.${extension}`);
   const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendVideo`, {
     method: "POST",
     body: formData
@@ -6079,7 +6092,112 @@ Please review proof on Admin Dashboard.`,
       })
     });
   } else {
-    console.log(`\u2705 [Telegram Bot] Dispute video for Match #${match.challengeCode} posted successfully to review group.`);
+    console.log(`\u2705 [Telegram Bot] Dispute video for Match #${disputeCode} posted successfully to review group.`);
+  }
+}
+
+async function notifyConflictAndRequestVideoProof(match: any, reason?: string, isRetryWarning: boolean = false) {
+  try {
+    if (!TELEGRAM_BOT_TOKEN || !match) return;
+    const roomCode = match.roomCode || match.challengeCode;
+    const conflictSummary = reason || match.conflictReason || match.resolutionNotes || "Conflicting match outcome claims submitted by players.";
+    const isSquad = match.matchType === "squad" || Boolean(match.squadData);
+
+    const participantIds = new Set<string>();
+    if (match.creator?.id) participantIds.add(match.creator.id);
+    if (match.opponent?.id) participantIds.add(match.opponent.id);
+    if (isSquad && Array.isArray(match.squadData?.slots)) {
+      for (const slot of match.squadData.slots) {
+        if (slot.staked && slot.userId) participantIds.add(slot.userId);
+      }
+    }
+
+    const botInfo = cachedTelegramBotInfo || await fetchTelegramBotInfo();
+    const botUsername = botInfo?.username || process.env.TELEGRAM_BOT_USERNAME || "OpsSTAKEBOT";
+    const disputeDeepLink = `https://t.me/${botUsername}?start=dispute_${encodeURIComponent(roomCode)}`;
+
+    for (const uid of participantIds) {
+      const u = await getUserFromDb(uid);
+      if (!u?.telegramChatId || !u.telegramChatId.trim()) continue;
+      const chatId = u.telegramChatId.trim();
+
+      if (!isRetryWarning) {
+        telegramPendingDisputeByChat.set(chatId, {
+          matchId: match.id,
+          roomCode,
+          playerId: uid,
+          updatedAt: Date.now()
+        });
+      }
+
+      const playerMsg = isRetryWarning
+        ? `⚠️ <b>MATCH CONFLICT DETECTED (RETRY ${match.conflictRetries || 1}/3)</b> ⚠️\n\n` +
+          `🔑 <b>Room Code:</b> <code>#${roomCode}</code>\n` +
+          `🏷️ <b>Challenge:</b> #${match.challengeCode}\n` +
+          `🎮 <b>Mode:</b> ${match.gameMode} · <b>Map:</b> ${match.map}\n` +
+          `💰 <b>Escrow Pot:</b> <b>₦${Number(match.potAmount || 0).toLocaleString()}</b>\n\n` +
+          `❗ <b>Issue:</b> ${conflictSummary}\n\n` +
+          `Please return to the Arena and re-confirm the honest result immediately.\n` +
+          `🚨 <i>Warning: Reaching 3 conflicts locks the pot for mandatory screen recording review. Causing a false conflict carries an automatic <b>10% Penalty Fee + Account Strike</b> (Strike 2 = Permanent Ban & 100% Forfeiture).</i>`
+        : `🚨 <b>MATCH CONFLICT ESCALATED — SCREEN RECORDING REQUIRED</b> 🚨\n\n` +
+          `I have automatically retrieved your match details for manual referee review:\n\n` +
+          `🔑 <b>Room Code:</b> <code>#${roomCode}</code>\n` +
+          `🏷️ <b>Challenge Code:</b> #${match.challengeCode}\n` +
+          `🎮 <b>Mode:</b> ${match.gameMode} · <b>Map:</b> ${match.map}\n` +
+          `💰 <b>Locked Escrow Pot:</b> <b>₦${Number(match.potAmount || 0).toLocaleString()}</b>\n` +
+          `❗ <b>Conflict Reason:</b> ${conflictSummary}\n\n` +
+          `📹 <b>HOW TO SUBMIT PROOF RIGHT NOW:</b>\n` +
+          `• Simply <b>reply directly in this chat</b> and upload your <b>CODM screen recording video</b> (showing match history & final scoreboard).\n` +
+          `• Your Room Code <code>#${roomCode}</code> is already linked automatically — no command needed!\n\n` +
+          `⚠️ <b>CONFLICT PENALTY POLICY:</b>\n` +
+          `• <b>Strike 1:</b> Account flagged on probation + <b>10% Conflict Penalty Fee</b> deducted.\n` +
+          `• <b>Strike 2:</b> Immediate <b>PERMANENT BAN</b>, <b>100% Fund Forfeiture</b> & <b>@OpsSTAKE</b> channel ban.`;
+
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: playerMsg,
+          parse_mode: "HTML",
+          ...(!isRetryWarning ? {
+            reply_markup: {
+              inline_keyboard: [[
+                { text: `📹 Lock Room #${roomCode} for Upload`, url: disputeDeepLink }
+              ]]
+            }
+          } : {})
+        })
+      }).catch((e) => console.warn(`[Telegram Bot] Conflict outreach failed for chat ${chatId}:`, e.message));
+    }
+
+    if (!isRetryWarning) {
+      const targetGroupId = TELEGRAM_REVIEW_GROUP_ID || TELEGRAM_PUBLIC_CHANNEL_ID;
+      if (targetGroupId) {
+        const groupAlert = `🚨 <b>NEW MATCH CONFLICT ESCALATED FOR MANUAL REVIEW</b> 🚨\n\n` +
+          `🔑 <b>Room Code:</b> <code>#${roomCode}</code>\n` +
+          `🏷️ <b>Challenge Code:</b> #${match.challengeCode}\n` +
+          `👤 <b>Host:</b> ${match.creator?.codmIgn || "Host"} (Claim: ${match.creator?.resultClaim || "N/A"})\n` +
+          `⚔️ <b>Rival:</b> ${match.opponent?.codmIgn || "Opponent"} (Claim: ${match.opponent?.resultClaim || "N/A"})\n` +
+          `🎮 <b>Mode:</b> ${match.gameMode} · ${match.map}\n` +
+          `💰 <b>Locked Pot:</b> <b>₦${Number(match.potAmount || 0).toLocaleString()}</b>\n` +
+          `❗ <b>Reason:</b> ${conflictSummary}\n\n` +
+          `🤖 <i>Bot has automatically notified both players with Room Code #${roomCode} to send their screen recording proof.</i>\n\n` +
+          `🔍 <b>Search Tag:</b> <code>#DISPUTE_${roomCode}</code>`;
+
+        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: targetGroupId,
+            text: groupAlert,
+            parse_mode: "HTML"
+          })
+        }).catch((e) => console.warn("[Telegram Bot] Failed to post conflict alert to review group:", e.message));
+      }
+    }
+  } catch (err: any) {
+    console.error("[Telegram Bot] Exception in notifyConflictAndRequestVideoProof:", err.message);
   }
 }
 async function postMatchToPublicChannel(match, origin) {
@@ -6205,25 +6323,61 @@ async function applyConflictFlagOrBan(dishonestUserId: string, match: any, reaso
     const currentStrikes = parseInt(user.conflict_strikes || 0, 10) || 0;
     const newStrikes = currentStrikes + 1;
     const roomTag = match.roomCode || match.challengeCode || match.id;
+    const stakeAmount = Number(match?.stakeAmount || 0);
+    const availableBalance = Math.max(0, parseFloat(user.balance || 0));
 
     if (newStrikes === 1) {
-      // Strike 1: Auto-flag
-      const flagReason = `Strike 1 Flag: Submitted false/conflicting result claim in Match #${roomTag}. Account placed on probation.`;
+      // Strike 1: Auto-flag + 10% Conflict Penalty Fee deduction
+      const targetPenaltyFee = Math.round(stakeAmount * 0.1);
+      const actualPenaltyDeducted = Math.min(availableBalance, targetPenaltyFee);
+      const flagReason = `Strike 1 Flag & Conflict Penalty: Submitted false/conflicting result claim in Match #${roomTag}.${actualPenaltyDeducted > 0 ? ` ₦${actualPenaltyDeducted.toLocaleString()} (10%) conflict penalty fee deducted.` : ""} Account placed on probation.`;
+
       await pool.query(`
         UPDATE users 
         SET is_flagged = true,
             conflict_strikes = 1,
+            balance = GREATEST(0, balance - ${escapeSql(actualPenaltyDeducted)}),
             flag_reason = ${escapeSql(flagReason)}
         WHERE id = ${escapeSql(dishonestUserId)}
       `);
-      console.log(`⚠️ [Conflict System] User ${user.codm_ign} (${dishonestUserId}) issued Strike 1 flag.`);
+
+      if (actualPenaltyDeducted > 0) {
+        const txId = `tx_conflict_pen_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+        const txDesc = `⚠️ Match Conflict Penalty (Strike 1 · Match #${roomTag}): ₦${actualPenaltyDeducted.toLocaleString()} (10% stake) deducted for submitting false/conflicting claim.`;
+        await pool.query(`
+          INSERT INTO transactions (id, user_id, type, amount, description, match_id, timestamp)
+          VALUES (${escapeSql(txId)}, ${escapeSql(dishonestUserId)}, 'CONFLICT_PENALTY', ${escapeSql(actualPenaltyDeducted)}, ${escapeSql(txDesc)}, ${escapeSql(match.id)}, ${Date.now()})
+          ON CONFLICT (id) DO NOTHING
+        `);
+        await updatePlatformFinance(actualPenaltyDeducted);
+      }
+
+      console.log(`⚠️ [Conflict System] User ${user.codm_ign} (${dishonestUserId}) issued Strike 1 flag + ₦${actualPenaltyDeducted} penalty.`);
+      await broadcastUserUpdate(dishonestUserId);
+
+      if (globalIo) {
+        globalIo.emit("matchAlert", {
+          id: `alert_pen_${Date.now()}`,
+          matchId: match.id,
+          userId: dishonestUserId,
+          creatorId: match.creator?.id === dishonestUserId ? dishonestUserId : undefined,
+          opponentId: match.opponent?.id === dishonestUserId ? dishonestUserId : undefined,
+          title: `⚠️ Conflict Penalty Applied (Strike 1/2)`,
+          body: `Your account was flagged for causing a false conflict in Match #${roomTag}.${actualPenaltyDeducted > 0 ? ` ₦${actualPenaltyDeducted.toLocaleString()} conflict penalty fee deducted.` : ""} Strike 2 results in a permanent ban & 100% forfeiture.`,
+          soundType: "disputed",
+          timestamp: Date.now()
+        });
+      }
 
       if (user.telegram_chat_id) {
-        const warnMessage = `⚠️ <b>ACCOUNT FLAGGED - MATCH CONFLICT STRIKE 1</b> ⚠️\n\n` +
-          `Your account has been officially flagged by the referee team for submitting a false or conflicting result claim in Match <b>#${roomTag}</b>.\n\n` +
-          `🚨 <b>POLICY WARNING:</b>\n` +
+        const warnMessage = `⚠️ <b>ACCOUNT FLAGGED & PENALIZED - MATCH CONFLICT STRIKE 1</b> ⚠️\n\n` +
+          `Your account has been officially flagged and penalized by the referee team for submitting a false or conflicting result claim in Match <b>#${roomTag}</b>.\n\n` +
+          `🚨 <b>PENALTY DETAILS:</b>\n` +
           `• Strike Count: <b>1 / 2</b>\n` +
-          `• Account Status: 🟡 <b>FLAGGED / PROBATION</b>\n\n` +
+          `• Account Status: 🟡 <b>FLAGGED / PROBATION</b>\n` +
+          (actualPenaltyDeducted > 0
+            ? `• Financial Penalty: 💸 <b>₦${actualPenaltyDeducted.toLocaleString()}</b> (10% Conflict Penalty Fee deducted)\n\n`
+            : `• Financial Note: Match escrow forfeited to rightful winner.\n\n`) +
           `Please ensure all future match claims and scoreboard uploads are 100% accurate. A second conflict violation will trigger an immediate <b>PERMANENT ACCOUNT BAN</b> and complete forfeiture of all wallet funds.`;
 
         await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -6263,6 +6417,21 @@ async function applyConflictFlagOrBan(dishonestUserId: string, match: any, reaso
       }
 
       console.log(`🛑 [Conflict System] User ${user.codm_ign} (${dishonestUserId}) PERMANENTLY BANNED on Strike ${newStrikes}. ₦${totalBalance} forfeited.`);
+      await broadcastUserUpdate(dishonestUserId);
+
+      if (globalIo) {
+        globalIo.emit("matchAlert", {
+          id: `alert_ban_${Date.now()}`,
+          matchId: match.id,
+          userId: dishonestUserId,
+          creatorId: match.creator?.id === dishonestUserId ? dishonestUserId : undefined,
+          opponentId: match.opponent?.id === dishonestUserId ? dishonestUserId : undefined,
+          title: `🛑 Account Permanently Banned (Strike ${newStrikes})`,
+          body: `Repeat match conflict violation in Match #${roomTag}. Account banned and ₦${totalBalance.toLocaleString()} forfeited.`,
+          soundType: "disputed",
+          timestamp: Date.now()
+        });
+      }
 
       if (user.telegram_chat_id) {
         const channelId = process.env.TELEGRAM_PUBLIC_CHANNEL_ID || "@OpsSTAKE";
@@ -6697,17 +6866,23 @@ async function handleTelegramMessage(message) {
       const roomCode = rawPayload.replace(/^dispute_/, "").trim();
       const match = await getMatchByCodeOrId(roomCode);
       if (match) {
+        const resolvedCode = match.roomCode || match.challengeCode;
+        telegramPendingDisputeByChat.set(chatId, {
+          matchId: match.id,
+          roomCode: resolvedCode,
+          updatedAt: Date.now()
+        });
         await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             chat_id: chatId,
-            text: `🚨 <b>DISPUTE REGISTRATION FOR MATCH #${match.roomCode || match.challengeCode}</b>\n\n` +
+            text: `🚨 <b>DISPUTE ROOM LOCKED: #${resolvedCode}</b>\n\n` +
+              `🔑 <b>Room Code:</b> <code>#${resolvedCode}</code>\n` +
               `🎮 <b>Mode:</b> ${match.gameMode} | 🗺️ <b>Map:</b> ${match.map}\n` +
               `💰 <b>Escrow Pot:</b> <b>₦${match.potAmount.toLocaleString()}</b>\n\n` +
-              `📹 <b>UPLOAD YOUR SCREEN RECORDING NOW:</b>\n` +
-              `Please send/upload your CODM screen recording video file directly into this chat.\n` +
-              `You can also include caption: <code>/dispute ${match.roomCode || match.challengeCode}</code>`,
+              `📹 <b>SEND YOUR SCREEN RECORDING PROOF NOW:</b>\n` +
+              `Reply directly in this chat with your CODM screen recording video file (history + scoreboard). Your Room Code <code>#${resolvedCode}</code> is already locked!`,
             parse_mode: "HTML"
           })
         });
@@ -6821,8 +6996,8 @@ async function handleTelegramMessage(message) {
     return;
   }
 
-  // Handle /dispute command OR media attachments (video, document, photo) for disputes
-  const isVideoOrMedia = Boolean(message.video || message.document || message.photo || message.animation);
+  // Handle /dispute command OR media attachments (video, document, photo, video_note) for disputes
+  const isVideoOrMedia = Boolean(message.video || message.document || message.photo || message.animation || message.video_note);
   const isDisputeCommand = fullContent.toLowerCase().startsWith("/dispute");
 
   if (isDisputeCommand || isVideoOrMedia) {
@@ -6842,16 +7017,24 @@ async function handleTelegramMessage(message) {
 
     let match = await getMatchByCodeOrId(matchCode);
 
-    // If no code extracted, search DB for user's active/disputed match
+    // 2. Check automatic bot pending dispute context for this chat (valid 24 hours)
+    if (!match) {
+      const pendingCtx = telegramPendingDisputeByChat.get(chatId);
+      if (pendingCtx && (Date.now() - pendingCtx.updatedAt) < 24 * 60 * 60 * 1000) {
+        match = await getMatchFromDb(pendingCtx.matchId) || await getMatchByCodeOrId(pendingCtx.roomCode);
+      }
+    }
+
+    // 3. Fallback: search DB for user's active/disputed match (including 5v5 squad slots), prioritizing DISPUTED first
     if (!match) {
       const userRes = await pool.query(`SELECT id, codm_ign FROM users WHERE telegram_chat_id = ${escapeSql(chatId)} LIMIT 1`);
       const user = userRes.rows[0];
       if (user) {
         const mRes = await pool.query(
           `SELECT id FROM matches 
-           WHERE (creator_id = $1 OR opponent_id = $1) 
-             AND status IN ('DISPUTED', 'SUBMITTING_RESULTS', 'READY_TO_PLAY', 'IN_PROGRESS')
-           ORDER BY created_at DESC LIMIT 1`,
+           WHERE (creator_id = $1 OR opponent_id = $1 OR squad_data::text LIKE '%' || $1 || '%') 
+             AND status IN ('DISPUTED', 'SUBMITTING_RESULTS', 'VERIFYING', 'READY_TO_PLAY', 'IN_PROGRESS')
+           ORDER BY CASE WHEN status = 'DISPUTED' THEN 0 ELSE 1 END, created_at DESC LIMIT 1`,
           [user.id]
         );
         if (mRes.rows.length > 0) {
@@ -6875,12 +7058,20 @@ async function handleTelegramMessage(message) {
     }
 
     if (match) {
+      const disputeCode = match.roomCode || match.challengeCode;
+      telegramPendingDisputeByChat.set(chatId, {
+        matchId: match.id,
+        roomCode: disputeCode,
+        updatedAt: Date.now()
+      });
+
       const userRes = await pool.query(`SELECT id, codm_ign FROM users WHERE telegram_chat_id = ${escapeSql(chatId)} LIMIT 1`);
+      const playerId = userRes.rows[0]?.id;
       const playerIgn = userRes.rows[0]?.codm_ign || senderName;
 
       // Link chat ID automatically if user exists
-      if (userRes.rows[0]?.id) {
-        await pool.query(`UPDATE users SET telegram_chat_id = ${escapeSql(chatId)} WHERE id = ${escapeSql(userRes.rows[0].id)}`);
+      if (playerId) {
+        await pool.query(`UPDATE users SET telegram_chat_id = ${escapeSql(chatId)} WHERE id = ${escapeSql(playerId)}`);
       }
 
       if (isVideoOrMedia) {
@@ -6900,10 +7091,11 @@ async function handleTelegramMessage(message) {
 
             const alertText = `🚨 <b>MATCH DISPUTE VIDEO RECEIVED (Telegram Bot)</b> 🚨\n\n` +
               `👤 <b>Player:</b> ${playerIgn} (@${telegramUsername || "anon"})\n` +
-              `🏷️ <b>Match Code:</b> #${match.roomCode || match.challengeCode}\n` +
+              `🔑 <b>Room Code:</b> <code>#${disputeCode}</code>\n` +
+              `🏷️ <b>Challenge Code:</b> #${match.challengeCode}\n` +
               `🎮 <b>Mode:</b> ${match.gameMode} | Map: ${match.map}\n` +
               `💰 <b>Pot Amount:</b> <b>₦${match.potAmount.toLocaleString()}</b>\n` +
-              `🔍 <b>Search Tag:</b> <code>#DISPUTE_${match.roomCode || match.challengeCode}</code>`;
+              `🔍 <b>Search Tag:</b> <code>#DISPUTE_${disputeCode}</code>`;
 
             await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
               method: "POST",
@@ -6919,15 +7111,23 @@ async function handleTelegramMessage(message) {
           }
         }
 
-        // Update match status to DISPUTED in database
+        // Update match proof state & status in database
         match.status = "DISPUTED";
-        match.resolutionNotes = `Screen recording dispute proof submitted via Telegram Bot by ${playerIgn}. Awaiting referee review. Pot ₦${match.potAmount.toLocaleString()} locked.`;
+        match.reviewStatus = "PENDING_REVIEW";
+        if (playerId && match.creator?.id === playerId) {
+          match.creator.videoSubmitted = true;
+          match.creator.videoSubmittedAt = Date.now();
+        } else if (playerId && match.opponent?.id === playerId) {
+          match.opponent.videoSubmitted = true;
+          match.opponent.videoSubmittedAt = Date.now();
+        }
+        match.resolutionNotes = `Screen recording dispute proof submitted via Telegram Bot by ${playerIgn} (Room #${disputeCode}). Awaiting referee review. Pot ₦${match.potAmount.toLocaleString()} locked.`;
         match.chatMessages = match.chatMessages || [];
         match.chatMessages.push({
           id: `msg_${Date.now()}_tg_dispute`,
           senderId: "SYSTEM",
           senderName: "CODM Referee Bot",
-          text: `📹 ${playerIgn} submitted dispute screen recording video via Telegram Bot. Escrow pot locked for referee review.`,
+          text: `📹 ${playerIgn} submitted screen recording proof via Telegram Bot for Room #${disputeCode}. Escrow pot locked for manual referee review.`,
           timestamp: Date.now()
         });
 
@@ -6945,9 +7145,9 @@ async function handleTelegramMessage(message) {
           body: JSON.stringify({
             chat_id: chatId,
             text: `✅ <b>DISPUTE SCREEN RECORDING RECEIVED!</b>\n\n` +
-              `Your video proof for Match <b>#${match.roomCode || match.challengeCode}</b> has been received and escalated to the OpsSTAKE Admin Referee Team for priority review.\n\n` +
+              `Your video proof for Room Code <b>#${disputeCode}</b> has been received and forwarded to the OpsSTAKE Admin Referee Team for manual review.\n\n` +
               `🔒 The escrow pot (<b>₦${match.potAmount.toLocaleString()}</b>) remains securely locked until review completes.\n` +
-              `You will be notified right here in Telegram as soon as the referee adjudicates the result!`,
+              `⚖️ Once adjudicated, winnings will be credited to the true winner and conflict penalties applied to the player who caused the dispute.`,
             parse_mode: "HTML"
           })
         });
@@ -6959,16 +7159,29 @@ async function handleTelegramMessage(message) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             chat_id: chatId,
-            text: `🚨 <b>DISPUTE INITIATED FOR MATCH #${match.roomCode || match.challengeCode}</b>\n\n` +
+            text: `🚨 <b>DISPUTE INITIATED FOR ROOM #${disputeCode}</b>\n\n` +
               `🎮 <b>Mode:</b> ${match.gameMode} | Map: ${match.map}\n` +
               `💰 <b>Escrow Pot:</b> <b>₦${match.potAmount.toLocaleString()}</b>\n\n` +
               `📹 <b>UPLOAD SCREEN RECORDING PROOF NOW:</b>\n` +
-              `Please send or upload your screen recording video file directly into this chat to complete your dispute submission.`,
+              `Please send or upload your screen recording video file directly into this chat to complete your dispute submission for Room <code>#${disputeCode}</code>.`,
             parse_mode: "HTML"
           })
         });
         return;
       }
+    } else if (message.chat.type === "private") {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: `⚠️ <b>No active or disputed match found for your Telegram account.</b>\n\n` +
+            `• Send <code>/dispute YOUR_ROOM_CODE</code> (e.g. <code>/dispute CODM-5175-SHI</code>)\n` +
+            `• Or make sure your Telegram is linked in <b>OPS STAKE → Profile → Bot Comms</b>.`,
+          parse_mode: "HTML"
+        })
+      });
+      return;
     }
   }
 
@@ -7902,6 +8115,29 @@ app.post("/api/matches/:id/chat", async (req, res) => {
   match.chatMessages.push(newMsg);
   await saveMatchToDb(match);
   broadcastToMatchRoom(match.id, { type: "chat", message: newMsg, matchId: match.id });
+  if (globalIo) {
+    globalIo.to(match.id).emit("chat", { ...newMsg, matchId: match.id });
+    const participantIds = new Set<string>();
+    if (match.creator?.id) participantIds.add(match.creator.id);
+    if (match.opponent?.id) participantIds.add(match.opponent.id);
+    if (Array.isArray(match.squadData?.slots)) {
+      for (const s of match.squadData.slots) {
+        if (s?.userId) participantIds.add(s.userId);
+      }
+    }
+    participantIds.delete(senderId);
+    if (participantIds.size > 0) {
+      globalIo.emit("chatNotification", {
+        id: `chat_notif_${newMsg.id}`,
+        matchId: match.id,
+        senderId,
+        senderName,
+        text: newMsg.text,
+        timestamp: newMsg.timestamp,
+        targetUserIds: Array.from(participantIds),
+      });
+    }
+  }
   res.json(newMsg);
 });
 app.post("/api/matches/:id/clear-chat", async (req, res) => {
@@ -7924,13 +8160,21 @@ app.post("/api/matches/:id/cancel", async (req, res) => {
       return res.status(404).json({ error: "Match not found" });
     }
     const matchRow = mRes.rows[0];
-    if (matchRow.status !== "PENDING_OPPONENT_STAKE") {
+    if (matchRow.status === "CANCELLED") {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: "Cannot cancel match. Opponent has already accepted and staked." });
+      const alreadyCancelled = await getMatchFromDb(matchId);
+      return res.json(alreadyCancelled);
+    }
+    if (matchRow.status !== "PENDING_OPPONENT_STAKE" && matchRow.status !== "OPPONENT_STAKED_AWAITING_CREATOR") {
+      await client.query("ROLLBACK");
+      const statusReason = matchRow.status === "SETTLED"
+        ? "Cannot cancel match because it has already been settled."
+        : "Cannot cancel match because the duel is already active or both players have staked.";
+      return res.status(400).json({ error: statusReason });
     }
     await client.query(`UPDATE matches SET status = 'CANCELLED', chat_messages = '[]'::jsonb WHERE id = ${escapeSql(matchId)}`);
     const isSquad = matchRow.match_type === "squad" || Boolean(matchRow.squad_data);
-    let squadData = matchRow.squad_data ? typeof matchRow.squad_data === "string" ? JSON.parse(matchRow.squad_data) : matchRow.squad_data : null;
+    let squadData = matchRow.squad_data ? (typeof matchRow.squad_data === "string" ? JSON.parse(matchRow.squad_data) : matchRow.squad_data) : null;
     const stakeAmount = parseFloat(matchRow.stake_amount);
     if (isSquad && squadData?.slots && Array.isArray(squadData.slots)) {
       for (const slot of squadData.slots) {
@@ -7950,9 +8194,9 @@ app.post("/api/matches/:id/cancel", async (req, res) => {
         }
       }
     } else {
-      const creatorData = matchRow.creator_data || {};
-      const opponentData = matchRow.opponent_data || {};
-      if (creatorData.staked) {
+      const creatorData = typeof matchRow.creator_data === "string" ? JSON.parse(matchRow.creator_data) : (matchRow.creator_data || {});
+      const opponentData = typeof matchRow.opponent_data === "string" ? JSON.parse(matchRow.opponent_data) : (matchRow.opponent_data || {});
+      if (creatorData?.staked) {
         await client.query(`
           UPDATE users 
           SET balance = balance + ${escapeSql(stakeAmount)},
@@ -7966,7 +8210,7 @@ app.post("/api/matches/:id/cancel", async (req, res) => {
           ON CONFLICT (id) DO NOTHING
         `);
       }
-      if (opponentData.staked && matchRow.opponent_id) {
+      if (opponentData?.staked && matchRow.opponent_id) {
         await client.query(`
           UPDATE users 
           SET balance = balance + ${escapeSql(stakeAmount)},
@@ -8585,7 +8829,7 @@ app.post("/api/matches/:id/submit-result", rateLimitMiddleware(15, 6e4), secureS
         id: `msg_${Date.now()}_dispute_final`,
         senderId: "SYSTEM",
         senderName: "CODM Referee Bot",
-        text: `\u{1F6A8} MAXIMUM 3 CONFLICT RETRIES REACHED: Match escalated to Admin Review. Both players MUST upload a <b>screen recording</b> of their history and game result now for manual referee verification.`,
+        text: `\u{1F6A8} MAXIMUM 3 CONFLICT RETRIES REACHED (Room #${match.roomCode || match.challengeCode}): Match escalated to Manual Review. Our Telegram Bot has automatically locked Room Code #${match.roomCode || match.challengeCode} and messaged both players for screen recording proof. Remember: the player who caused the conflict faces a Strike + 10% conflict penalty fee (Strike 2 = Permanent Ban & 100% forfeiture).`,
         timestamp: Date.now()
       });
     }
@@ -8608,11 +8852,89 @@ app.post("/api/matches/:id/submit-result", rateLimitMiddleware(15, 6e4), secureS
   match.conflictReason = conflictInfo.conflictReason;
   match.conflictReasonsList = conflictInfo.conflictReasonsList;
   await saveMatchToDb(match);
+  if (resolveWinner === "dispute") {
+    const isRetryWarn = match.status !== "DISPUTED";
+    setImmediate(() => {
+      notifyConflictAndRequestVideoProof(match, match.conflictReason || match.resolutionNotes, isRetryWarn).catch(
+        (e) => console.warn("[Telegram Bot] Conflict outreach trigger error:", e.message)
+      );
+    });
+  }
   if (globalIo) {
     globalIo.emit("matchUpdated", match);
     globalIo.to(match.id).emit("matchUpdated", match);
   }
   res.json(match);
+});
+app.post("/api/matches/:id/upload-video", uploadVideoMiddleware.single("video"), async (req: any, res) => {
+  const uploadedFile = req.file;
+  try {
+    const match = await getMatchFromDb(req.params.id);
+    if (!match) {
+      return res.status(404).json({ error: "Match not found" });
+    }
+    if (match.status === "SETTLED" || match.status === "CANCELLED") {
+      return res.status(400).json({ error: "Match is already settled or cancelled." });
+    }
+    if (!uploadedFile) {
+      return res.status(400).json({ error: "Missing video file attachment." });
+    }
+    const { playerId, playerIgn } = req.body || {};
+    const isCreator = match.creator?.id === playerId;
+    const isOpponent = match.opponent?.id === playerId;
+    const displayIgn = playerIgn || (isCreator ? match.creator?.codmIgn : isOpponent ? match.opponent?.codmIgn : "Operator");
+    const roomCode = match.roomCode || match.challengeCode;
+
+    await sendMatchDisputeVideoToTelegramFromFile(
+      match,
+      displayIgn,
+      uploadedFile.path,
+      uploadedFile.mimetype || "video/mp4"
+    );
+
+    match.status = "DISPUTED";
+    match.reviewStatus = "PENDING_REVIEW";
+    if (isCreator) {
+      match.creator.videoSubmitted = true;
+      match.creator.videoSubmittedAt = Date.now();
+    } else if (isOpponent && match.opponent) {
+      match.opponent.videoSubmitted = true;
+      match.opponent.videoSubmittedAt = Date.now();
+    }
+    match.resolutionNotes = `Screen recording proof uploaded for Room #${roomCode} by ${displayIgn}. Pending manual referee review.`;
+    match.chatMessages = match.chatMessages || [];
+    match.chatMessages.push({
+      id: `msg_${Date.now()}_vid_upload`,
+      senderId: "SYSTEM",
+      senderName: "CODM Referee Bot",
+      text: `📹 ${displayIgn} uploaded screen recording proof for Room #${roomCode}. Forwarded to Referee Telegram Queue (#DISPUTE_${roomCode}).`,
+      timestamp: Date.now()
+    });
+    const conflictInfo = computeMatchConflictReasons(match);
+    match.conflictReason = conflictInfo.conflictReason;
+    match.conflictReasonsList = conflictInfo.conflictReasonsList;
+    await saveMatchToDb(match);
+
+    if (globalIo) {
+      globalIo.emit("matchUpdated", match);
+      globalIo.to(match.id).emit("matchUpdated", match);
+    }
+    return res.json({
+      success: true,
+      status: "PENDING_REVIEW",
+      match,
+      message: `Screen recording uploaded for Room #${roomCode} and forwarded to referees.`
+    });
+  } catch (err: any) {
+    console.error("[Video Upload] Error processing match dispute video:", err);
+    return res.status(500).json({ error: err.message || "Failed to process video upload" });
+  } finally {
+    if (uploadedFile?.path) {
+      try {
+        fs.unlinkSync(uploadedFile.path);
+      } catch {}
+    }
+  }
 });
 app.post("/api/msksksnuwje/matches/:id/admin-resolve", async (req, res) => {
   const adminUser = req.adminUser;
@@ -8731,6 +9053,13 @@ app.post("/api/msksksnuwje/matches/:id/admin-resolve", async (req, res) => {
       await pool.query(`
         UPDATE users SET losses = losses + 1 WHERE id = ${escapeSql(slot.userId)}
       `);
+    }
+    const hadConflict = match.status === "DISPUTED" || Boolean(match.conflictReason);
+    if (hadConflict) {
+      const losingCaptainId = losingTeam === "ALPHA" ? match.creator?.id : (match.opponent?.id || losingSlots[0]?.userId);
+      if (losingCaptainId) {
+        await applyConflictFlagOrBan(losingCaptainId, match, `False result claim / squad match conflict in Match #${match.roomCode || match.challengeCode}`);
+      }
     }
     match.resolutionNotes = `Referee adjudicated in favor of ${teamLabel}. \u20A6${match.winnerPayout.toLocaleString()} paid out to each of the 5 winning squad players!`;
     match.chatMessages = [];
@@ -9411,19 +9740,27 @@ app.post("/api/msksksnuwje/matches/:id/escalate", async (req, res) => {
       return res.status(403).json({ error: `Forbidden: This match is assigned to ${match.reviewerName}` });
     }
     const auditReason = reason || "Escalated to high-priority manual referee review";
+    const wasAlreadyDisputed = match.status === "DISPUTED";
     match.status = "DISPUTED";
     match.resolutionNotes = `\u{1F6E1}\uFE0F Escalated to Manual Review: ${auditReason}`;
     match.chatMessages.push({
       id: `msg_${Date.now()}_escalate`,
       senderId: "SYSTEM",
       senderName: "CODM Referee Bot",
-      text: `\u{1F6E1}\uFE0F REFEREE NOTICE: Match escalated to manual inspection by Admin (${auditReason}). Escrow pot (\u20A6${match.potAmount.toLocaleString()}) remains securely locked.`,
+      text: `\u{1F6E1}\uFE0F REFEREE NOTICE (Room #${match.roomCode || match.challengeCode}): Match escalated to manual inspection by Admin (${auditReason}). Bot has pinged both players for screen recording proof. Escrow pot (\u20A6${match.potAmount.toLocaleString()}) remains securely locked.`,
       timestamp: Date.now()
     });
     const conflictInfo = computeMatchConflictReasons(match);
     match.conflictReason = conflictInfo.conflictReason;
     match.conflictReasonsList = conflictInfo.conflictReasonsList;
     await saveMatchToDb(match);
+    if (!wasAlreadyDisputed) {
+      setImmediate(() => {
+        notifyConflictAndRequestVideoProof(match, auditReason, false).catch(
+          (e) => console.warn("[Telegram Bot] Escalate conflict outreach error:", e.message)
+        );
+      });
+    }
     res.json({ success: true, match });
   } catch (err) {
     console.error("Error escalating match:", err);
@@ -10059,7 +10396,7 @@ app.post("/api/friends/chat", async (req, res) => {
         fromUserId: userId,
         title: cleanMsgType === "challenge" ? `⚔️ 1v1 Challenge from ${cleanSenderName}` : `💬 ${cleanSenderName} (1v1 Rival)`,
         body: cleanText,
-        soundType: cleanMsgType === "challenge" ? "rival_joined" : "default",
+        soundType: cleanMsgType === "challenge" ? "rival_joined" : "message",
         data: {
           type: "rival_chat",
           rivalId: userId,
@@ -10349,6 +10686,7 @@ async function startServer() {
   io.on("connection", (socket) => {
     let currentMatchId = null;
     let currentUserId = null;
+    let activeTypingTarget: { room: string; userId: string; rivalId: string; senderName: string } | null = null;
 
     socket.on("user_presence_ping", (data) => {
       const uid = typeof data === "string" ? data : data?.userId;
@@ -10376,8 +10714,11 @@ async function startServer() {
     });
 
     socket.on("join_rival_room", (data) => {
-      if (data.room) {
+      if (data?.room) {
         socket.join(data.room);
+        if (data.userId && data.userId !== "guest") {
+          currentUserId = data.userId;
+        }
         console.log(`Socket ${socket.id} joined rival room: ${data.room}`);
       }
     });
@@ -10539,14 +10880,40 @@ async function startServer() {
           }
         }
         io.to(data.matchId).emit("chat", { ...newMsg, matchId: data.matchId });
-        socket.to(data.matchId).emit("chatNotification", {
+        let targetUserIds: string[] | undefined = undefined;
+        if (data.matchId !== "lobby_global") {
+          try {
+            const matchObj = await getMatchFromDb(data.matchId);
+            if (matchObj) {
+              const ids = new Set<string>();
+              if (matchObj.creator?.id) ids.add(matchObj.creator.id);
+              if (matchObj.opponent?.id) ids.add(matchObj.opponent.id);
+              if (Array.isArray(matchObj.squadData?.slots)) {
+                for (const s of matchObj.squadData.slots) {
+                  if (s?.userId) ids.add(s.userId);
+                }
+              }
+              ids.delete(newMsg.senderId);
+              if (ids.size > 0) targetUserIds = Array.from(ids);
+            }
+          } catch {
+            // fallback to room-level broadcast
+          }
+        }
+        const chatNotifPayload = {
           id: `chat_notif_${newMsg.id}`,
           matchId: data.matchId,
           senderId: newMsg.senderId,
           senderName: newMsg.senderName,
           text: newMsg.text,
-          timestamp: newMsg.timestamp
-        });
+          timestamp: newMsg.timestamp,
+          ...(targetUserIds ? { targetUserIds } : {}),
+        };
+        if (targetUserIds && targetUserIds.length > 0) {
+          socket.broadcast.emit("chatNotification", chatNotifPayload);
+        } else {
+          socket.to(data.matchId).emit("chatNotification", chatNotifPayload);
+        }
       } catch (err) {
         console.error("Error processing socket chat message:", err);
       }
@@ -10600,7 +10967,7 @@ async function startServer() {
           fromUserId: data.userId,
           title: cleanMsgType === "challenge" ? `⚔️ 1v1 Challenge from ${cleanSenderName}` : `💬 ${cleanSenderName} (1v1 Rival)`,
           body: cleanText,
-          soundType: cleanMsgType === "challenge" ? "rival_joined" : "default",
+          soundType: cleanMsgType === "challenge" ? "rival_joined" : "message",
           data: {
             type: "rival_chat",
             rivalId: data.userId,
@@ -10617,12 +10984,27 @@ async function startServer() {
     socket.on("rival_typing", (data) => {
       if (!data || !data.userId || !data.rivalId) return;
       const room = `rival_chat_${[data.rivalId, data.userId].sort().join('_')}`;
+      const isTyping = Boolean(data.isTyping);
       const typingPayload = {
         userId: data.userId,
         rivalId: data.rivalId,
         senderName: data.senderName || "Rival",
-        isTyping: Boolean(data.isTyping),
+        isTyping,
       };
+      if (isTyping) {
+        activeTypingTarget = {
+          room,
+          userId: data.userId,
+          rivalId: data.rivalId,
+          senderName: typingPayload.senderName,
+        };
+      } else if (
+        activeTypingTarget &&
+        activeTypingTarget.room === room &&
+        activeTypingTarget.userId === data.userId
+      ) {
+        activeTypingTarget = null;
+      }
       socket.to(room).emit("rival_typing", typingPayload);
       socket.broadcast.emit(`rival_typing_${data.rivalId}`, typingPayload);
     });
@@ -10686,6 +11068,17 @@ async function startServer() {
       io.emit("balanceUpdated", data);
     });
     socket.on("disconnect", () => {
+      if (activeTypingTarget) {
+        const stopPayload = {
+          userId: activeTypingTarget.userId,
+          rivalId: activeTypingTarget.rivalId,
+          senderName: activeTypingTarget.senderName,
+          isTyping: false,
+        };
+        socket.to(activeTypingTarget.room).emit("rival_typing", stopPayload);
+        socket.broadcast.emit(`rival_typing_${activeTypingTarget.rivalId}`, stopPayload);
+        activeTypingTarget = null;
+      }
       if (currentUserId && currentUserId !== "guest") {
         activeConnectedUsers.delete(currentUserId);
         io.emit("rival_presence_update", {

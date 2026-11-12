@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserProfile, Match } from '../types';
 import {
   ShieldAlert, CheckCircle2, AlertTriangle, Send, ExternalLink, MessageSquare, Copy, Check
@@ -14,6 +14,16 @@ interface DisputesPageProps {
 export const DisputesPage: React.FC<DisputesPageProps> = ({ currentUser, matches, onRefresh }) => {
   const [selectedMatchId, setSelectedMatchId] = useState<string>('');
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [telegramBotUsername, setTelegramBotUsername] = useState<string>('OpsSTAKEBOT');
+
+  useEffect(() => {
+    fetch('/api/telegram/bot-info')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.botUsername) setTelegramBotUsername(data.botUsername);
+      })
+      .catch(() => {});
+  }, []);
 
   const disputedMatches = matches.filter(m => {
     const isCreator = m.creator.id === currentUser.id;
@@ -22,8 +32,6 @@ export const DisputesPage: React.FC<DisputesPageProps> = ({ currentUser, matches
   });
 
   const activeMatch = disputedMatches.find(m => m.id === selectedMatchId) || disputedMatches[0];
-
-  const telegramBotUsername = 'OpsStakeBot'; // Official Telegram bot username
 
   const handleCopyCommand = (cmdText: string, matchId: string) => {
     navigator.clipboard.writeText(cmdText);
@@ -158,10 +166,10 @@ export const DisputesPage: React.FC<DisputesPageProps> = ({ currentUser, matches
                     <div className="p-3.5 rounded-2xl bg-neutral-950/80 border border-neutral-800 space-y-1">
                       <div className="font-bold text-sky-400 uppercase tracking-wider flex items-center gap-1.5">
                         <span className="w-5 h-5 rounded-full bg-sky-500/20 text-sky-300 flex items-center justify-center text-[10px] font-mono">1</span>
-                        <span>Launch Telegram Bot</span>
+                        <span>Room Code Auto-Linked</span>
                       </div>
                       <p className="text-[11px] text-neutral-400 leading-normal">
-                        Tap the button below. It opens Telegram directly to <b>@OpsStakeBot</b> preloaded with <code className="text-sky-300 font-mono">/dispute {activeMatch.roomCode || activeMatch.challengeCode}</code>.
+                        When a conflict occurs, <b>@{telegramBotUsername}</b> automatically locks Room Code <code className="text-sky-300 font-mono">#{activeMatch.roomCode || activeMatch.challengeCode}</code> and pings your Telegram DM for proof.
                       </p>
                     </div>
 
@@ -171,9 +179,16 @@ export const DisputesPage: React.FC<DisputesPageProps> = ({ currentUser, matches
                         <span>Upload Screen Recording</span>
                       </div>
                       <p className="text-[11px] text-neutral-400 leading-normal">
-                        Attach and send your video clip in the Telegram bot chat. The bot automatically dispatches it to referees for quick resolution.
+                        Reply directly in the bot chat with your screen recording video. The bot forwards it straight to referees for manual review.
                       </p>
                     </div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-[11px] text-rose-200 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                    <span>
+                      <strong>Conflict Penalty Policy:</strong> Causing a false conflict incurs <strong>Strike 1 Account Flag + 10% Conflict Penalty Fee</strong> upon manual adjudication. <strong>Strike 2</strong> triggers an immediate <strong>Permanent Ban & 100% Fund Forfeiture</strong>.
+                    </span>
                   </div>
 
                   {/* Primary Pre-filled Deep Link Action Button */}

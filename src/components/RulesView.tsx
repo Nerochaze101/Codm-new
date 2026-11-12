@@ -88,7 +88,7 @@ export const RulesView: React.FC = () => {
         <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-neutral-300 space-y-1.5">
           <p className="font-bold text-rose-400 uppercase">2-Strike Conflict Penalty Policy:</p>
           <ul className="list-disc list-inside space-y-1 text-[11px] text-neutral-300">
-            <li><strong>Strike 1:</strong> Account flagged, placed on probation, formal warning issued.</li>
+            <li><strong>Strike 1:</strong> Account flagged, placed on probation, 10% conflict penalty fee deducted, and formal Telegram warning issued.</li>
             <li><strong>Strike 2 (Repeat Violation):</strong> Immediate <strong>PERMANENT BAN</strong>, 100% forfeiture of all wallet & escrow balances to ₦0, and permanent ban from app, Telegram Bot, and official <strong>@OpsSTAKE</strong> channel.</li>
           </ul>
         </div>

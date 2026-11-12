@@ -11,6 +11,7 @@ import {
   deleteWorldChatMessage,
   sendFriendRequest,
 } from '../services/api';
+import { playIncomingMessageSound } from '../services/notificationService';
 
 interface WorldChatProps {
   isOpen: boolean;
@@ -95,6 +96,8 @@ export const WorldChat: React.FC<WorldChatProps> = ({
   const typingTimeoutsRef = useRef<Record<string, NodeJS.Timeout>>({});
   const myTypingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const isOpenRef = useRef(isOpen);
+  const lastSoundAtRef = useRef(0);
 
   const isGuest = !currentUser?.id || currentUser.id === 'guest';
   const isAdminOrMod = ['admin', 'super_admin', 'moderator'].includes(currentUser?.role || '');
@@ -175,6 +178,13 @@ export const WorldChat: React.FC<WorldChatProps> = ({
       }
       setMessages((prev) => {
         if (prev.some((m) => m.id === incoming.id)) return prev;
+        if (incoming.senderId !== currentUser?.id && isOpenRef.current) {
+          const now = Date.now();
+          if (now - lastSoundAtRef.current > 1200) {
+            lastSoundAtRef.current = now;
+            playIncomingMessageSound();
+          }
+        }
         return [...prev, incoming].slice(-200);
       });
     });
@@ -218,14 +228,19 @@ export const WorldChat: React.FC<WorldChatProps> = ({
     };
   }, [currentUser?.id]);
 
-  // Escape key closes drawer cleanly
+  // Sync open state globally & escape key closes drawer cleanly
   useEffect(() => {
+    isOpenRef.current = isOpen;
+    (window as any).__isWorldChatOpen = isOpen;
     if (!isOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    return () => {
+      (window as any).__isWorldChatOpen = false;
+      window.removeEventListener('keydown', onKeyDown);
+    };
   }, [isOpen, onClose]);
 
   // Snap to bottom when opening drawer or switching channels

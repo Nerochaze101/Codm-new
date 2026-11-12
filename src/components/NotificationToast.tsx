@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { X, ExternalLink, Swords, Zap, AlertTriangle, Trophy, Shield, Bell } from 'lucide-react';
+import { X, ExternalLink, Swords, Zap, AlertTriangle, Trophy, Shield, Bell, MessageCircle } from 'lucide-react';
 import { NotificationPayload } from '../services/notificationService';
 
 interface NotificationToastProps {
@@ -14,6 +14,11 @@ export const NotificationToast: React.FC<NotificationToastProps> = ({
   onAction,
 }) => {
   const [progress, setProgress] = useState(100);
+  const onCloseRef = React.useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!notification) {
@@ -26,19 +31,19 @@ export const NotificationToast: React.FC<NotificationToastProps> = ({
     const intervalTime = 50;
     const step = (intervalTime / duration) * 100;
 
-    const timer = setInterval(() => {
-      setProgress((prev) => {
-        if (prev <= step) {
-          clearInterval(timer);
-          onClose();
-          return 0;
-        }
-        return prev - step;
-      });
+    const closeTimer = setTimeout(() => {
+      onCloseRef.current();
+    }, duration);
+
+    const progressTimer = setInterval(() => {
+      setProgress((prev) => Math.max(0, prev - step));
     }, intervalTime);
 
-    return () => clearInterval(timer);
-  }, [notification, onClose]);
+    return () => {
+      clearTimeout(closeTimer);
+      clearInterval(progressTimer);
+    };
+  }, [notification]);
 
   if (!notification) return null;
 
@@ -52,6 +57,8 @@ export const NotificationToast: React.FC<NotificationToastProps> = ({
         return <AlertTriangle className="w-5 h-5 text-rose-400 animate-pulse" />;
       case 'settled':
         return <Trophy className="w-5 h-5 text-yellow-400" />;
+      case 'message':
+        return <MessageCircle className="w-5 h-5 text-cyan-400 animate-pulse" />;
       default:
         return <Bell className="w-5 h-5 text-amber-400" />;
     }
@@ -67,6 +74,8 @@ export const NotificationToast: React.FC<NotificationToastProps> = ({
         return 'border-rose-500/50 shadow-rose-500/20';
       case 'settled':
         return 'border-yellow-500/50 shadow-yellow-500/20';
+      case 'message':
+        return 'border-cyan-500/50 shadow-cyan-500/20';
       default:
         return 'border-neutral-700 shadow-neutral-900/50';
     }
@@ -82,10 +91,16 @@ export const NotificationToast: React.FC<NotificationToastProps> = ({
         return 'bg-rose-400';
       case 'settled':
         return 'bg-yellow-400';
+      case 'message':
+        return 'bg-cyan-400';
       default:
         return 'bg-neutral-400';
     }
   };
+
+  const isChatAlert =
+    notification.soundType === 'message' ||
+    Boolean(notification.data?.url && notification.data.url.startsWith('/social'));
 
   return (
     <div className="fixed top-20 right-4 sm:right-6 z-50 max-w-sm sm:max-w-md w-full animate-in slide-in-from-top-4 fade-in duration-300">
@@ -99,8 +114,8 @@ export const NotificationToast: React.FC<NotificationToastProps> = ({
 
           <div className="flex-1 min-w-0 pr-4">
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-black uppercase tracking-wider text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/20">
-                Live Alert
+              <span className={`text-[10px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded border ${isChatAlert ? 'text-cyan-400 bg-cyan-400/10 border-cyan-400/20' : 'text-amber-400 bg-amber-400/10 border-amber-400/20'}`}>
+                {isChatAlert ? 'New Message' : 'Live Alert'}
               </span>
               <span className="text-[11px] text-neutral-400 font-mono">Just now</span>
             </div>
@@ -119,7 +134,7 @@ export const NotificationToast: React.FC<NotificationToastProps> = ({
                 }}
                 className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wide rounded-lg flex items-center gap-1.5 transition-transform active:scale-95 shadow cursor-pointer"
               >
-                <span>Enter Arena</span>
+                <span>{isChatAlert ? 'Open Chat' : 'Enter Arena'}</span>
                 <ExternalLink size={12} />
               </button>
               <button

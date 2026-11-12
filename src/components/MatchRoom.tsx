@@ -1090,8 +1090,11 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
                     </div>
 
                     <p className="text-xs text-neutral-300">
-                      The <strong>₦{match.potAmount.toLocaleString()}</strong> pot is held safely in escrow. Please upload your post-match screen recording or scoreboard screenshot to resolve the conflict and release your winnings.
+                      The <strong>₦{match.potAmount.toLocaleString()}</strong> pot is held safely in escrow (Room Code: <code className="text-amber-300 font-mono font-bold">#{match.roomCode || match.challengeCode}</code>). Our Telegram Bot has automatically locked this Room Code and messaged linked players — reply in Telegram or upload your screen recording below for manual review.
                     </p>
+                    <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-[11px] text-rose-200">
+                      <strong>Conflict Penalty Policy:</strong> Causing a false conflict incurs <strong>Strike 1 Flag + 10% Conflict Penalty Fee</strong>. <strong>Strike 2</strong> triggers a permanent ban &amp; 100% balance forfeiture.
+                    </div>
                   </div>
                 </div>
 

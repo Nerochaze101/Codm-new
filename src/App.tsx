@@ -94,6 +94,7 @@ function MainApp() {
 
   const [maintenanceActive, setMaintenanceActive] = useState(false);
   const previousMatchesRef = useRef<Map<string, string>>(new Map());
+  const processedAlertIdsRef = useRef<Set<string>>(new Set());
 
   // Initialize browser notification service worker on mount
   useEffect(() => {
@@ -129,11 +130,24 @@ function MainApp() {
 
   // Centralized alert dispatcher (vibrates phone, plays chime, shows lock-screen notification + toast)
   const triggerNotificationAlert = useCallback((payload: NotificationPayload) => {
+    if (payload.id) {
+      if (processedAlertIdsRef.current.has(payload.id)) {
+        return;
+      }
+      processedAlertIdsRef.current.add(payload.id);
+      if (processedAlertIdsRef.current.size > 150) {
+        const oldest = processedAlertIdsRef.current.values().next().value;
+        if (oldest) processedAlertIdsRef.current.delete(oldest);
+      }
+    }
+
     showBrowserNotification(payload);
     setActiveToast(payload);
-    
-    // Play custom tactical shotgun sound for all incoming alerts
-    playShotgunSound();
+
+    // Play tactical shotgun SFX only for battle/match alerts (messages use crisp message chime in showBrowserNotification)
+    if (payload.soundType === 'rival_joined' || payload.soundType === 'match_started') {
+      playShotgunSound();
+    }
 
     setNotifications((prev) => {
       const filtered = prev.filter((n) => n.id !== payload.id);
@@ -229,28 +243,72 @@ function MainApp() {
       });
     });
 
-    // Real-time chat notification when players in the same match room send messages
-    socket.on('chatNotification', (chatAlert: any) => {
+    // Real-time chat notification when players in the same match send messages
+    const handleChatNotification = (chatAlert: any) => {
       if (!chatAlert || !chatAlert.text) return;
       if (chatAlert.senderId === currentUser.id) return; // Do not notify sender
+      if (Array.isArray(chatAlert.targetUserIds) && currentUser.id !== 'guest') {
+        if (!chatAlert.targetUserIds.includes(currentUser.id)) return;
+      }
+
+      const isFocusedInSameRoom =
+        (window as any).__activeMatchChatId === chatAlert.matchId &&
+        typeof document !== 'undefined' &&
+        !document.hidden &&
+        document.hasFocus();
+
+      // If user is staring directly at that match chat room, MatchLobbyChat plays the incoming chime cleanly
+      if (isFocusedInSameRoom) return;
 
       triggerNotificationAlert({
         id: chatAlert.id || `chat_alert_${Date.now()}`,
         title: `💬 ${chatAlert.senderName} (Match Chat)`,
         body: chatAlert.text,
-        soundType: 'default',
+        soundType: 'message',
         tag: `codm_chat_${chatAlert.matchId}`,
         data: {
           matchId: chatAlert.matchId,
           url: '/arena',
         },
       });
-      
-      // Speak out the message if app is minimized or user is on another page
+
       if (location.pathname !== '/arena' || !document.hasFocus()) {
         speakChatMessage(chatAlert.text, chatAlert.senderName);
       }
-    });
+    };
+    socket.on('chatNotification', handleChatNotification);
+
+    // Push / in-app alert for direct @mentions or challenge drops in World Chat when drawer isn't focused
+    const handleWorldChatAlert = (msg: any) => {
+      if (!msg || !msg.text || !currentUser.id || currentUser.id === 'guest') return;
+      if (msg.senderId === currentUser.id) return;
+
+      const isWorldOpenAndFocused =
+        Boolean((window as any).__isWorldChatOpen) &&
+        typeof document !== 'undefined' &&
+        !document.hidden &&
+        document.hasFocus();
+      if (isWorldOpenAndFocused) return;
+
+      const lowerText = msg.text.toLowerCase();
+      const ign = (currentUser.codmIgn || '').trim().toLowerCase();
+      const uname = (currentUser.username || '').trim().toLowerCase();
+      const isMentioned =
+        (ign.length >= 2 && lowerText.includes(`@${ign}`)) ||
+        (uname.length >= 2 && lowerText.includes(`@${uname}`));
+
+      if (!isMentioned) return;
+
+      triggerNotificationAlert({
+        id: `wc_mention_${msg.id}`,
+        title: `📢 ${msg.senderIgn || msg.senderName || 'Operator'} mentioned you in World Chat`,
+        body: msg.text,
+        soundType: 'message',
+        tag: `codm_world_mention_${msg.senderId}`,
+        data: { url: '/arena' },
+      });
+    };
+    socket.on('world_chat_message', handleWorldChatAlert);
 
     socket.on('matchUpdated', (updatedMatch: Match) => {
       if (!updatedMatch || !updatedMatch.id) return;
@@ -356,16 +414,30 @@ function MainApp() {
       }
     });
 
-    // Real-time Push Notification handler for Rival requests & accepted requests
+    // Real-time Push Notification handler for Rival requests, accepted requests & new messages
     const handleRivalNotification = (alert: any) => {
       if (!alert) return;
       if (alert.targetUserId && alert.targetUserId !== currentUser.id) return;
+
+      const isRivalChatMsg = alert.type === 'RIVAL_CHAT' || alert.data?.type === 'rival_chat';
+      const senderId = alert.fromUserId || alert.data?.rivalId;
+      const isViewingThisRivalChat =
+        isRivalChatMsg &&
+        senderId &&
+        (window as any).__activeRivalChatId === senderId &&
+        typeof document !== 'undefined' &&
+        !document.hidden &&
+        document.hasFocus();
+
+      // When user is actively looking at this exact rival's chat, RivalChat plays the incoming chime directly
+      if (isViewingThisRivalChat) return;
 
       triggerNotificationAlert({
         id: alert.id || `rival_alert_${Date.now()}`,
         title: alert.title || '⚔️ Rival Request Accepted!',
         body: alert.body || 'Your rival request was accepted! Tap to chat or set up a 1v1 wager.',
-        soundType: alert.soundType || 'rival_joined',
+        soundType: alert.soundType || (isRivalChatMsg ? 'message' : 'rival_joined'),
+        tag: isRivalChatMsg && senderId ? `codm_rival_msg_${senderId}` : undefined,
         data: alert.data || { url: '/social' },
       });
     };
@@ -375,7 +447,7 @@ function MainApp() {
     const directRivalEvent = `rival_accepted_${currentUser.id}`;
     const handleDirectRivalAccepted = (data: any) => {
       triggerNotificationAlert({
-        id: `rival_accepted_${Date.now()}`,
+        id: `rival_accepted_${data.rivalId || currentUser.id}_${Math.floor(Date.now() / 5000)}`,
         title: data.title || '⚔️ Rival Request Accepted!',
         body: data.body || `${data.rivalIgn || 'A player'} accepted your rival request! Tap to chat or set up a 1v1 wager.`,
         soundType: 'rival_joined',
@@ -390,7 +462,8 @@ function MainApp() {
     return () => {
       socket.off('matchCreated');
       socket.off('matchAlert');
-      socket.off('globalChatAlert');
+      socket.off('chatNotification', handleChatNotification);
+      socket.off('world_chat_message', handleWorldChatAlert);
       socket.off('matchUpdated');
       socket.off('matchJoined');
       socket.off('balanceUpdated');
@@ -401,7 +474,7 @@ function MainApp() {
         socket.off(directRivalEvent, handleDirectRivalAccepted);
       }
     };
-  }, [currentUser.id, triggerNotificationAlert]);
+  }, [currentUser.id, currentUser.codmIgn, currentUser.username, triggerNotificationAlert]);
   const [isMatchesLoading, setIsMatchesLoading] = useState<boolean>(true);
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signup');
 
@@ -610,12 +683,15 @@ function MainApp() {
       fetchUser(currentUser.id).then((u) => u && u.id && setCurrentUser(u)).catch(() => {});
       fetchMatches().then((mList) => mList && setMatches(mList)).catch(() => {});
     } catch (err: any) {
-      alert(err.message || 'Failed to join match');
+      setActiveToast({
+        title: 'Unable to Join Match',
+        body: err.message || 'Failed to join match',
+        soundType: 'disputed',
+      });
     }
   };
 
   const handleSquadJoin = async (matchId: string, slotIndex?: number, team?: 'ALPHA' | 'BRAVO') => {
-
     try {
       const updatedMatch = await squadJoinMatch(matchId, {
         userId: currentUser.id,
@@ -628,7 +704,11 @@ function MainApp() {
       fetchUser(currentUser.id).then((u) => u && u.id && setCurrentUser(u)).catch(() => {});
       fetchMatches().then((mList) => mList && setMatches(mList)).catch(() => {});
     } catch (err: any) {
-      alert(err.message || 'Failed to join squad slot');
+      setActiveToast({
+        title: 'Squad Slot Error',
+        body: err.message || 'Failed to join squad slot',
+        soundType: 'disputed',
+      });
     }
   };
 
@@ -641,7 +721,11 @@ function MainApp() {
       fetchUser(currentUser.id).then((u) => u && u.id && setCurrentUser(u)).catch(() => {});
       fetchMatches().then((mList) => mList && setMatches(mList)).catch(() => {});
     } catch (err: any) {
-      alert(err.message || 'Failed to leave squad slot');
+      setActiveToast({
+        title: 'Squad Exit Error',
+        body: err.message || 'Failed to leave squad slot',
+        soundType: 'disputed',
+      });
     }
   };
 
@@ -707,16 +791,23 @@ function MainApp() {
   };
 
   const handleCancelMatch = async (matchId: string) => {
-    console.log('Attempting to cancel match:', matchId);
     try {
       await cancelMatch(matchId);
-      console.log('Match cancellation request successful');
       const updatedUser = await fetchUser(currentUser.id);
       setCurrentUser(updatedUser);
       await loadData();
+      setActiveToast({
+        title: 'Match Cancelled',
+        body: 'Stake refunded back to your wallet balance.',
+        soundType: 'settled',
+      });
     } catch (err: any) {
-      console.error('Match cancellation failed:', err);
-      alert(err.message || 'Failed to cancel match');
+      await loadData();
+      setActiveToast({
+        title: 'Cancellation Notice',
+        body: err.message || 'Could not cancel match.',
+        soundType: 'disputed',
+      });
     }
   };
 
@@ -728,8 +819,11 @@ function MainApp() {
       await loadData();
       return res;
     } catch (err: any) {
-      console.error('Match abandonment failed:', err);
-      alert(err.message || 'Failed to settle abandoned match');
+      setActiveToast({
+        title: 'Match Abandonment Failed',
+        body: err.message || 'Failed to settle abandoned match',
+        soundType: 'disputed',
+      });
       throw err;
     }
   };

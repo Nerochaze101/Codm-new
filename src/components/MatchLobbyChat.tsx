@@ -5,6 +5,7 @@ import {
   Check, CheckCheck, Radio, Sparkles, RefreshCw, AlertCircle, Headphones, Loader2, Wifi, WifiOff
 } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
+import { playIncomingMessageSound } from '../services/notificationService';
 
 interface MatchLobbyChatProps {
   matchId: string;
@@ -267,6 +268,7 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   };
 
   useEffect(() => {
+    (window as any).__activeMatchChatId = matchId;
     console.log(`[Chat] Initializing socket for match ${matchId}`);
     const socket = io('/', { 
       query: { matchId, userId: currentUser.id },
@@ -309,8 +311,9 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       setMessages(prev => {
         if (prev.some(m => m.id === msg.id)) return prev;
         
-        // Speak message if it's from opponent
+        // Play message sound & speak message if it's from opponent
         if (msg.senderId !== currentUser.id) {
+          playIncomingMessageSound();
           speakMessage(msg.text, msg.senderName || opponentName);
         }
         
@@ -357,6 +360,9 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
     });
 
     return () => {
+      if ((window as any).__activeMatchChatId === matchId) {
+        (window as any).__activeMatchChatId = null;
+      }
       socket.disconnect();
       stopVoice();
       if (audioCtxRef.current) audioCtxRef.current.close();

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   X, Bell, BellRing, BellOff, Swords, Zap, AlertTriangle,
-  Trophy, Shield, Trash2, Check, ExternalLink, Sparkles, Smartphone, Send, CheckCircle2
+  Trophy, Shield, Trash2, Check, ExternalLink, Sparkles, Smartphone, Send, CheckCircle2, MessageCircle
 } from 'lucide-react';
 import { UserProfile } from '../types';
 import {
@@ -76,6 +76,8 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
         return <AlertTriangle className="w-4 h-4 text-rose-400" />;
       case 'settled':
         return <Trophy className="w-4 h-4 text-yellow-400" />;
+      case 'message':
+        return <MessageCircle className="w-4 h-4 text-cyan-400" />;
       default:
         return <Bell className="w-4 h-4 text-amber-400" />;
     }

@@ -17,6 +17,7 @@ import {
 } from '../services/api';
 import { calculateMatchEconomics } from '../utils/pricing';
 import { StakePaymentModal } from './StakePaymentModal';
+import { playIncomingMessageSound } from '../services/notificationService';
 
 interface RivalChatProps {
   currentUser: UserProfile;
@@ -60,6 +61,8 @@ export const RivalChat: React.FC<RivalChatProps> = ({
   const [isRivalTyping, setIsRivalTyping] = useState(false);
   const rivalTypingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const myTypingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isSelfTypingRef = useRef<boolean>(false);
+  const lastTypingEmitAtRef = useRef<number>(0);
 
   // Scroll management
   const feedRef = useRef<HTMLDivElement>(null);
@@ -248,6 +251,7 @@ export const RivalChat: React.FC<RivalChatProps> = ({
 
   // Main Socket & Lifecycle Effect
   useEffect(() => {
+    (window as any).__activeRivalChatId = rival.id;
     setMessages([]);
     setIsRivalTyping(false);
     isNearBottomRef.current = true;
@@ -266,7 +270,7 @@ export const RivalChat: React.FC<RivalChatProps> = ({
 
     const onConnect = () => {
       setIsConnected(true);
-      s.emit('join_rival_room', { room });
+      s.emit('join_rival_room', { room, userId: effectiveUserId, rivalId: rival.id });
       fetchHistory(true);
     };
 
@@ -288,8 +292,11 @@ export const RivalChat: React.FC<RivalChatProps> = ({
 
       setMessages((prev) => {
         if (prev.some((m) => m.id === msg.id)) return prev;
-        if (!isNearBottomRef.current && msg.senderId !== effectiveUserId) {
-          setUnreadWhileScrolled((c) => c + 1);
+        if (msg.senderId !== effectiveUserId) {
+          playIncomingMessageSound();
+          if (!isNearBottomRef.current) {
+            setUnreadWhileScrolled((c) => c + 1);
+          }
         }
         return [...prev, msg].sort((a, b) => a.timestamp - b.timestamp);
       });
@@ -349,12 +356,24 @@ export const RivalChat: React.FC<RivalChatProps> = ({
     }, 10000);
 
     return () => {
+      if ((window as any).__activeRivalChatId === rival.id) {
+        (window as any).__activeRivalChatId = null;
+      }
+      if (isSelfTypingRef.current && s.connected) {
+        s.emit('rival_typing', {
+          userId: effectiveUserId,
+          rivalId: rival.id,
+          senderName: effectiveIgn,
+          isTyping: false,
+        });
+        isSelfTypingRef.current = false;
+      }
       clearInterval(pollTimer);
       if (rivalTypingTimeoutRef.current) clearTimeout(rivalTypingTimeoutRef.current);
       if (myTypingTimeoutRef.current) clearTimeout(myTypingTimeoutRef.current);
       s.disconnect();
     };
-  }, [effectiveUserId, rival.id, belongsToThisConversation, normalizeMsg, fetchHistory]);
+  }, [effectiveUserId, effectiveIgn, rival.id, belongsToThisConversation, normalizeMsg, fetchHistory]);
 
   // Smart auto-scroll when messages arrive while user is near bottom
   useEffect(() => {
@@ -432,6 +451,34 @@ export const RivalChat: React.FC<RivalChatProps> = ({
     }
   };
 
+  const emitTypingState = useCallback(
+    (isTyping: boolean, force = false) => {
+      if (!socketRef.current?.connected) return;
+      const now = Date.now();
+      if (isTyping) {
+        if (!force && isSelfTypingRef.current && now - lastTypingEmitAtRef.current < 900) {
+          return;
+        }
+        isSelfTypingRef.current = true;
+        lastTypingEmitAtRef.current = now;
+      } else {
+        if (!force && !isSelfTypingRef.current) {
+          return;
+        }
+        isSelfTypingRef.current = false;
+        lastTypingEmitAtRef.current = 0;
+      }
+
+      socketRef.current.emit('rival_typing', {
+        userId: effectiveUserId,
+        rivalId: rival.id,
+        senderName: effectiveIgn,
+        isTyping,
+      });
+    },
+    [effectiveUserId, effectiveIgn, rival.id]
+  );
+
   const handleSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const textToSend = inputText.trim();
@@ -442,12 +489,7 @@ export const RivalChat: React.FC<RivalChatProps> = ({
 
     // Stop typing indicator immediately
     if (myTypingTimeoutRef.current) clearTimeout(myTypingTimeoutRef.current);
-    socketRef.current?.emit('rival_typing', {
-      userId: effectiveUserId,
-      rivalId: rival.id,
-      senderName: effectiveIgn,
-      isTyping: false,
-    });
+    emitTypingState(false, true);
 
     const msgId = `rival_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
     const newMsg: RivalChatMessage = {
@@ -472,32 +514,15 @@ export const RivalChat: React.FC<RivalChatProps> = ({
     const val = e.target.value;
     setInputText(val);
 
-    if (!socketRef.current?.connected) return;
-
     if (val.trim().length > 0) {
-      socketRef.current.emit('rival_typing', {
-        userId: effectiveUserId,
-        rivalId: rival.id,
-        senderName: effectiveIgn,
-        isTyping: true,
-      });
+      emitTypingState(true);
       if (myTypingTimeoutRef.current) clearTimeout(myTypingTimeoutRef.current);
       myTypingTimeoutRef.current = setTimeout(() => {
-        socketRef.current?.emit('rival_typing', {
-          userId: effectiveUserId,
-          rivalId: rival.id,
-          senderName: effectiveIgn,
-          isTyping: false,
-        });
+        emitTypingState(false, true);
       }, 2000);
     } else {
       if (myTypingTimeoutRef.current) clearTimeout(myTypingTimeoutRef.current);
-      socketRef.current.emit('rival_typing', {
-        userId: effectiveUserId,
-        rivalId: rival.id,
-        senderName: effectiveIgn,
-        isTyping: false,
-      });
+      emitTypingState(false, true);
     }
   };
 
@@ -1077,25 +1102,46 @@ export const RivalChat: React.FC<RivalChatProps> = ({
         {/* Stage 3: Verifying or Disputed */}
         {(isVerifying || isDisputed) && (
           <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 space-y-2">
-            <div className="flex items-center gap-2 text-xs font-bold text-rose-300">
-              <AlertTriangle size={14} />
-              <span>{isDisputed ? 'Match Disputed — Moderator Review' : 'AI Verification In Progress'}</span>
+            <div className="flex items-center justify-between gap-2 text-xs font-bold text-rose-300">
+              <div className="flex items-center gap-2">
+                <AlertTriangle size={14} />
+                <span>{isDisputed ? 'Match Disputed — Moderator Review' : 'AI Verification In Progress'}</span>
+              </div>
+              <span className="text-[10px] font-mono text-amber-300">
+                #{match.roomCode || match.challengeCode}
+              </span>
             </div>
             {isDisputed && (
-              <label className="w-full py-2 px-3 rounded-xl bg-black/70 hover:bg-neutral-800 border border-rose-500/30 text-[10px] font-black uppercase text-rose-200 flex items-center justify-center gap-1.5 cursor-pointer">
-                <Video size={12} />
-                <span>
-                  {uploadingVideoMatchId === match.id
-                    ? `Uploading Video ${videoUploadProgress}%...`
-                    : 'Upload Gameplay Video Proof'}
-                </span>
-                <input
-                  type="file"
-                  accept="video/*"
-                  className="hidden"
-                  onChange={(e) => handleDisputeVideoUpload(match.id, e.target.files?.[0])}
-                />
-              </label>
+              <>
+                <p className="text-[10px] text-neutral-300 leading-relaxed">
+                  Our Telegram Bot has automatically locked Room Code <strong className="text-amber-300">#{match.roomCode || match.challengeCode}</strong> and messaged players for screen recording proof. False conflicts carry Strike 1 Flag + 10% conflict penalty (Strike 2 = Ban &amp; 100% forfeiture).
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                  <label className="w-full py-2 px-3 rounded-xl bg-black/70 hover:bg-neutral-800 border border-rose-500/30 text-[10px] font-black uppercase text-rose-200 flex items-center justify-center gap-1.5 cursor-pointer">
+                    <Video size={12} />
+                    <span>
+                      {uploadingVideoMatchId === match.id
+                        ? `Uploading Video ${videoUploadProgress}%...`
+                        : 'Upload Video Proof'}
+                    </span>
+                    <input
+                      type="file"
+                      accept="video/*"
+                      className="hidden"
+                      onChange={(e) => handleDisputeVideoUpload(match.id, e.target.files?.[0])}
+                    />
+                  </label>
+                  <a
+                    href={`https://t.me/OpsSTAKEBOT?start=dispute_${encodeURIComponent(match.roomCode || match.challengeCode)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-2 px-3 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-[10px] font-black uppercase text-sky-300 flex items-center justify-center gap-1.5"
+                  >
+                    <Send size={12} />
+                    <span>Send via Bot</span>
+                  </a>
+                </div>
+              </>
             )}
           </div>
         )}
@@ -1178,7 +1224,7 @@ export const RivalChat: React.FC<RivalChatProps> = ({
             </div>
             <div className="text-[11px] font-mono flex items-center gap-1 h-4">
               {isRivalTyping ? (
-                <span className="text-emerald-400 font-bold">typing...</span>
+                <span className="text-emerald-400 font-bold animate-pulse">is typing...</span>
               ) : (
                 <span className="text-neutral-400 flex items-center gap-1 truncate">
                   <Shield size={10} className="text-emerald-400 shrink-0" />
@@ -1585,6 +1631,10 @@ export const RivalChat: React.FC<RivalChatProps> = ({
           type="text"
           value={inputText}
           onChange={handleInputChange}
+          onBlur={() => {
+            if (myTypingTimeoutRef.current) clearTimeout(myTypingTimeoutRef.current);
+            emitTypingState(false);
+          }}
           placeholder={`Message ${rival.codm_ign}...`}
           className="flex-1 bg-[#2a3942] text-white placeholder-[#8696a0] rounded-full px-4 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 font-sans"
         />

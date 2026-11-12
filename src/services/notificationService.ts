@@ -1,5 +1,6 @@
 // Real-Time Browser & Mobile Phone Notification Service for CODM Stake 1v1
-import { unlockAudio } from './audioUnlockService';
+import { getSharedAudioContext, unlockAudio } from './audioUnlockService';
+import { getSoundEnabled } from '../hooks/useSound';
 
 export interface NotificationPayload {
   id?: string;
@@ -8,7 +9,7 @@ export interface NotificationPayload {
   icon?: string;
   badge?: string;
   tag?: string;
-  soundType?: 'rival_joined' | 'match_started' | 'disputed' | 'settled' | 'default';
+  soundType?: 'rival_joined' | 'match_started' | 'disputed' | 'settled' | 'message' | 'default';
   data?: {
     matchId?: string;
     url?: string;
@@ -21,7 +22,6 @@ const NOTIFICATION_ICON = '/18012397-6DAC-458A-9230-E51DC47747A9.png';
 
 // Service Worker Registration reference
 let swRegistration: ServiceWorkerRegistration | null = null;
-let audioContext: AudioContext | null = null;
 
 // Detect iOS devices (iPhone, iPad, iPod)
 export function isIOS(): boolean {
@@ -75,7 +75,7 @@ export async function requestNotificationPermission(): Promise<NotificationPermi
       playAlertAudio('rival_joined');
       showBrowserNotification({
         title: '🔔 Notifications Enabled!',
-        body: 'You will receive instant alerts on your phone when rivals join or matches start.',
+        body: 'You will receive instant alerts on your phone when rivals join, message you, or matches start.',
         soundType: 'rival_joined',
       });
     }
@@ -94,110 +94,143 @@ export function getNotificationPermission(): NotificationPermission {
   return Notification.permission;
 }
 
-// Play distinctive Web Audio chimes for each game event
-export function playAlertAudio(type: 'rival_joined' | 'match_started' | 'disputed' | 'settled' | 'default' = 'default'): void {
+// Play distinctive Web Audio chimes for each game/chat event
+export function playAlertAudio(
+  type: 'rival_joined' | 'match_started' | 'disputed' | 'settled' | 'message' | 'default' = 'default'
+): void {
+  if (typeof window === 'undefined') return;
+  if (!getSoundEnabled()) return;
+
   try {
-    const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    if (!AudioCtxClass) return;
+    const ctx = getSharedAudioContext();
+    if (!ctx) return;
 
-    if (!audioContext || audioContext.state === 'closed') {
-      audioContext = new AudioCtxClass();
-    }
-    if (audioContext.state === 'suspended') {
-      unlockAudio(audioContext);
-      audioContext.resume().catch(() => {});
-    }
+    const scheduleNotes = () => {
+      const now = ctx.currentTime;
 
-    const now = audioContext.currentTime;
-    const ctx = audioContext;
-
-    if (type === 'rival_joined') {
-      // Energetic 3-tone battle fanfare (C5 -> E5 -> G5)
-      const freqs = [523.25, 659.25, 783.99];
-      freqs.forEach((freq, idx) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(freq, now + idx * 0.08);
-        gain.gain.setValueAtTime(0.08, now + idx * 0.08);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.08 + 0.22);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(now + idx * 0.08);
-        osc.stop(now + idx * 0.08 + 0.24);
-      });
-    } else if (type === 'match_started') {
-      // Heavy combat powerup horn (G3 -> C4 -> G4)
-      const freqs = [196.0, 261.63, 392.0];
-      freqs.forEach((freq, idx) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(freq, now + idx * 0.1);
-        gain.gain.setValueAtTime(0.12, now + idx * 0.1);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.1 + 0.35);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(now + idx * 0.1);
-        osc.stop(now + idx * 0.1 + 0.38);
-      });
-    } else if (type === 'disputed') {
-      // Urgent warning pulse
-      [880, 660, 880].forEach((freq, idx) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'square';
-        osc.frequency.setValueAtTime(freq, now + idx * 0.12);
-        gain.gain.setValueAtTime(0.06, now + idx * 0.12);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.12 + 0.1);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(now + idx * 0.12);
-        osc.stop(now + idx * 0.12 + 0.11);
-      });
-    } else if (type === 'settled') {
-      // Victorious trophy coins chime (D5 -> F#5 -> A5 -> D6)
-      const freqs = [587.33, 739.99, 880.0, 1174.66];
-      freqs.forEach((freq, idx) => {
+      if (type === 'rival_joined') {
+        // Energetic 3-tone battle fanfare (C5 -> E5 -> G5)
+        const freqs = [523.25, 659.25, 783.99];
+        freqs.forEach((freq, idx) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(freq, now + idx * 0.08);
+          gain.gain.setValueAtTime(0.08, now + idx * 0.08);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.08 + 0.22);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now + idx * 0.08);
+          osc.stop(now + idx * 0.08 + 0.24);
+        });
+      } else if (type === 'match_started') {
+        // Heavy combat powerup horn (G3 -> C4 -> G4)
+        const freqs = [196.0, 261.63, 392.0];
+        freqs.forEach((freq, idx) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(freq, now + idx * 0.1);
+          gain.gain.setValueAtTime(0.12, now + idx * 0.1);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.1 + 0.35);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now + idx * 0.1);
+          osc.stop(now + idx * 0.1 + 0.38);
+        });
+      } else if (type === 'disputed') {
+        // Urgent warning pulse
+        [880, 660, 880].forEach((freq, idx) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'square';
+          osc.frequency.setValueAtTime(freq, now + idx * 0.12);
+          gain.gain.setValueAtTime(0.06, now + idx * 0.12);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.12 + 0.1);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now + idx * 0.12);
+          osc.stop(now + idx * 0.12 + 0.11);
+        });
+      } else if (type === 'settled') {
+        // Victorious trophy coins chime (D5 -> F#5 -> A5 -> D6)
+        const freqs = [587.33, 739.99, 880.0, 1174.66];
+        freqs.forEach((freq, idx) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, now + idx * 0.07);
+          gain.gain.setValueAtTime(0.1, now + idx * 0.07);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.07 + 0.3);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now + idx * 0.07);
+          osc.stop(now + idx * 0.07 + 0.32);
+        });
+      } else if (type === 'message') {
+        // Crisp 2-note tactical message ping (E5 -> A5)
+        const notes = [
+          { freq: 659.25, delay: 0, dur: 0.11, vol: 0.12 },
+          { freq: 880.0, delay: 0.075, dur: 0.16, vol: 0.14 },
+        ];
+        notes.forEach((n) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(n.freq, now + n.delay);
+          gain.gain.setValueAtTime(0.001, now + n.delay);
+          gain.gain.linearRampToValueAtTime(n.vol, now + n.delay + 0.012);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + n.delay + n.dur);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now + n.delay);
+          osc.stop(now + n.delay + n.dur + 0.02);
+        });
+      } else {
+        // Standard pleasant pop tone
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.type = 'sine';
-        osc.frequency.setValueAtTime(freq, now + idx * 0.07);
-        gain.gain.setValueAtTime(0.1, now + idx * 0.07);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.07 + 0.3);
+        osc.frequency.setValueAtTime(600, now);
+        osc.frequency.exponentialRampToValueAtTime(900, now + 0.08);
+        gain.gain.setValueAtTime(0.08, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
         osc.connect(gain);
         gain.connect(ctx.destination);
-        osc.start(now + idx * 0.07);
-        osc.stop(now + idx * 0.07 + 0.32);
-      });
+        osc.start(now);
+        osc.stop(now + 0.1);
+      }
+    };
+
+    if (ctx.state === 'suspended') {
+      unlockAudio(ctx).catch(() => {});
+      ctx.resume().then(scheduleNotes).catch(() => {});
     } else {
-      // Standard pleasant pop tone
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(600, now);
-      osc.frequency.exponentialRampToValueAtTime(900, now + 0.08);
-      gain.gain.setValueAtTime(0.08, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now);
-      osc.stop(now + 0.09);
+      scheduleNotes();
     }
   } catch {
     // Audio alert fallback
   }
 }
 
+export function playIncomingMessageSound(): void {
+  playAlertAudio('message');
+}
+
 // Display native browser / phone notification
-export async function showBrowserNotification(payload: NotificationPayload): Promise<boolean> {
+export async function showBrowserNotification(
+  payload: NotificationPayload,
+  options?: { skipAudio?: boolean }
+): Promise<boolean> {
   if (typeof window === 'undefined') return false;
 
   // 1. Play sound & vibrate on phone
-  playAlertAudio(payload.soundType || 'default');
+  if (!options?.skipAudio) {
+    playAlertAudio(payload.soundType || 'default');
+  }
   if ('vibrate' in navigator) {
     try {
-      navigator.vibrate([200, 100, 200, 100, 250]);
+      navigator.vibrate(payload.soundType === 'message' ? [110, 50, 110] : [200, 100, 200, 100, 250]);
     } catch {
       // Vibration not supported
     }
@@ -213,10 +246,10 @@ export async function showBrowserNotification(payload: NotificationPayload): Pro
     icon: payload.icon || NOTIFICATION_ICON,
     badge: payload.badge || NOTIFICATION_ICON,
     tag: payload.tag || `codm_alert_${Date.now()}`,
+    renotify: true,
     data: payload.data || { url: '/arena' },
-    requireInteraction: true,
+    requireInteraction: payload.soundType !== 'message',
     silent: false,
-    sound: '/assets/audio/shotgun.mp3'
   };
 
   try {
@@ -235,7 +268,7 @@ export async function showBrowserNotification(payload: NotificationPayload): Pro
       e.preventDefault();
       window.focus();
       const url = payload.data?.url || '/arena';
-      if (window.location.pathname !== url) {
+      if (`${window.location.pathname}${window.location.search}` !== url) {
         window.location.href = url;
       }
       notification.close();

@@ -244,7 +244,7 @@ export const RulesPage: React.FC<RulesPageProps> = ({
                 <span>Strike 1: Account Flagging & Probation</span>
               </div>
               <p className="text-xs text-neutral-300 leading-relaxed">
-                When a user submits a false victory claim or causes a match conflict for the first time, their account is <strong>automatically flagged</strong>, placed on probation status, and issued an official Telegram warning.
+                When a user submits a false victory claim or causes a match conflict for the first time, their account is <strong>automatically flagged</strong>, placed on probation status, charged a <strong>10% conflict penalty fee</strong>, and issued an official Telegram warning.
               </p>
             </div>
 
