@@ -19,7 +19,7 @@ import { requestNotificationPermission, getNotificationPermission, isIOS, isStan
 import { IOSNotificationGuideModal } from './IOSNotificationGuideModal';
 import { playShotgunSound } from '../hooks/useSound';
 import { VideoTutorial } from './VideoTutorial';
-import { uploadMatchVideoWithProgress, fetchActiveRivals, fetchWorldChatMessages } from '../services/api';
+import { uploadMatchVideoWithProgress, fetchActiveRivals, fetchWorldChatMessages, postWorldChatMessage } from '../services/api';
 
 const CardBackground = () => (
   <div className="absolute inset-0 z-0 opacity-10">
@@ -156,6 +156,47 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   const [worldTypingUsers, setWorldTypingUsers] = useState<Record<string, string>>({});
   const [worldOnlineCount, setWorldOnlineCount] = useState<number>(1);
   const [worldChatUnread, setWorldChatUnread] = useState<number>(0);
+  const [sharingWorldMatchId, setSharingWorldMatchId] = useState<string | null>(null);
+  const [sharedWorldMatchIds, setSharedWorldMatchIds] = useState<Record<string, boolean>>({});
+
+  const handleShareHostedToWorldChat = async (bet: Match) => {
+    if (!currentUser?.id || currentUser.id === 'guest' || sharingWorldMatchId) return;
+    setSharingWorldMatchId(bet.id);
+    const isSquad = bet.matchType === 'squad' || Boolean(bet.squadData);
+    const isPrivate = bet.isPublic === false;
+    const prefix = isPrivate
+      ? `PRIVATE ${isSquad ? '5v5 SQUAD' : '1v1'} INVITE`
+      : `OPEN ${isSquad ? '5v5 SQUAD' : '1v1'} WAGER`;
+    const msg: WorldChatMessage = {
+      id: `wc_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+      senderId: currentUser.id,
+      senderName: currentUser.username,
+      senderIgn: currentUser.codmIgn || currentUser.username,
+      senderAvatar: currentUser.avatar,
+      senderTier: currentUser.tier || 'ROOKIE',
+      senderClan: currentUser.clan,
+      senderRole: currentUser.role || 'user',
+      channel: 'wagers',
+      text: `${prefix}: ₦${bet.stakeAmount.toLocaleString()} on ${bet.gameMode} (${bet.map}) · #${bet.challengeCode}`,
+      matchId: bet.id,
+      challengeCode: bet.challengeCode,
+      stakeAmount: bet.stakeAmount,
+      gameMode: `${bet.gameMode} · ${bet.map}`,
+      timestamp: Date.now(),
+    };
+    try {
+      await postWorldChatMessage(msg);
+      setSharedWorldMatchIds((prev) => ({ ...prev, [bet.id]: true }));
+      setWorldRecentMsgs((prev) => [...prev.filter((m) => m.id !== msg.id), msg].slice(-3));
+      setTimeout(() => {
+        setSharedWorldMatchIds((prev) => ({ ...prev, [bet.id]: false }));
+      }, 4000);
+    } catch (err) {
+      console.error('Failed to share hosted bet to World Chat:', err);
+    } finally {
+      setSharingWorldMatchId(null);
+    }
+  };
 
   const [activeRivals, setActiveRivals] = useState<any[]>([]);
   const [rivalsLoading, setRivalsLoading] = useState<boolean>(false);
@@ -534,24 +575,10 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
               {tab === 'rivals' && <Users size={15} className={isActive ? 'text-neutral-950' : 'text-emerald-400'} />}
               {tab === 'hosted' && <Swords size={15} className={isActive ? 'text-neutral-950' : 'text-amber-400'} />}
 
-              <span className="truncate">
+              <span className="truncate whitespace-nowrap">
                 {tab === 'live' && `Live (${openChallenges.length})`}
-                {tab === 'active' && `In Battle ${myActiveMatches.length > 0 ? `(${myActiveMatches.length})` : ''}`}
-                {tab === 'rivals' && (
-                  <span className="inline-flex items-center gap-1.5">
-                    Rivals
-                    {onlineRivalsCount > 0 ? (
-                      <span className={`inline-flex items-center gap-1 font-mono text-[10px] px-1.5 py-0.5 rounded-full ${
-                        isActive ? 'bg-neutral-950 text-emerald-400 font-bold' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                      }`}>
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                        {onlineRivalsCount}
-                      </span>
-                    ) : (
-                      `(${activeRivals.length})`
-                    )}
-                  </span>
-                )}
+                {tab === 'active' && `In Battle${myActiveMatches.length > 0 ? ` (${myActiveMatches.length})` : ''}`}
+                {tab === 'rivals' && `Rivals (${onlineRivalsCount > 0 ? `${onlineRivalsCount} online` : activeRivals.length})`}
                 {tab === 'hosted' && `Hosted (${myHostedBets.length})`}
               </span>
             </button>
@@ -563,23 +590,22 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
       <button
         type="button"
         onClick={() => setIsWorldChatOpen(true)}
-        className="w-full rounded-2xl bg-[#090e14]/95 hover:bg-[#0d141d] border border-neutral-800 hover:border-amber-400/50 transition-all px-3.5 py-2.5 flex items-center justify-between gap-3 text-left shadow-lg cursor-pointer group"
+        className="w-full rounded-2xl bg-[#0c1218] hover:bg-[#101820] border border-neutral-800 hover:border-amber-400/50 transition-all px-4 py-3 flex items-center justify-between gap-4 text-left shadow-lg cursor-pointer group"
       >
         <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-400/10 border border-amber-400/30 text-amber-400 text-[10px] font-black uppercase tracking-wider shrink-0 mt-0.5 sm:mt-0">
-            <Globe size={12} className="shrink-0" />
-            <span>World</span>
-            <span className="text-[9px] font-mono text-emerald-400 ml-0.5 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              {worldOnlineCount}
+          <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-amber-400 shrink-0 whitespace-nowrap">
+            <Globe size={15} className="shrink-0" />
+            <span>World Chat</span>
+            <span className="text-[11px] font-mono text-neutral-400 font-medium tabular-nums">
+              · {worldOnlineCount}
             </span>
           </div>
 
           <div className="min-w-0 flex-1 space-y-0.5">
             {worldRecentMsgs.length > 0 ? (
               worldRecentMsgs.slice(-2).map((msg) => (
-                <div key={msg.id} className="text-[11px] sm:text-xs truncate flex items-center gap-1.5 leading-snug">
-                  <span className={`font-black shrink-0 ${msg.senderId === currentUser.id ? 'text-amber-400' : 'text-sky-300'}`}>
+                <div key={msg.id} className="text-xs truncate flex items-center gap-1.5 leading-snug">
+                  <span className={`font-bold shrink-0 ${msg.senderId === currentUser.id ? 'text-amber-400' : 'text-sky-300'}`}>
                     {msg.senderIgn || msg.senderName}:
                   </span>
                   <span className="text-neutral-300 truncate">{msg.text}</span>
@@ -591,22 +617,22 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
               </div>
             )}
             {Object.values(worldTypingUsers).length > 0 && (
-              <div className="text-[10px] font-mono text-emerald-400 truncate">
+              <div className="text-[11px] font-mono text-emerald-400 truncate">
                 {Object.values(worldTypingUsers).slice(0, 2).join(', ')} {Object.values(worldTypingUsers).length === 1 ? 'is' : 'are'} typing...
               </div>
             )}
           </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2.5 shrink-0 whitespace-nowrap">
           {worldChatUnread > 0 && (
-            <span className="px-1.5 py-0.5 rounded-full bg-amber-400 text-neutral-950 font-mono font-black text-[10px]">
-              {worldChatUnread}
+            <span className="text-xs font-mono font-bold text-amber-400 tabular-nums">
+              {worldChatUnread} new
             </span>
           )}
-          <span className="text-[10px] font-black uppercase tracking-wider text-neutral-400 group-hover:text-amber-400 transition-colors flex items-center gap-1">
-            <span className="hidden sm:inline">Expand</span>
-            <MessageCircle size={14} className="text-amber-400" />
+          <span className="px-3 py-1.5 rounded-lg bg-amber-400/15 group-hover:bg-amber-400 group-hover:text-neutral-950 text-amber-400 text-xs font-bold transition-colors flex items-center gap-1.5">
+            <MessageCircle size={13} />
+            <span>Open</span>
           </span>
         </div>
       </button>
@@ -1760,6 +1786,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
         currentUser={currentUser}
         myHostedBets={myHostedBets}
         openChallenges={openChallenges}
+        allPendingMatches={matches.filter(m => m.status === 'PENDING_OPPONENT_STAKE')}
         onAcceptChallenge={(match) => {
           const isSquad = match.matchType === 'squad' || Boolean(match.squadData);
           if (isSquad) {
@@ -1777,29 +1804,50 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
       {/* 6. Hosted Bets Tab */}
       {arenaTab === 'hosted' && (
         <div className="space-y-6">
-          <h2 className="text-2xl font-black text-white uppercase tracking-widest">My Hosted Bets</h2>
-          {myHostedBets.length === 0 ? <div className="p-16 rounded-3xl bg-neutral-900 border border-neutral-800 text-center text-neutral-500 uppercase font-bold tracking-tighter">No Hosted Bets.</div> : (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-xl sm:text-2xl font-black text-white uppercase tracking-wider">My Hosted Bets</h2>
+            <span className="text-xs text-neutral-400">
+              Share any public or private bet directly to World Chat
+            </span>
+          </div>
+          {myHostedBets.length === 0 ? (
+            <div className="p-16 rounded-2xl bg-neutral-900 border border-neutral-800 text-center text-neutral-500 uppercase font-bold tracking-tight">
+              No Hosted Bets.
+            </div>
+          ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {myHostedBets.map(m => {
                 const isSquad = m.matchType === 'squad' || Boolean(m.squadData);
+                const isPrivate = m.isPublic === false;
                 const filledSlots = m.squadData?.slots?.filter(s => s.staked).length || 1;
+                const isShared = Boolean(sharedWorldMatchIds[m.id]);
+                const isSharing = sharingWorldMatchId === m.id;
                 return (
-                  <div key={m.id} className={`p-5 rounded-2xl bg-neutral-900 border space-y-4 ${isSquad ? 'border-emerald-500/40' : 'border-amber-500/30'}`}>
-                    <div className="flex justify-between items-center">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-mono font-bold text-amber-400">#CHALLENGE_{m.challengeCode}</span>
+                  <div key={m.id} className={`p-5 rounded-2xl bg-neutral-900 border space-y-4 ${isSquad ? 'border-emerald-500/40' : 'border-neutral-800'}`}>
+                    <div className="flex justify-between items-center gap-2">
+                      <div className="flex items-center gap-2 text-xs font-mono text-neutral-400 truncate">
+                        <span className="font-bold text-amber-400">#{m.challengeCode}</span>
+                        <span>·</span>
+                        <span className={isPrivate ? 'text-amber-300 font-bold' : 'text-emerald-400'}>
+                          {isPrivate ? 'Private' : 'Public'}
+                        </span>
                         {isSquad && (
-                          <span className="text-[10px] font-bold bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/30">
-                            5v5 Squad ({filledSlots}/10)
-                          </span>
+                          <>
+                            <span>·</span>
+                            <span className="text-emerald-400 font-bold">
+                              5v5 ({filledSlots}/10)
+                            </span>
+                          </>
                         )}
                       </div>
-                      <span className="text-sm font-black text-emerald-400">₦{m.stakeAmount.toLocaleString()} {isSquad ? '/ player' : ''}</span>
+                      <span className="text-sm font-black text-emerald-400 tabular-nums shrink-0">
+                        ₦{m.stakeAmount.toLocaleString()}{isSquad ? ' / player' : ''}
+                      </span>
                     </div>
                     <div className="text-sm font-bold text-white uppercase">{m.gameMode} · {m.map}</div>
 
                     {/* Exact Payout & Pot Preview Box */}
-                    <div className="p-3 rounded-xl bg-black/60 border border-neutral-800 space-y-1.5 text-xs font-mono">
+                    <div className="p-3 rounded-xl bg-black/60 border border-neutral-800 space-y-1.5 text-xs font-mono tabular-nums">
                       <div className="flex justify-between items-center">
                         <span className="text-neutral-400">{isSquad ? 'Total Gross Pot (10 Players):' : 'Total Pot (2x Stake):'}</span>
                         <span className="text-amber-400 font-bold">₦{m.potAmount.toLocaleString()}</span>
@@ -1816,15 +1864,41 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                       )}
                     </div>
 
-                    <div className="flex gap-2 pt-2">
-                      <button onClick={() => setArenaTab('active')} className="px-4 py-2 bg-amber-400 text-neutral-950 font-black rounded-xl text-[10px] uppercase cursor-pointer hover:bg-amber-300 transition-all">
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => handleShareHostedToWorldChat(m)}
+                        disabled={isSharing}
+                        className={`col-span-2 py-2.5 px-4 font-black rounded-xl text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all ${
+                          isShared
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                            : 'bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30'
+                        }`}
+                      >
+                        {isShared ? <Check size={14} /> : <Share2 size={14} />}
+                        <span>{isShared ? 'Shared to World Chat' : isSharing ? 'Sharing...' : `Share ${isPrivate ? 'Private' : 'Public'} Bet to World Chat`}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setArenaTab('active')}
+                        className="py-2 px-3 bg-amber-400 text-neutral-950 font-black rounded-xl text-[11px] uppercase cursor-pointer hover:bg-amber-300 transition-all"
+                      >
                         Open Room
                       </button>
-                      <button onClick={() => copyInviteLink(m.id)} className="flex-1 py-2 bg-neutral-800 text-white font-bold rounded-xl text-[10px] uppercase cursor-pointer hover:bg-neutral-700 transition-all">
-                        {copiedLink ? 'Link Copied!' : 'Copy Link'}
+                      <button
+                        type="button"
+                        onClick={() => copyInviteLink(m.id)}
+                        className="py-2 px-3 bg-neutral-800 text-white font-bold rounded-xl text-[11px] uppercase cursor-pointer hover:bg-neutral-700 transition-all"
+                      >
+                        {copiedLink ? 'Link Copied' : 'Copy Link'}
                       </button>
-                      <button onClick={() => onCancelMatch(m.id)} className="px-4 py-2 bg-rose-500/20 text-rose-400 font-bold rounded-xl text-[10px] uppercase border border-rose-500/40 cursor-pointer hover:bg-rose-500/30 transition-all">
-                        Cancel
+                      <button
+                        type="button"
+                        onClick={() => onCancelMatch(m.id)}
+                        className="col-span-2 py-2 px-3 bg-rose-500/15 text-rose-400 font-bold rounded-xl text-[11px] uppercase border border-rose-500/30 cursor-pointer hover:bg-rose-500/25 transition-all"
+                      >
+                        Cancel & Refund
                       </button>
                     </div>
                   </div>

@@ -6083,12 +6083,13 @@ Please review proof on Admin Dashboard.`,
   }
 }
 async function postMatchToPublicChannel(match, origin) {
-  console.log(`[Telegram Bot] Attempting public post for Match #${match.challengeCode} to Channel ${TELEGRAM_PUBLIC_CHANNEL_ID}`);
+  console.log(`[Telegram Bot] Attempting channel post for Match #${match.challengeCode} (isPublic=${match.isPublic !== false}) to Channel ${TELEGRAM_PUBLIC_CHANNEL_ID}`);
   try {
     if (!TELEGRAM_PUBLIC_CHANNEL_ID || TELEGRAM_PUBLIC_CHANNEL_ID === "undefined" || TELEGRAM_PUBLIC_CHANNEL_ID === "null") {
       console.warn("[Telegram Bot] Public channel ID is invalid or not configured. Skipping post.");
       return;
     }
+    const isPrivate = match.isPublic === false;
     const baseOrigin = (origin || process.env.APP_URL || "https://opsstake.online").replace(/\/$/, "");
     const matchUrl = `${baseOrigin}/?join=${match.id}`;
     const isSquad = match.matchType === "squad" || Boolean(match.squadData);
@@ -6103,7 +6104,14 @@ async function postMatchToPublicChannel(match, origin) {
       const feeAmount = match.platformFee !== void 0 ? match.platformFee : Math.round(grossPot * (feePercent / 100));
       const netSquadPool = grossPot - feeAmount;
       const perPlayerPayout = match.winnerPayout || Math.floor(netSquadPool / 5);
-      messageText = `\u{1F6E1}\uFE0F <b>NEW 5v5 SQUAD WAGER - OPS STAKE</b> \u{1F6E1}\uFE0F
+      const headerLine = isPrivate
+        ? `\u{1F512} <b>PRIVATE 5v5 SQUAD WAGER - OPS STAKE</b> \u{1F512}`
+        : `\u{1F6E1}\uFE0F <b>NEW 5v5 SQUAD WAGER - OPS STAKE</b> \u{1F6E1}\uFE0F`;
+      const footerLine = isPrivate
+        ? `\u{1F512} <b>Visibility:</b> <b>PRIVATE MATCH</b> (Invite Only — No Public Link)\n\n<i>This squad lobby is locked to invited operators only.</i>`
+        : `\u{1F6E1}\uFE0F <i>Lock in your slot! Join Team Alpha or Team Bravo. All 5 members of the winning squad receive \u20A6${perPlayerPayout.toLocaleString()} each! Tap below to join!</i>`;
+
+      messageText = `${headerLine}
 
 \u2694\uFE0F <b>Format:</b> 5v5 Tactical Squad Battle (10 Players \xB7 Team Alpha vs Bravo)
 \u{1F464} <b>Host (Alpha #1):</b> ${match.creator.codmIgn}
@@ -6117,15 +6125,22 @@ async function postMatchToPublicChannel(match, origin) {
 \u{1F5FA}\uFE0F <b>Map:</b> ${match.map}
 \u{1F3F7}\uFE0F <b>Lobby Code:</b> #${match.challengeCode}
 
-\u{1F6E1}\uFE0F <i>Lock in your slot! Join Team Alpha or Team Bravo. All 5 members of the winning squad receive \u20A6${perPlayerPayout.toLocaleString()} each! Tap below to join!</i>
+${footerLine}
 
-#SquadBattle #${match.challengeCode} #CODM`;
+#SquadBattle #${match.challengeCode} ${isPrivate ? "#PrivateMatch " : ""}#CODM`;
       buttonLabel = `\u{1F6E1}\uFE0F JOIN SQUAD (\u20A6${match.stakeAmount.toLocaleString()})`;
     } else {
       const netPot = match.potAmount - (match.platformFee || 0);
       const feePercent = match.platformFeePercentage || 10;
       const winnerPayout = match.winnerPayout || netPot;
-      messageText = `\u{1F525} <b>NEW 1v1 WAGER ALERT - OPS STAKE</b> \u{1F525}
+      const headerLine = isPrivate
+        ? `\u{1F512} <b>PRIVATE 1v1 WAGER ALERT - OPS STAKE</b> \u{1F512}`
+        : `\u{1F525} <b>NEW 1v1 WAGER ALERT - OPS STAKE</b> \u{1F525}`;
+      const footerLine = isPrivate
+        ? `\u{1F512} <b>Visibility:</b> <b>PRIVATE MATCH</b> (Invite Only — No Public Link)\n\n<i>This duel is private between invited rivals.</i>`
+        : `\u2694\uFE0F <i>A gladiator is waiting for a rival! Think you have what it takes to win? Tap the button below to join the match and claim \u20A6${winnerPayout.toLocaleString()}!</i>`;
+
+      messageText = `${headerLine}
 
 \u{1F464} <b>Host:</b> ${match.creator.codmIgn}
 \u{1F4B5} <b>Stake Amount:</b> \u20A6${match.stakeAmount.toLocaleString()}
@@ -6136,26 +6151,33 @@ async function postMatchToPublicChannel(match, origin) {
 \u{1F5FA}\uFE0F <b>Map:</b> ${match.map}
 \u{1F3F7}\uFE0F <b>Challenge Code:</b> #${match.challengeCode}
 
-\u2694\uFE0F <i>A gladiator is waiting for a rival! Think you have what it takes to win? Tap the button below to join the match and claim \u20A6${winnerPayout.toLocaleString()}!</i>
+${footerLine}
 
-#1v1Duel #${match.challengeCode} #CODM`;
+#1v1Duel #${match.challengeCode} ${isPrivate ? "#PrivateMatch " : ""}#CODM`;
       buttonLabel = `\u{1F3AE} ACCEPT WAGER (\u20A6${match.stakeAmount.toLocaleString()})`;
     }
-    console.log(`[Telegram Bot] Dispatching sendMessage request to Telegram API...`);
+
+    const telegramPayload: Record<string, any> = {
+      chat_id: TELEGRAM_PUBLIC_CHANNEL_ID,
+      text: messageText,
+      parse_mode: "HTML",
+    };
+
+    // Private matches are broadcast as notice-only with NO public join link
+    if (!isPrivate) {
+      telegramPayload.reply_markup = {
+        inline_keyboard: [[
+          { text: buttonLabel, url: matchUrl }
+        ]]
+      };
+    }
+
+    console.log(`[Telegram Bot] Dispatching sendMessage request to Telegram API (isPrivate=${isPrivate})...`);
     const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: AbortSignal.timeout(4e3),
-      body: JSON.stringify({
-        chat_id: TELEGRAM_PUBLIC_CHANNEL_ID,
-        text: messageText,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [[
-            { text: buttonLabel, url: matchUrl }
-          ]]
-        }
-      })
+      body: JSON.stringify(telegramPayload)
     });
     const data = await res.json();
     if (!data.ok) {
@@ -6168,7 +6190,7 @@ async function postMatchToPublicChannel(match, origin) {
         console.warn(`3. The channel ID must start with -100 for public channels.`);
       }
     } else {
-      console.log(`\u2705 [Telegram Bot] Match #${match.challengeCode} posted successfully (Msg ID: ${data.result?.message_id})`);
+      console.log(`\u2705 [Telegram Bot] Match #${match.challengeCode} (${isPrivate ? 'PRIVATE' : 'PUBLIC'}) posted successfully (Msg ID: ${data.result?.message_id})`);
     }
   } catch (err) {
     console.error("\u274C [Telegram Bot] Critical exception during public channel post:", err.message);

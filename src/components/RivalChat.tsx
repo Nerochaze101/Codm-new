@@ -83,7 +83,8 @@ export const RivalChat: React.FC<RivalChatProps> = ({
 
   // In-chat Match Management State
   const [chatMatches, setChatMatches] = useState<Record<string, Match>>({});
-  const [activeMatchPanelExpanded, setActiveMatchPanelExpanded] = useState<boolean>(true);
+  const [activeMatchPanelExpanded, setActiveMatchPanelExpanded] = useState<boolean>(false);
+  const [focusedMatchId, setFocusedMatchId] = useState<string | null>(null);
   const [stakeModalMatch, setStakeModalMatch] = useState<Match | null>(null);
   const [copiedRoomCode, setCopiedRoomCode] = useState<string | null>(null);
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
@@ -375,6 +376,8 @@ export const RivalChat: React.FC<RivalChatProps> = ({
       )
     );
 
+  const activeManagedDuel = (focusedMatchId && chatMatches[focusedMatchId]) || latestActiveDuel;
+
   // Live countdown timer for active duel in chat
   useEffect(() => {
     if (!latestActiveDuel?.roomGeneratedAt || !latestActiveDuel?.matchDurationMinutes) {
@@ -531,7 +534,8 @@ export const RivalChat: React.FC<RivalChatProps> = ({
       if (created && created.id) {
         setChatMatches((prev) => ({ ...prev, [created.id]: created }));
         setShowChallengeComposer(false);
-        setActiveMatchPanelExpanded(true);
+        setFocusedMatchId(created.id);
+        setActiveMatchPanelExpanded(false);
 
         const challengeMsg: RivalChatMessage = {
           id: `rival_chal_${created.id}_${Date.now()}`,
@@ -565,7 +569,8 @@ export const RivalChat: React.FC<RivalChatProps> = ({
     if (updated && updated.id) {
       setChatMatches((prev) => ({ ...prev, [updated.id]: updated }));
       setStakeModalMatch(null);
-      setActiveMatchPanelExpanded(true);
+      setFocusedMatchId(updated.id);
+      setActiveMatchPanelExpanded(false);
 
       await sendChatPayload({
         id: `rival_sys_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
@@ -762,7 +767,7 @@ export const RivalChat: React.FC<RivalChatProps> = ({
   const economics = calculateMatchEconomics(Math.max(0, parsedStake));
 
   // Render an inline Interactive Challenge Card for a matchId
-  const renderMatchChallengeCard = (match: Match) => {
+  const renderMatchChallengeCard = (match: Match, compact = false) => {
     const isCreator = match.creator.id === effectiveUserId;
     const isOpen = match.status === 'PENDING_OPPONENT_STAKE';
     const isLivePlay = ['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS'].includes(match.status);
@@ -774,6 +779,63 @@ export const RivalChat: React.FC<RivalChatProps> = ({
     const myParticipant = isCreator ? match.creator : match.opponent;
     const iAlreadySubmitted = Boolean(myParticipant?.resultClaim);
     const otherSubmitted = isCreator ? Boolean(match.opponent?.resultClaim) : Boolean(match.creator?.resultClaim);
+
+    if (compact) {
+      return (
+        <div className="mt-2 p-2.5 rounded-xl bg-[#090d11]/90 border border-neutral-800 space-y-2 text-left">
+          <div className="flex items-center justify-between gap-2 text-[11px]">
+            <span className="font-bold text-white truncate">
+              #{match.challengeCode} · {match.gameMode} ({match.map})
+            </span>
+            <span className="text-[10px] font-mono text-amber-400 shrink-0">
+              {match.status.replace(/_/g, ' ')}
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-2 text-[11px] font-mono text-neutral-300">
+            <span>Stake: <strong className="text-white">₦{match.stakeAmount.toLocaleString()}</strong></span>
+            <span>Win: <strong className="text-emerald-400">₦{match.winnerPayout.toLocaleString()}</strong></span>
+          </div>
+          {isOpen && !isCreator ? (
+            <div className="grid grid-cols-2 gap-1.5 pt-0.5">
+              <button
+                type="button"
+                onClick={() => setStakeModalMatch(match)}
+                className="py-1.5 px-2.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-[10px] uppercase cursor-pointer"
+              >
+                Accept & Stake
+              </button>
+              <button
+                type="button"
+                disabled={actionBusyId === match.id}
+                onClick={() => handleDeclineChallenge(match)}
+                className="py-1.5 px-2.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-[10px] uppercase cursor-pointer"
+              >
+                {actionBusyId === match.id ? '...' : 'Decline'}
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-2 pt-0.5">
+              {isLivePlay && match.roomCode && (
+                <span className="text-[10px] font-mono text-emerald-300 font-bold">
+                  Room: {match.roomCode}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setFocusedMatchId(match.id);
+                  setShowChallengeComposer(false);
+                  setActiveMatchPanelExpanded(true);
+                }}
+                className="ml-auto px-2.5 py-1 rounded-lg bg-amber-400/15 hover:bg-amber-400/25 border border-amber-400/35 text-amber-300 text-[10px] font-black uppercase tracking-wider cursor-pointer"
+              >
+                {isSettled || isClosed ? 'View / Rematch' : 'Manage Duel'}
+              </button>
+            </div>
+          )}
+        </div>
+      );
+    }
 
     return (
       <div className="mt-2 p-3.5 rounded-2xl bg-[#090d11] border border-amber-400/40 shadow-xl space-y-3 text-left">
@@ -1077,14 +1139,14 @@ export const RivalChat: React.FC<RivalChatProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-135px)] min-h-[580px] bg-[#0c1317] border border-neutral-800 rounded-2xl overflow-hidden shadow-2xl font-sans relative">
+    <div className="flex flex-col h-[calc(100dvh-135px)] min-h-[520px] bg-[#0c1317] border border-neutral-800 rounded-2xl overflow-hidden shadow-2xl font-sans relative">
       {/* Tactical Top Bar */}
-      <div className="px-4 py-3 bg-[#1f2c34] border-b border-[#2a3942] flex items-center justify-between shrink-0">
+      <div className="px-4 py-3 bg-[#1f2c34] border-b border-[#2a3942] flex items-center justify-between shrink-0 gap-2">
         <div className="flex items-center gap-3 min-w-0">
           {onBack && (
             <button
               onClick={onBack}
-              className="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-[#2a3942] transition-colors cursor-pointer shrink-0"
+              className="p-2 rounded-lg text-neutral-300 hover:text-white hover:bg-[#2a3942] transition-colors cursor-pointer shrink-0"
               title="Back to Rivals Roster"
             >
               <ArrowLeft size={18} />
@@ -1095,37 +1157,32 @@ export const RivalChat: React.FC<RivalChatProps> = ({
             <img
               src={rival.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(rival.codm_ign)}`}
               alt={rival.codm_ign}
-              className="w-10 h-10 rounded-full bg-neutral-800 border border-emerald-500/40 object-cover"
+              referrerPolicy="no-referrer"
+              className="w-9 h-9 rounded-full bg-neutral-800 border border-neutral-700 object-cover"
             />
             <span
-              className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[#1f2c34] ${
-                isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
+              className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-[#1f2c34] ${
+                isConnected ? 'bg-emerald-400' : 'bg-amber-400'
               }`}
             />
           </div>
 
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-white font-bold text-sm tracking-wide font-heading truncate">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-white font-bold tracking-wide font-heading truncate">
                 {rival.codm_ign}
               </span>
-              <span
-                className={`text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded border shrink-0 ${
-                  isConnected
-                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                    : 'bg-amber-500/15 text-amber-300 border-amber-500/30'
-                }`}
-              >
-                {isConnected ? 'Live' : 'Syncing'}
+              <span className={`text-[10px] font-mono shrink-0 ${isConnected ? 'text-emerald-400' : 'text-amber-300'}`}>
+                · {isConnected ? 'Online' : 'Syncing'}
               </span>
             </div>
-            <div className="text-[10px] font-mono flex items-center gap-1 h-4">
+            <div className="text-[11px] font-mono flex items-center gap-1 h-4">
               {isRivalTyping ? (
-                <span className="text-emerald-400 font-bold animate-pulse">typing...</span>
+                <span className="text-emerald-400 font-bold">typing...</span>
               ) : (
-                <span className="text-emerald-500/80 flex items-center gap-1">
-                  <Shield size={10} />
-                  <span>Encrypted 1v1 Duel Channel</span>
+                <span className="text-neutral-400 flex items-center gap-1 truncate">
+                  <Shield size={10} className="text-emerald-400 shrink-0" />
+                  <span className="truncate">Encrypted 1v1 Channel</span>
                 </span>
               )}
             </div>
@@ -1137,23 +1194,23 @@ export const RivalChat: React.FC<RivalChatProps> = ({
           {messages.length > 0 && !confirmClearChat && (
             <button
               onClick={() => setConfirmClearChat(true)}
-              className="p-2 rounded-xl text-neutral-400 hover:text-rose-400 hover:bg-[#2a3942] transition-colors cursor-pointer"
+              className="p-2 rounded-lg text-neutral-400 hover:text-rose-400 hover:bg-[#2a3942] transition-colors cursor-pointer"
               title="Clear conversation history"
             >
               <Trash2 size={16} />
             </button>
           )}
           {confirmClearChat && (
-            <div className="flex items-center gap-1 bg-rose-950/80 border border-rose-500/40 px-2 py-1 rounded-xl">
+            <div className="flex items-center gap-1.5 bg-rose-950/80 border border-rose-500/40 px-2.5 py-1 rounded-lg">
               <button
                 onClick={handleClearChat}
                 className="text-[10px] font-black text-rose-300 hover:text-white uppercase cursor-pointer"
               >
-                Confirm Clear
+                Clear Chat
               </button>
               <button
                 onClick={() => setConfirmClearChat(false)}
-                className="text-neutral-400 hover:text-white ml-1 cursor-pointer"
+                className="text-neutral-400 hover:text-white cursor-pointer"
               >
                 <X size={12} />
               </button>
@@ -1163,9 +1220,10 @@ export const RivalChat: React.FC<RivalChatProps> = ({
           <button
             onClick={() => {
               setComposerError(null);
+              setActiveMatchPanelExpanded(false);
               setShowChallengeComposer((v) => !v);
             }}
-            className="flex items-center gap-1.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 px-3 py-2 rounded-xl font-black uppercase text-xs tracking-wider transition-all shadow-md active:scale-95 cursor-pointer font-heading"
+            className="flex items-center gap-1.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 px-3 py-2 rounded-xl font-black uppercase text-xs tracking-wider transition-all shadow-md active:scale-95 cursor-pointer font-heading whitespace-nowrap"
           >
             <Swords size={14} className="stroke-[2.5]" />
             <span>{showChallengeComposer ? 'Close Setup' : 'Challenge 1v1'}</span>
@@ -1173,35 +1231,34 @@ export const RivalChat: React.FC<RivalChatProps> = ({
         </div>
       </div>
 
-      {/* Sticky Active Duel HUD Banner (when a challenge between you and rival is active) */}
+      {/* Slim Sticky Duel Status Strip (Never blocks chat messages) */}
       {latestActiveDuel && (
-        <div className="bg-[#111b21] border-b border-amber-500/30 px-4 py-2.5 shrink-0">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
-              <span className="text-xs font-black text-white uppercase truncate font-heading">
-                Active Duel #{latestActiveDuel.challengeCode} · ₦{latestActiveDuel.stakeAmount.toLocaleString()}
+        <div className="bg-[#111b21] border-b border-amber-500/30 px-4 py-2 shrink-0 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0 text-xs">
+            <Swords size={13} className="text-amber-400 shrink-0" />
+            <span className="font-bold text-white truncate">
+              #{latestActiveDuel.challengeCode} · ₦{latestActiveDuel.stakeAmount.toLocaleString()}
+            </span>
+            {latestActiveDuel.roomCode && (
+              <span className="px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-mono text-[10px] font-bold shrink-0">
+                Room: {latestActiveDuel.roomCode}
               </span>
-              {latestActiveDuel.roomCode && (
-                <span className="px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-mono text-[10px] font-black">
-                  ROOM: {latestActiveDuel.roomCode}
-                </span>
-              )}
-              {countdownDisplay && (
-                <span className="text-[10px] font-mono text-amber-400 font-bold">{countdownDisplay}</span>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={() => setActiveMatchPanelExpanded((v) => !v)}
-              className="text-[10px] font-black uppercase tracking-wider text-amber-400 hover:text-amber-300 cursor-pointer shrink-0"
-            >
-              {activeMatchPanelExpanded ? 'Hide Duel HUD ▲' : 'Manage Duel ▼'}
-            </button>
+            )}
+            {countdownDisplay && (
+              <span className="text-[11px] font-mono text-amber-400 font-bold tabular-nums shrink-0">{countdownDisplay}</span>
+            )}
           </div>
-          {activeMatchPanelExpanded && (
-            <div className="mt-2">{renderMatchChallengeCard(latestActiveDuel)}</div>
-          )}
+          <button
+            type="button"
+            onClick={() => {
+              setFocusedMatchId(latestActiveDuel.id);
+              setShowChallengeComposer(false);
+              setActiveMatchPanelExpanded((v) => !v);
+            }}
+            className="px-3 py-1 rounded-lg bg-amber-400/15 hover:bg-amber-400/25 border border-amber-400/40 text-[11px] font-black uppercase tracking-wider text-amber-300 cursor-pointer shrink-0 whitespace-nowrap transition-colors"
+          >
+            {activeMatchPanelExpanded ? 'Back to Chat' : 'Manage Duel'}
+          </button>
         </div>
       )}
 
@@ -1209,155 +1266,183 @@ export const RivalChat: React.FC<RivalChatProps> = ({
       {matchError && (
         <div className="mx-4 mt-2 px-3 py-2 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs font-bold flex items-center justify-between shrink-0">
           <span>{matchError}</span>
-          <button onClick={() => setMatchError(null)} className="text-rose-200 hover:text-white">
+          <button onClick={() => setMatchError(null)} className="text-rose-200 hover:text-white cursor-pointer">
             <X size={14} />
           </button>
         </div>
       )}
 
-      {/* In-Chat Challenge Setup Drawer */}
+      {/* Overlaid Duel Manager Drawer (does not crush chat feed) */}
+      {activeMatchPanelExpanded && activeManagedDuel && (
+        <div className="absolute inset-x-0 top-[61px] bottom-[65px] z-30 bg-[#090d11]/95 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in duration-150">
+          <div className="max-w-lg mx-auto space-y-3">
+            <div className="flex items-center justify-between border-b border-neutral-800 pb-2.5">
+              <div className="flex items-center gap-2">
+                <Swords size={16} className="text-amber-400" />
+                <span className="text-xs font-black uppercase tracking-wider text-white font-heading">
+                  Duel Manager · #{activeManagedDuel.challengeCode}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveMatchPanelExpanded(false)}
+                className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+              >
+                <X size={13} />
+                Back to Chat
+              </button>
+            </div>
+            {renderMatchChallengeCard(activeManagedDuel)}
+          </div>
+        </div>
+      )}
+
+      {/* Overlaid Challenge Setup Drawer (does not crush chat feed) */}
       {showChallengeComposer && (
-        <div className="p-4 bg-[#111b21] border-b border-amber-400/40 space-y-3 shrink-0 animate-in fade-in">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Swords size={16} className="text-amber-400" />
-              <span className="text-xs font-black uppercase tracking-wider text-white font-heading">
-                Send 1v1 Challenge to {rival.codm_ign} (Managed in Chat)
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowChallengeComposer(false)}
-              className="text-neutral-400 hover:text-white cursor-pointer"
-            >
-              <X size={16} />
-            </button>
-          </div>
-
-          {composerError && (
-            <div className="p-2.5 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs">
-              {composerError}
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            <div>
-              <label className="text-[10px] font-bold uppercase text-neutral-400 block mb-1">
-                <Crosshair size={10} className="inline mr-1 text-amber-400" />
-                Game Mode
-              </label>
-              <select
-                value={gameModeInput}
-                onChange={(e) => setGameModeInput(e.target.value)}
-                className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none"
+        <div className="absolute inset-x-0 top-[61px] bottom-[65px] z-30 bg-[#0b141a]/96 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in duration-150">
+          <div className="max-w-lg mx-auto p-4 rounded-2xl bg-[#111b21] border border-amber-400/40 shadow-2xl space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Swords size={16} className="text-amber-400" />
+                <span className="text-xs font-black uppercase tracking-wider text-white font-heading">
+                  Challenge {rival.codm_ign} to 1v1
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowChallengeComposer(false)}
+                className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white text-[11px] font-bold flex items-center gap-1 cursor-pointer"
               >
-                {MODES.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
+                <X size={13} />
+                Close
+              </button>
             </div>
 
-            <div>
-              <label className="text-[10px] font-bold uppercase text-neutral-400 block mb-1">
-                <MapPin size={10} className="inline mr-1 text-amber-400" />
-                Map
-              </label>
-              <select
-                value={mapInput}
-                onChange={(e) => setMapInput(e.target.value)}
-                className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none"
-              >
-                {MAPS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+            {composerError && (
+              <div className="p-2.5 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs">
+                {composerError}
+              </div>
+            )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            <div>
-              <label className="text-[10px] font-bold uppercase text-neutral-400 block mb-1">
-                Stake (₦) · Balance: <span className="text-emerald-400">₦{(currentUser.balance || 0).toLocaleString()}</span>
-              </label>
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="number"
-                  min={100}
-                  value={stakeInput}
-                  onChange={(e) => setStakeInput(e.target.value)}
-                  className="w-24 bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs font-mono text-white focus:border-amber-400 focus:outline-none"
-                />
-                <div className="flex items-center gap-1 overflow-x-auto">
-                  {QUICK_STAKES.map((amt) => (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div>
+                <label className="text-[10px] font-bold uppercase text-neutral-400 block mb-1">
+                  <Crosshair size={10} className="inline mr-1 text-amber-400" />
+                  Game Mode
+                </label>
+                <select
+                  value={gameModeInput}
+                  onChange={(e) => setGameModeInput(e.target.value)}
+                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none"
+                >
+                  {MODES.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-bold uppercase text-neutral-400 block mb-1">
+                  <MapPin size={10} className="inline mr-1 text-amber-400" />
+                  Map
+                </label>
+                <select
+                  value={mapInput}
+                  onChange={(e) => setMapInput(e.target.value)}
+                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none"
+                >
+                  {MAPS.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div>
+                <label className="text-[10px] font-bold uppercase text-neutral-400 block mb-1">
+                  Stake (₦) · Balance: <span className="text-emerald-400">₦{(currentUser.balance || 0).toLocaleString()}</span>
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min={100}
+                    value={stakeInput}
+                    onChange={(e) => setStakeInput(e.target.value)}
+                    className="w-24 bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs font-mono text-white focus:border-amber-400 focus:outline-none"
+                  />
+                  <div className="flex items-center gap-1 overflow-x-auto">
+                    {QUICK_STAKES.map((amt) => (
+                      <button
+                        key={amt}
+                        type="button"
+                        onClick={() => setStakeInput(amt.toString())}
+                        className={`px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold border cursor-pointer ${
+                          parsedStake === amt
+                            ? 'bg-amber-400 text-neutral-950 border-amber-300'
+                            : 'bg-neutral-900 text-neutral-300 border-neutral-800 hover:border-neutral-700'
+                        }`}
+                      >
+                        ₦{amt >= 1000 ? `${amt / 1000}k` : amt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-bold uppercase text-neutral-400 block mb-1">
+                  Match Duration
+                </label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {[15, 20, 30].map((mins) => (
                     <button
-                      key={amt}
+                      key={mins}
                       type="button"
-                      onClick={() => setStakeInput(amt.toString())}
-                      className={`px-2 py-1.5 rounded-lg text-[10px] font-mono font-bold border cursor-pointer ${
-                        parsedStake === amt
+                      onClick={() => setDurationInput(mins)}
+                      className={`py-2 rounded-xl text-xs font-mono font-bold border cursor-pointer ${
+                        durationInput === mins
                           ? 'bg-amber-400 text-neutral-950 border-amber-300'
-                          : 'bg-neutral-900 text-neutral-300 border-neutral-800 hover:border-neutral-700'
+                          : 'bg-neutral-950 text-neutral-300 border-neutral-800'
                       }`}
                     >
-                      ₦{amt >= 1000 ? `${amt / 1000}k` : amt}
+                      {mins} mins
                     </button>
                   ))}
                 </div>
               </div>
             </div>
 
-            <div>
-              <label className="text-[10px] font-bold uppercase text-neutral-400 block mb-1">
-                Match Duration
-              </label>
-              <div className="grid grid-cols-3 gap-1.5">
-                {[15, 20, 30].map((mins) => (
-                  <button
-                    key={mins}
-                    type="button"
-                    onClick={() => setDurationInput(mins)}
-                    className={`py-2 rounded-xl text-xs font-mono font-bold border cursor-pointer ${
-                      durationInput === mins
-                        ? 'bg-amber-400 text-neutral-950 border-amber-300'
-                        : 'bg-neutral-950 text-neutral-300 border-neutral-800'
-                    }`}
-                  >
-                    {mins} mins
-                  </button>
-                ))}
+            <input
+              type="text"
+              value={rulesInput}
+              onChange={(e) => setRulesInput(e.target.value)}
+              placeholder="Match rules (e.g. Snipers only, no scorestreaks)..."
+              className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none"
+            />
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+              <div className="text-xs font-mono text-neutral-300">
+                Winner Payout:{' '}
+                <strong className="text-emerald-400">₦{economics.winnerPayout.toLocaleString()}</strong>
+                <span className="text-neutral-500 text-[10px] ml-1.5">
+                  (Pot ₦{economics.potAmount.toLocaleString()} · Fee {economics.rakePercentFormatted})
+                </span>
               </div>
+              <button
+                type="button"
+                disabled={creatingMatch}
+                onClick={handleCreateInChatChallenge}
+                className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wider shadow cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {creatingMatch ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
+                {creatingMatch ? 'Locking Escrow...' : `Send Challenge (₦${parsedStake.toLocaleString()})`}
+              </button>
             </div>
-          </div>
-
-          <input
-            type="text"
-            value={rulesInput}
-            onChange={(e) => setRulesInput(e.target.value)}
-            placeholder="Match rules (e.g. Snipers only, no scorestreaks)..."
-            className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white focus:border-amber-400 focus:outline-none"
-          />
-
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-            <div className="text-xs font-mono text-neutral-300">
-              Winner Payout:{' '}
-              <strong className="text-emerald-400">₦{economics.winnerPayout.toLocaleString()}</strong>
-              <span className="text-neutral-500 text-[10px] ml-1.5">
-                (Pot ₦{economics.potAmount.toLocaleString()} · Fee {economics.rakePercentFormatted})
-              </span>
-            </div>
-            <button
-              type="button"
-              disabled={creatingMatch}
-              onClick={handleCreateInChatChallenge}
-              className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wider shadow cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
-            >
-              {creatingMatch ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-              {creatingMatch ? 'Locking Escrow...' : `Send Challenge (₦${parsedStake.toLocaleString()})`}
-            </button>
           </div>
         </div>
       )}
@@ -1426,7 +1511,7 @@ export const RivalChat: React.FC<RivalChatProps> = ({
 
                   <p className="text-sm leading-relaxed whitespace-pre-wrap">{m.text}</p>
 
-                  {m.msgType === 'challenge' && linkedMatch && renderMatchChallengeCard(linkedMatch)}
+                  {m.msgType === 'challenge' && linkedMatch && renderMatchChallengeCard(linkedMatch, true)}
 
                   <div className="flex items-center justify-end mt-1 gap-1.5 text-[9px] text-[#8696a0]">
                     {isFailed && (

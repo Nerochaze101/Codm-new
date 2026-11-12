@@ -384,14 +384,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <button
                       key={tab.id}
                       onClick={() => handleSelectTab(tab.id)}
-                      className={`w-full flex items-center justify-between p-3 rounded-sm transition-all cursor-pointer text-left border ${
+                      className={`w-full flex items-center justify-between p-3 rounded-xl transition-all cursor-pointer text-left border ${
                         isActive
-                          ? 'bg-neutral-800 border-l-4 border-l-amber-500'
-                          : 'bg-neutral-900/50 hover:bg-neutral-800 border-l-4 border-l-transparent'
+                          ? 'bg-amber-400/10 border-amber-400/40'
+                          : 'bg-neutral-900/50 hover:bg-neutral-800 border-neutral-800/70'
                       }`}
                     >
                       <div className="flex items-center gap-3">
-                        <div className={`p-1 ${isActive ? 'text-amber-500' : 'text-neutral-400'}`}>
+                        <div className={`p-1 ${isActive ? 'text-amber-400' : 'text-neutral-400'}`}>
                           <Icon className="w-5 h-5" />
                         </div>
                         <div className={`font-black text-sm uppercase tracking-wider ${
