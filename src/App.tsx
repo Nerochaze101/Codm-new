@@ -340,6 +340,37 @@ function MainApp() {
         }).catch(() => {});
       }
     });
+
+    // Real-time Push Notification handler for Rival requests & accepted requests
+    const handleRivalNotification = (alert: any) => {
+      if (!alert) return;
+      if (alert.targetUserId && alert.targetUserId !== currentUser.id) return;
+
+      triggerNotificationAlert({
+        id: alert.id || `rival_alert_${Date.now()}`,
+        title: alert.title || '⚔️ Rival Request Accepted!',
+        body: alert.body || 'Your rival request was accepted! Tap to chat or set up a 1v1 wager.',
+        soundType: alert.soundType || 'rival_joined',
+        data: alert.data || { url: '/social' },
+      });
+    };
+
+    socket.on('rivalNotification', handleRivalNotification);
+
+    const directRivalEvent = `rival_accepted_${currentUser.id}`;
+    const handleDirectRivalAccepted = (data: any) => {
+      triggerNotificationAlert({
+        id: `rival_accepted_${Date.now()}`,
+        title: data.title || '⚔️ Rival Request Accepted!',
+        body: data.body || `${data.rivalIgn || 'A player'} accepted your rival request! Tap to chat or set up a 1v1 wager.`,
+        soundType: 'rival_joined',
+        data: { url: '/social', rivalId: data.rivalId },
+      });
+    };
+
+    if (currentUser.id && currentUser.id !== 'guest') {
+      socket.on(directRivalEvent, handleDirectRivalAccepted);
+    }
     
     return () => {
       socket.off('matchCreated');
@@ -350,6 +381,10 @@ function MainApp() {
       socket.off('balanceUpdated');
       socket.off('userUpdated');
       socket.off('telegramLinked');
+      socket.off('rivalNotification', handleRivalNotification);
+      if (currentUser.id && currentUser.id !== 'guest') {
+        socket.off(directRivalEvent, handleDirectRivalAccepted);
+      }
     };
   }, [currentUser.id, triggerNotificationAlert]);
   const [isMatchesLoading, setIsMatchesLoading] = useState<boolean>(true);

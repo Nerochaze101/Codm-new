@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { io } from 'socket.io-client';
 import { UserProfile } from '../types';
 import { searchFriends, sendFriendRequest, handleFriendAction, fetchFriends } from '../services/api';
 import {
   Search, UserPlus, Check, X, MessageCircle, Trophy, Users, Shield,
-  Clock, Crosshair, ArrowRight, Loader2, UserCheck, Flame, Target
+  Clock, Crosshair, ArrowRight, Loader2, UserCheck, Flame, Target, Bell
 } from 'lucide-react';
 import { RivalChat } from './RivalChat';
+import { requestNotificationPermission, getNotificationPermission } from '../services/notificationService';
 
 interface SocialTabProps {
   currentUser: UserProfile;
@@ -24,12 +26,46 @@ export const SocialTab: React.FC<SocialTabProps> = ({ currentUser, onOpenCreateB
 
   useEffect(() => {
     loadFriends();
+
+    if (!currentUser.id || currentUser.id === 'guest') return;
+
+    const s = io('/');
+    const userUpdateEvent = `friend_update_${currentUser.id}`;
+    
+    s.on(userUpdateEvent, () => {
+      loadFriends();
+    });
+
+    s.on('rivalNotification', (data: any) => {
+      if (data && data.targetUserId === currentUser.id) {
+        loadFriends();
+      }
+    });
+
+    return () => {
+      s.off(userUpdateEvent);
+      s.off('rivalNotification');
+      s.disconnect();
+    };
   }, [currentUser.id]);
 
   const loadFriends = async () => {
     try {
       const data = await fetchFriends(currentUser.id);
-      setFriends(Array.isArray(data) ? data : []);
+      const list = Array.isArray(data) ? data : [];
+      setFriends(list);
+
+      // Deep link support for chat notifications
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search);
+        const chatId = params.get('chat');
+        if (chatId) {
+          const matched = list.find((f) => f.id === chatId);
+          if (matched) {
+            setSelectedRival(matched);
+          }
+        }
+      }
     } catch (e) {
       console.error('Failed to load rivals roster:', e);
     }
@@ -87,6 +123,10 @@ export const SocialTab: React.FC<SocialTabProps> = ({ currentUser, onOpenCreateB
 
   const requestFriend = async (targetUserId: string) => {
     setActionLoadingId(targetUserId);
+    // Ask for push notification permission if not yet decided so they get notified when accepted
+    if (typeof window !== 'undefined' && 'Notification' in window && getNotificationPermission() === 'default') {
+      requestNotificationPermission().catch(() => {});
+    }
     try {
       await sendFriendRequest(currentUser.id, targetUserId);
       setSearchResults(prev =>
@@ -102,6 +142,9 @@ export const SocialTab: React.FC<SocialTabProps> = ({ currentUser, onOpenCreateB
 
   const actionFriend = async (targetUserId: string, action: 'accept' | 'reject') => {
     setActionLoadingId(targetUserId);
+    if (action === 'accept' && typeof window !== 'undefined' && 'Notification' in window && getNotificationPermission() === 'default') {
+      requestNotificationPermission().catch(() => {});
+    }
     try {
       await handleFriendAction(currentUser.id, targetUserId, action);
       await loadFriends();
@@ -161,6 +204,19 @@ export const SocialTab: React.FC<SocialTabProps> = ({ currentUser, onOpenCreateB
           </div>
 
           <div className="flex items-center gap-2 self-start md:self-auto">
+            {typeof window !== 'undefined' && 'Notification' in window && getNotificationPermission() === 'default' && (
+              <button
+                type="button"
+                onClick={async () => {
+                  await requestNotificationPermission();
+                }}
+                className="px-3 py-1.5 rounded-xl bg-amber-400/10 hover:bg-amber-400/20 border border-amber-400/40 text-amber-400 text-xs font-mono font-bold flex items-center gap-1.5 cursor-pointer transition-all active:scale-95"
+                title="Enable Push Notifications for Rival Accepts"
+              >
+                <Bell size={13} className="animate-pulse" />
+                <span>Enable Push Alerts</span>
+              </button>
+            )}
             <div className="px-3 py-1.5 rounded-xl bg-neutral-950/80 border border-neutral-800 text-xs font-mono text-neutral-300 flex items-center gap-2">
               <Users size={14} className="text-amber-400" />
               <span>Roster: <b className="text-white">{activeRivals.length}</b> Rivals</span>

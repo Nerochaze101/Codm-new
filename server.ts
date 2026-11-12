@@ -9698,11 +9698,34 @@ app.post("/api/friends/request", async (req, res) => {
       VALUES (${escapeSql(friendId)}, ${escapeSql(userId)}, ${escapeSql(targetUserId)}, 'pending', ${Date.now()})
     `);
 
-    if (globalIo) {
-      globalIo.emit(`friend_update_${targetUserId}`, { type: "NEW_REQUEST", fromUserId: userId });
+    let senderIgn = "A gladiator";
+    try {
+      const sRes = await pool.query(`SELECT codm_ign, username FROM users WHERE id = ${escapeSql(userId)}`);
+      if (sRes.rows[0]) senderIgn = sRes.rows[0].codm_ign || sRes.rows[0].username || "A gladiator";
+    } catch (e) {
+      console.warn("[Friends] Could not fetch sender name:", e);
     }
 
-    console.log(`[Friends] Friend request sent from ${userId} to ${targetUserId}`);
+    if (globalIo) {
+      globalIo.emit(`friend_update_${targetUserId}`, { type: "NEW_REQUEST", fromUserId: userId, senderIgn });
+      globalIo.emit("rivalNotification", {
+        id: `rival_req_${Date.now()}`,
+        type: "NEW_REQUEST",
+        targetUserId: targetUserId,
+        fromUserId: userId,
+        title: "⚔️ New Rival Challenge Request!",
+        body: `${senderIgn} wants to recruit you as a 1v1 rival! Tap to review.`,
+        soundType: "rival_joined",
+        data: {
+          type: "new_request",
+          fromUserId: userId,
+          senderIgn: senderIgn,
+          url: "/social"
+        }
+      });
+    }
+
+    console.log(`[Friends] Friend request sent from ${userId} (${senderIgn}) to ${targetUserId}`);
     res.json({ success: true, message: "Friend request sent successfully!" });
   } catch (err) {
     console.error("[Friends] Failed to send friend request:", err);
@@ -9732,9 +9755,61 @@ app.post("/api/friends/action", async (req, res) => {
       `);
     }
 
+    let accepterIgn = "A gladiator";
+    let requesterIgn = "A rival";
+    try {
+      const uRes = await pool.query(
+        `SELECT id, codm_ign, username FROM users WHERE id IN (${escapeSql(userId)}, ${escapeSql(targetUserId)})`
+      );
+      const accepter = uRes.rows.find(u => u.id === userId);
+      const requester = uRes.rows.find(u => u.id === targetUserId);
+      if (accepter) accepterIgn = accepter.codm_ign || accepter.username || "A gladiator";
+      if (requester) requesterIgn = requester.codm_ign || requester.username || "A rival";
+    } catch (e) {
+      console.warn("[Friends] Could not fetch user names for notification:", e);
+    }
+
     if (globalIo) {
-      globalIo.emit(`friend_update_${targetUserId}`, { type: action === "accept" ? "ACCEPTED" : "REJECTED", withUserId: userId });
-      globalIo.emit(`friend_update_${userId}`, { type: action === "accept" ? "ACCEPTED" : "REJECTED", withUserId: targetUserId });
+      globalIo.emit(`friend_update_${targetUserId}`, {
+        type: action === "accept" ? "ACCEPTED" : "REJECTED",
+        withUserId: userId,
+        rivalIgn: accepterIgn
+      });
+      globalIo.emit(`friend_update_${userId}`, {
+        type: action === "accept" ? "ACCEPTED" : "REJECTED",
+        withUserId: targetUserId,
+        rivalIgn: requesterIgn
+      });
+
+      if (action === "accept") {
+        // Real-time Push Notification to the player whose rival request was accepted
+        globalIo.emit("rivalNotification", {
+          id: `rival_accepted_${Date.now()}`,
+          type: "RIVAL_REQUEST_ACCEPTED",
+          targetUserId: targetUserId,
+          withUserId: userId,
+          title: "⚔️ Rival Request Accepted!",
+          body: `${accepterIgn} accepted your rival request! Tap to chat or set up a 1v1 wager.`,
+          soundType: "rival_joined",
+          data: {
+            type: "rival_accepted",
+            rivalId: userId,
+            rivalIgn: accepterIgn,
+            url: "/social"
+          }
+        });
+
+        // Direct channel push event for the requester
+        globalIo.emit(`rival_accepted_${targetUserId}`, {
+          rivalId: userId,
+          rivalIgn: accepterIgn,
+          title: "⚔️ Rival Request Accepted!",
+          body: `${accepterIgn} accepted your rival request! Tap to chat or set up a 1v1 wager.`,
+          url: "/social"
+        });
+
+        console.log(`[Friends] Dispatched push notification: ${accepterIgn} accepted rival request from ${requesterIgn} (${targetUserId})`);
+      }
     }
 
     res.json({ success: true });
@@ -9782,18 +9857,133 @@ app.get("/api/friends/chat/:rivalId", async (req, res) => {
       return res.json({ messages: [] });
     }
 
-    const messagesRes = await pool.query(`
-      SELECT * FROM rival_chat_messages 
-      WHERE (user_id = ${escapeSql(userId)} AND rival_id = ${escapeSql(rivalId)})
-         OR (user_id = ${escapeSql(rivalId)} AND rival_id = ${escapeSql(userId)})
-      ORDER BY timestamp ASC
-      LIMIT 200
-    `);
+    const messagesRes = await pool.query(
+      `SELECT * FROM rival_chat_messages 
+       WHERE (
+         (user_id = $1 AND rival_id = $2) OR 
+         (user_id = $2 AND rival_id = $1) OR 
+         (sender_id = $1 AND (rival_id = $2 OR user_id = $2)) OR 
+         (sender_id = $2 AND (rival_id = $1 OR user_id = $1))
+       )
+       ORDER BY timestamp ASC
+       LIMIT 300`,
+      [userId, rivalId]
+    );
 
-    res.json({ messages: messagesRes.rows });
+    const messages = messagesRes.rows.map(m => ({
+      id: m.id,
+      rivalId: m.rival_id,
+      userId: m.user_id,
+      senderId: m.sender_id || m.user_id,
+      senderName: m.sender_name || "Rival",
+      text: m.text,
+      timestamp: Number(m.timestamp) || Date.now(),
+      // Snake case fallbacks
+      rival_id: m.rival_id,
+      user_id: m.user_id,
+      sender_id: m.sender_id,
+      sender_name: m.sender_name,
+    }));
+
+    res.json({ messages });
   } catch (err) {
     console.error("[Friends] Failed to fetch chat messages:", err);
     res.status(500).json({ error: "Failed to fetch chat messages" });
+  }
+});
+
+app.post("/api/friends/chat", async (req, res) => {
+  try {
+    const { rivalId, userId, text, id, senderName, timestamp } = req.body;
+    if (!rivalId || !userId || !text || !text.trim()) {
+      return res.status(400).json({ error: "Missing required chat message parameters" });
+    }
+
+    const msgId = id || `rival_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const msgTime = Number(timestamp) || Date.now();
+    const cleanText = text.trim();
+    const cleanSenderName = senderName || "Rival";
+
+    await pool.query(
+      `INSERT INTO rival_chat_messages (id, rival_id, user_id, sender_id, sender_name, text, timestamp)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (id) DO UPDATE SET text = EXCLUDED.text`,
+      [msgId, rivalId, userId, userId, cleanSenderName, cleanText, msgTime]
+    );
+
+    const payload = {
+      id: msgId,
+      rivalId,
+      userId,
+      senderId: userId,
+      senderName: cleanSenderName,
+      text: cleanText,
+      timestamp: msgTime,
+      rival_id: rivalId,
+      user_id: userId,
+      sender_id: userId,
+      sender_name: cleanSenderName,
+    };
+
+    if (globalIo) {
+      const room = `rival_chat_${[rivalId, userId].sort().join('_')}`;
+      globalIo.to(room).emit("rival_chat", payload);
+      globalIo.emit(`rival_chat_${rivalId}`, payload);
+      globalIo.emit(`rival_chat_${userId}`, payload);
+
+      // Push notification to the rival
+      globalIo.emit("rivalNotification", {
+        id: `chat_alert_${msgId}`,
+        type: "RIVAL_CHAT",
+        targetUserId: rivalId,
+        fromUserId: userId,
+        title: `💬 ${cleanSenderName} (1v1 Rival)`,
+        body: cleanText,
+        soundType: "default",
+        data: {
+          type: "rival_chat",
+          rivalId: userId,
+          rivalIgn: cleanSenderName,
+          url: "/social"
+        }
+      });
+    }
+
+    res.json({ success: true, message: payload });
+  } catch (err) {
+    console.error("[Friends] Failed to send chat message via REST:", err);
+    res.status(500).json({ error: "Failed to send message" });
+  }
+});
+
+app.delete("/api/friends/chat/:rivalId", async (req, res) => {
+  try {
+    const userId = (req.query.userId || "").toString().trim();
+    const rivalId = (req.params.rivalId || "").toString().trim();
+    if (!userId || !rivalId) {
+      return res.status(400).json({ error: "Missing parameters" });
+    }
+
+    await pool.query(
+      `DELETE FROM rival_chat_messages 
+       WHERE (
+         (user_id = $1 AND rival_id = $2) OR 
+         (user_id = $2 AND rival_id = $1) OR 
+         (sender_id = $1 AND (rival_id = $2 OR user_id = $2)) OR 
+         (sender_id = $2 AND (rival_id = $1 OR user_id = $1))
+       )`,
+      [userId, rivalId]
+    );
+
+    if (globalIo) {
+      const room = `rival_chat_${[rivalId, userId].sort().join('_')}`;
+      globalIo.to(room).emit("rival_chat_cleared", { rivalId, userId });
+    }
+
+    res.json({ success: true, message: "Chat cleared successfully" });
+  } catch (err) {
+    console.error("[Friends] Failed to clear chat:", err);
+    res.status(500).json({ error: "Failed to clear chat" });
   }
 });
 
@@ -9976,28 +10166,59 @@ async function startServer() {
       }
     });
     socket.on("rival_chat", async (data) => {
-        try {
-            if (!data || !data.rivalId || !data.userId || !data.text || !data.text.trim()) return;
-            const newMsg = {
-                id: data.id || `rival_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
-                rivalId: data.rivalId,
-                userId: data.userId,
-                senderId: data.userId,
-                senderName: data.senderName || "Rival",
-                text: data.text.trim(),
-                timestamp: data.timestamp || Date.now()
-            };
-            
-            await pool.query(`
-                INSERT INTO rival_chat_messages (id, rival_id, user_id, sender_id, sender_name, text, timestamp)
-                VALUES (${escapeSql(newMsg.id)}, ${escapeSql(newMsg.rivalId)}, ${escapeSql(newMsg.userId)}, ${escapeSql(newMsg.senderId)}, ${escapeSql(newMsg.senderName)}, ${escapeSql(newMsg.text)}, ${newMsg.timestamp})
-            `);
+      try {
+        if (!data || !data.rivalId || !data.userId || !data.text || !data.text.trim()) return;
+        const msgId = data.id || `rival_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+        const msgTime = Number(data.timestamp) || Date.now();
+        const cleanText = data.text.trim();
+        const cleanSenderName = data.senderName || "Rival";
+        const senderId = data.senderId || data.userId;
 
-            const room = `rival_chat_${[newMsg.rivalId, newMsg.userId].sort().join('_')}`;
-            io.to(room).emit("rival_chat", newMsg);
-        } catch (err) {
-            console.error("Error processing rival chat message:", err);
-        }
+        const newMsg = {
+          id: msgId,
+          rivalId: data.rivalId,
+          userId: data.userId,
+          senderId: senderId,
+          senderName: cleanSenderName,
+          text: cleanText,
+          timestamp: msgTime,
+          rival_id: data.rivalId,
+          user_id: data.userId,
+          sender_id: senderId,
+          sender_name: cleanSenderName,
+        };
+
+        await pool.query(
+          `INSERT INTO rival_chat_messages (id, rival_id, user_id, sender_id, sender_name, text, timestamp)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (id) DO UPDATE SET text = EXCLUDED.text`,
+          [msgId, data.rivalId, data.userId, senderId, cleanSenderName, cleanText, msgTime]
+        );
+
+        const room = `rival_chat_${[data.rivalId, data.userId].sort().join('_')}`;
+        io.to(room).emit("rival_chat", newMsg);
+        io.emit(`rival_chat_${data.rivalId}`, newMsg);
+        io.emit(`rival_chat_${data.userId}`, newMsg);
+
+        // Push alert to rival
+        io.emit("rivalNotification", {
+          id: `chat_alert_${msgId}`,
+          type: "RIVAL_CHAT",
+          targetUserId: data.rivalId,
+          fromUserId: data.userId,
+          title: `💬 ${cleanSenderName} (1v1 Rival)`,
+          body: cleanText,
+          soundType: "default",
+          data: {
+            type: "rival_chat",
+            rivalId: data.userId,
+            rivalIgn: cleanSenderName,
+            url: "/social"
+          }
+        });
+      } catch (err) {
+        console.error("Error processing rival chat message:", err);
+      }
     });
 
     socket.on("audio_stream", (data) => {
