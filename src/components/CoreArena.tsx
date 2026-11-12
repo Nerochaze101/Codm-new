@@ -142,16 +142,18 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
     ? myActiveMatches.find(m => m.id === selectedActiveMatchId) || myActiveMatches[0]
     : myActiveMatches[0];
 
-  const [arenaTab, setArenaTab] = useState<'live' | 'active' | 'rivals' | 'world' | 'hosted'>(() => myActiveMatches.length > 0 ? 'active' : 'live');
-  const arenaTabRef = useRef(arenaTab);
+  const [arenaTab, setArenaTab] = useState<'live' | 'active' | 'rivals' | 'hosted'>(() => myActiveMatches.length > 0 ? 'active' : 'live');
+  const [isWorldChatOpen, setIsWorldChatOpen] = useState(false);
+  const isWorldChatOpenRef = useRef(isWorldChatOpen);
   useEffect(() => {
-    arenaTabRef.current = arenaTab;
-    if (arenaTab === 'world') {
+    isWorldChatOpenRef.current = isWorldChatOpen;
+    if (isWorldChatOpen) {
       setWorldChatUnread(0);
     }
-  }, [arenaTab]);
+  }, [isWorldChatOpen]);
 
-  const [latestWorldMsg, setLatestWorldMsg] = useState<WorldChatMessage | null>(null);
+  const [worldRecentMsgs, setWorldRecentMsgs] = useState<WorldChatMessage[]>([]);
+  const [worldTypingUsers, setWorldTypingUsers] = useState<Record<string, string>>({});
   const [worldOnlineCount, setWorldOnlineCount] = useState<number>(1);
   const [worldChatUnread, setWorldChatUnread] = useState<number>(0);
 
@@ -177,20 +179,65 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
     fetchWorldChatMessages('all')
       .then((res) => {
         if (res.messages.length > 0) {
-          setLatestWorldMsg(res.messages[res.messages.length - 1]);
+          setWorldRecentMsgs(res.messages.slice(-3));
         }
         if (res.onlineCount) setWorldOnlineCount(res.onlineCount);
       })
       .catch(() => {});
 
     const socket = io();
-    socket.emit('join_world_chat');
+    const typingTimeouts: Record<string, NodeJS.Timeout> = {};
+
+    const joinWorld = () => socket.emit('join_world_chat');
+    if (socket.connected) joinWorld();
+    socket.on('connect', joinWorld);
 
     socket.on('world_chat_message', (msg: WorldChatMessage) => {
       if (!msg?.id) return;
-      setLatestWorldMsg(msg);
-      if (arenaTabRef.current !== 'world' && msg.senderId !== currentUser?.id) {
+      if (msg.senderId) {
+        setWorldTypingUsers((prev) => {
+          if (!prev[msg.senderId]) return prev;
+          const next = { ...prev };
+          delete next[msg.senderId];
+          return next;
+        });
+      }
+      setWorldRecentMsgs((prev) => {
+        if (prev.some((m) => m.id === msg.id)) return prev;
+        return [...prev, msg].slice(-3);
+      });
+      if (!isWorldChatOpenRef.current && msg.senderId !== currentUser?.id) {
         setWorldChatUnread((c) => Math.min(c + 1, 99));
+      }
+    });
+
+    socket.on('world_chat_deleted', (data: { id?: string }) => {
+      if (data?.id) {
+        setWorldRecentMsgs((prev) => prev.filter((m) => m.id !== data.id));
+      }
+    });
+
+    socket.on('world_typing', (data: { userId?: string; senderIgn?: string; isTyping?: boolean }) => {
+      if (!data?.userId || data.userId === currentUser?.id) return;
+      const uid = data.userId;
+      if (typingTimeouts[uid]) clearTimeout(typingTimeouts[uid]);
+      if (data.isTyping) {
+        setWorldTypingUsers((prev) => ({ ...prev, [uid]: data.senderIgn || 'Operator' }));
+        typingTimeouts[uid] = setTimeout(() => {
+          setWorldTypingUsers((prev) => {
+            if (!prev[uid]) return prev;
+            const next = { ...prev };
+            delete next[uid];
+            return next;
+          });
+        }, 4000);
+      } else {
+        setWorldTypingUsers((prev) => {
+          if (!prev[uid]) return prev;
+          const next = { ...prev };
+          delete next[uid];
+          return next;
+        });
       }
     });
 
@@ -234,6 +281,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
 
     return () => {
       clearInterval(pollInterval);
+      Object.values(typingTimeouts).forEach(clearTimeout);
       socket.disconnect();
     };
   }, [currentUser?.id]);
@@ -470,8 +518,8 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
       )}
 
       {/* 2. Tab Switcher */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 p-1.5 rounded-2xl bg-neutral-900 border border-neutral-800 max-w-3xl mx-auto">
-        {(['live', 'active', 'world', 'rivals', 'hosted'] as const).map(tab => {
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-1.5 rounded-2xl bg-neutral-900 border border-neutral-800 max-w-2xl mx-auto">
+        {(['live', 'active', 'rivals', 'hosted'] as const).map(tab => {
           const isActive = arenaTab === tab;
           return (
             <button
@@ -483,23 +531,12 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
             >
               {tab === 'live' && <Flame size={15} className={isActive ? 'text-neutral-950' : 'text-amber-400'} />}
               {tab === 'active' && <Zap size={15} className={isActive ? 'text-neutral-950' : 'text-amber-400'} />}
-              {tab === 'world' && <Globe size={15} className={isActive ? 'text-neutral-950' : 'text-sky-400'} />}
               {tab === 'rivals' && <Users size={15} className={isActive ? 'text-neutral-950' : 'text-emerald-400'} />}
               {tab === 'hosted' && <Swords size={15} className={isActive ? 'text-neutral-950' : 'text-amber-400'} />}
 
               <span className="truncate">
                 {tab === 'live' && `Live (${openChallenges.length})`}
                 {tab === 'active' && `In Battle ${myActiveMatches.length > 0 ? `(${myActiveMatches.length})` : ''}`}
-                {tab === 'world' && (
-                  <span className="inline-flex items-center gap-1.5">
-                    World
-                    {worldChatUnread > 0 && !isActive && (
-                      <span className="inline-flex items-center justify-center font-mono text-[10px] px-1.5 py-0.5 rounded-full bg-sky-500/20 text-sky-300 border border-sky-400/40 font-black">
-                        {worldChatUnread}
-                      </span>
-                    )}
-                  </span>
-                )}
                 {tab === 'rivals' && (
                   <span className="inline-flex items-center gap-1.5">
                     Rivals
@@ -522,36 +559,61 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
         })}
       </div>
 
+      {/* CoD Mobile Style Docked World Chat Strip (always accessible across Arena) */}
+      <button
+        type="button"
+        onClick={() => setIsWorldChatOpen(true)}
+        className="w-full rounded-2xl bg-[#090e14]/95 hover:bg-[#0d141d] border border-neutral-800 hover:border-amber-400/50 transition-all px-3.5 py-2.5 flex items-center justify-between gap-3 text-left shadow-lg cursor-pointer group"
+      >
+        <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-400/10 border border-amber-400/30 text-amber-400 text-[10px] font-black uppercase tracking-wider shrink-0 mt-0.5 sm:mt-0">
+            <Globe size={12} className="shrink-0" />
+            <span>World</span>
+            <span className="text-[9px] font-mono text-emerald-400 ml-0.5 flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              {worldOnlineCount}
+            </span>
+          </div>
+
+          <div className="min-w-0 flex-1 space-y-0.5">
+            {worldRecentMsgs.length > 0 ? (
+              worldRecentMsgs.slice(-2).map((msg) => (
+                <div key={msg.id} className="text-[11px] sm:text-xs truncate flex items-center gap-1.5 leading-snug">
+                  <span className={`font-black shrink-0 ${msg.senderId === currentUser.id ? 'text-amber-400' : 'text-sky-300'}`}>
+                    {msg.senderIgn || msg.senderName}:
+                  </span>
+                  <span className="text-neutral-300 truncate">{msg.text}</span>
+                </div>
+              ))
+            ) : (
+              <div className="text-xs text-neutral-400 truncate">
+                Tap to open World Chat — challenge players, recruit squads & drop open wagers
+              </div>
+            )}
+            {Object.values(worldTypingUsers).length > 0 && (
+              <div className="text-[10px] font-mono text-emerald-400 truncate">
+                {Object.values(worldTypingUsers).slice(0, 2).join(', ')} {Object.values(worldTypingUsers).length === 1 ? 'is' : 'are'} typing...
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          {worldChatUnread > 0 && (
+            <span className="px-1.5 py-0.5 rounded-full bg-amber-400 text-neutral-950 font-mono font-black text-[10px]">
+              {worldChatUnread}
+            </span>
+          )}
+          <span className="text-[10px] font-black uppercase tracking-wider text-neutral-400 group-hover:text-amber-400 transition-colors flex items-center gap-1">
+            <span className="hidden sm:inline">Expand</span>
+            <MessageCircle size={14} className="text-amber-400" />
+          </span>
+        </div>
+      </button>
+
       {/* 3. Live Lobby Tab */}
       {arenaTab === 'live' && (
         <div className="space-y-6">
-          {/* CoD Mobile Style World Chat Live Ticker */}
-          <button
-            type="button"
-            onClick={() => setArenaTab('world')}
-            className="w-full p-3 sm:px-4 sm:py-3 rounded-2xl bg-[#0b1117] hover:bg-[#101821] border border-sky-500/30 hover:border-amber-400/60 transition-all flex items-center justify-between gap-3 text-left shadow-lg cursor-pointer group"
-          >
-            <div className="flex items-center gap-3 min-w-0 flex-1">
-              <div className="px-2.5 py-1 rounded-lg bg-sky-500/15 border border-sky-400/30 text-sky-300 text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 shrink-0">
-                <Globe size={12} className="animate-pulse" />
-                World Chat
-              </div>
-              {latestWorldMsg ? (
-                <div className="text-xs text-neutral-300 truncate flex items-center gap-1.5 min-w-0">
-                  <span className="font-black text-amber-400 shrink-0">[{latestWorldMsg.senderIgn || latestWorldMsg.senderName}]:</span>
-                  <span className="truncate text-neutral-200">{latestWorldMsg.text}</span>
-                </div>
-              ) : (
-                <span className="text-xs text-neutral-400 truncate">
-                  {worldOnlineCount} operators online — Tap to chat publicly, recruit squads & drop 1v1 wagers!
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-amber-400 group-hover:translate-x-0.5 transition-transform shrink-0">
-              <span>Open Comms</span>
-              <ArrowRight size={14} />
-            </div>
-          </button>
           {myActiveMatch && (
             <div className={`p-4 rounded-2xl bg-neutral-900 border-2 flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in shadow-xl ${
               myActiveMatch.matchType === 'squad' ? 'border-emerald-500/80' : 'border-amber-400'
@@ -1691,26 +1753,26 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
         </div>
       )}
 
-      {/* 5. World Chat Tab */}
-      {arenaTab === 'world' && (
-        <WorldChat
-          currentUser={currentUser}
-          myHostedBets={myHostedBets}
-          openChallenges={openChallenges}
-          onAcceptChallenge={(match) => {
-            const isSquad = match.matchType === 'squad' || Boolean(match.squadData);
-            if (isSquad) {
-              setArenaTab('live');
-            } else {
-              setStakeTargetMatch(match);
-              setStakeRole('opponent');
-              setIsStakeModalOpen(true);
-            }
-          }}
-          onChallengePlayer={(playerId) => onOpenCreateBet?.(undefined, undefined, playerId)}
-          onNavigateToSocial={() => navigate('/social')}
-        />
-      )}
+      {/* CoD Mobile Slide-Over World Chat Drawer */}
+      <WorldChat
+        isOpen={isWorldChatOpen}
+        onClose={() => setIsWorldChatOpen(false)}
+        currentUser={currentUser}
+        myHostedBets={myHostedBets}
+        openChallenges={openChallenges}
+        onAcceptChallenge={(match) => {
+          const isSquad = match.matchType === 'squad' || Boolean(match.squadData);
+          if (isSquad) {
+            setArenaTab('live');
+          } else {
+            setStakeTargetMatch(match);
+            setStakeRole('opponent');
+            setIsStakeModalOpen(true);
+          }
+        }}
+        onChallengePlayer={(playerId) => onOpenCreateBet?.(undefined, undefined, playerId)}
+        onNavigateToSocial={() => navigate('/social')}
+      />
 
       {/* 6. Hosted Bets Tab */}
       {arenaTab === 'hosted' && (

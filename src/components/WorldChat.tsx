@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Globe, Send, Swords, Users, UserPlus, MessageCircle, Trash2,
-  Zap, Radio, ShieldCheck, X, Share2, Check, Loader2, ArrowDown, Flame
+  Radio, X, Share2, Check, Loader2, ArrowDown, Flame, Shield
 } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import { UserProfile, Match, WorldChatMessage } from '../types';
@@ -13,6 +13,8 @@ import {
 } from '../services/api';
 
 interface WorldChatProps {
+  isOpen: boolean;
+  onClose: () => void;
   currentUser: UserProfile;
   myHostedBets: Match[];
   openChallenges: Match[];
@@ -28,26 +30,38 @@ const QUICK_CALLOUTS = [
   { label: 'GGs!', text: 'GGs operators! Who wants next?', channel: 'global' as const },
 ];
 
+const CHANNELS = [
+  { id: 'all', label: 'World', shortLabel: 'World', icon: Globe },
+  { id: 'global', label: 'Global', shortLabel: 'Global', icon: Radio },
+  { id: 'wagers', label: '1v1 Wagers', shortLabel: '1v1', icon: Swords },
+  { id: 'lfg', label: 'Squad LFG', shortLabel: 'Squad', icon: Users },
+] as const;
+
 function formatTime(timestamp?: number): string {
   if (!timestamp) return '';
   return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function getTierBadgeStyle(tier?: string, role?: string): string {
+function getTierShortLabel(tier?: string, role?: string): { text: string; cls: string } {
   if (role === 'admin' || role === 'super_admin') {
-    return 'bg-rose-500/20 text-rose-400 border-rose-500/40';
+    return { text: 'CMD', cls: 'bg-rose-500/20 text-rose-400 border-rose-500/40' };
   }
   if (role === 'moderator') {
-    return 'bg-cyan-500/20 text-cyan-400 border-cyan-500/40';
+    return { text: 'MOD', cls: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40' };
   }
-  const upper = (tier || '').toUpperCase();
-  if (upper.includes('LEGENDARY')) return 'bg-amber-400/20 text-amber-300 border-amber-400/40';
-  if (upper.includes('GRANDMASTER') || upper.includes('MASTER')) return 'bg-purple-500/20 text-purple-300 border-purple-500/40';
-  if (upper.includes('PRO')) return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40';
-  return 'bg-neutral-800 text-neutral-300 border-neutral-700';
+  const upper = (tier || 'ROOKIE').toUpperCase();
+  if (upper.includes('LEGENDARY')) return { text: 'LEG', cls: 'bg-amber-400/20 text-amber-300 border-amber-400/40' };
+  if (upper.includes('GRANDMASTER')) return { text: 'GM', cls: 'bg-purple-500/20 text-purple-300 border-purple-500/40' };
+  if (upper.includes('MASTER')) return { text: 'MST', cls: 'bg-purple-500/20 text-purple-300 border-purple-500/40' };
+  if (upper.includes('PRO')) return { text: 'PRO', cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' };
+  if (upper.includes('ELITE')) return { text: 'ELT', cls: 'bg-sky-500/20 text-sky-300 border-sky-500/40' };
+  if (upper.includes('VETERAN')) return { text: 'VET', cls: 'bg-neutral-700/70 text-neutral-200 border-neutral-600' };
+  return { text: 'RKE', cls: 'bg-neutral-800/90 text-neutral-400 border-neutral-700/80' };
 }
 
 export const WorldChat: React.FC<WorldChatProps> = ({
+  isOpen,
+  onClose,
   currentUser,
   myHostedBets,
   openChallenges,
@@ -73,8 +87,12 @@ export const WorldChat: React.FC<WorldChatProps> = ({
   const socketRef = useRef<Socket | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
+  const sendingLockRef = useRef(false);
+  const lastQuickCalloutAtRef = useRef(0);
   const typingTimeoutsRef = useRef<Record<string, NodeJS.Timeout>>({});
   const myTypingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const isGuest = !currentUser?.id || currentUser.id === 'guest';
   const isAdminOrMod = ['admin', 'super_admin', 'moderator'].includes(currentUser?.role || '');
@@ -197,17 +215,38 @@ export const WorldChat: React.FC<WorldChatProps> = ({
     };
   }, [currentUser?.id]);
 
+  // Escape key closes drawer cleanly
   useEffect(() => {
-    if (!showScrollBottom) {
+    if (!isOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, onClose]);
+
+  // Snap to bottom when opening drawer or switching channels
+  useEffect(() => {
+    if (isOpen) {
+      isNearBottomRef.current = true;
+      setShowScrollBottom(false);
+      setTimeout(() => scrollToBottom(false), 40);
+    }
+  }, [isOpen, activeChannel]);
+
+  useEffect(() => {
+    if (isOpen && isNearBottomRef.current) {
       scrollToBottom(true);
     }
-  }, [messages.length, activeChannel]);
+  }, [messages.length, isOpen]);
 
   const handleFeedScroll = () => {
     if (!feedRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = feedRef.current;
     const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-    setShowScrollBottom(distanceFromBottom > 120);
+    const nearBottom = distanceFromBottom <= 100;
+    isNearBottomRef.current = nearBottom;
+    setShowScrollBottom(!nearBottom);
   };
 
   const handleChannelSelect = (chan: 'all' | 'global' | 'wagers' | 'lfg') => {
@@ -220,15 +259,25 @@ export const WorldChat: React.FC<WorldChatProps> = ({
   const dispatchMessage = async (
     textToSend: string,
     channelOverride?: 'global' | 'wagers' | 'lfg',
-    matchData?: { matchId: string; challengeCode: string; stakeAmount: number; gameMode: string }
+    matchData?: { matchId: string; challengeCode: string; stakeAmount: number; gameMode: string },
+    isQuickCallout = false
   ) => {
     if (isGuest) {
-      showToast('error', 'Please sign in to send messages in World Chat.');
+      showToast('error', 'Sign in to transmit in World Chat.');
       return;
     }
     const cleanText = textToSend.trim();
-    if (!cleanText || isSending) return;
+    if (!cleanText || sendingLockRef.current) return;
 
+    if (isQuickCallout) {
+      const now = Date.now();
+      if (now - lastQuickCalloutAtRef.current < 1500) {
+        return;
+      }
+      lastQuickCalloutAtRef.current = now;
+    }
+
+    sendingLockRef.current = true;
     setIsSending(true);
     const channelToUse = channelOverride || (activeChannel === 'all' ? postChannel : activeChannel);
     const msgId = `wc_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
@@ -252,12 +301,14 @@ export const WorldChat: React.FC<WorldChatProps> = ({
       timestamp,
     };
 
-    // Optimistic update
+    isNearBottomRef.current = true;
     setMessages((prev) => {
       if (prev.some((m) => m.id === newMsg.id)) return prev;
       return [...prev, newMsg].slice(-200);
     });
-    setInputText('');
+    if (!isQuickCallout && !matchData) {
+      setInputText('');
+    }
     setShowScrollBottom(false);
 
     if (myTypingTimeoutRef.current) clearTimeout(myTypingTimeoutRef.current);
@@ -273,6 +324,7 @@ export const WorldChat: React.FC<WorldChatProps> = ({
       console.warn('World chat REST dispatch warning:', err);
       showToast('error', err.message || 'Failed to sync message.');
     } finally {
+      sendingLockRef.current = false;
       setIsSending(false);
     }
   };
@@ -285,7 +337,7 @@ export const WorldChat: React.FC<WorldChatProps> = ({
   const handleShareHostedMatch = async (match: Match) => {
     setShowShareModal(false);
     const isSquad = match.matchType === 'squad' || Boolean(match.squadData);
-    const summaryText = `🔥 OPEN ${isSquad ? '5v5 SQUAD' : '1v1 DUEL'} WAGER: ₦${match.stakeAmount.toLocaleString()} on ${match.gameMode} (${match.map}) — Code #${match.challengeCode}. Tap Accept to lock in!`;
+    const summaryText = `OPEN ${isSquad ? '5v5 SQUAD' : '1v1'} WAGER: ₦${match.stakeAmount.toLocaleString()} on ${match.gameMode} (${match.map}) · #${match.challengeCode}`;
     await dispatchMessage(summaryText, 'wagers', {
       matchId: match.id,
       challengeCode: match.challengeCode,
@@ -302,7 +354,7 @@ export const WorldChat: React.FC<WorldChatProps> = ({
     try {
       await sendFriendRequest(currentUser.id, targetUserId);
       setAddedRivalIds((prev) => ({ ...prev, [targetUserId]: true }));
-      showToast('success', `Rival request transmitted to ${targetIgn}!`);
+      showToast('success', `Rival request transmitted to ${targetIgn}`);
       setSelectedOperator(null);
     } catch (err: any) {
       showToast('error', err.message || 'Could not send rival request.');
@@ -322,451 +374,473 @@ export const WorldChat: React.FC<WorldChatProps> = ({
     ? messages
     : messages.filter((m) => m.channel === activeChannel);
 
+  if (!isOpen) return null;
+
   return (
-    <div className="rounded-3xl bg-[#090d11] border border-neutral-800 shadow-2xl overflow-hidden flex flex-col h-[calc(100vh-210px)] min-h-[560px] max-h-[780px] relative">
-      {/* CoD Tactical Header */}
-      <div className="px-4 sm:px-6 py-3.5 bg-gradient-to-r from-neutral-950 via-[#0f1720] to-neutral-950 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-400/15 border border-amber-400/40 flex items-center justify-center text-amber-400 shrink-0 relative">
-            <Globe size={20} />
-            <span className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full border-2 border-neutral-950 ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-500'}`} />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-base sm:text-lg font-black font-heading text-white uppercase tracking-wider">
+    <div
+      className="fixed inset-0 z-50 flex items-stretch sm:items-center justify-start sm:p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-150"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      {/* CoD Mobile Tactical World Chat Slide-Over Drawer */}
+      <div className="w-full sm:max-w-3xl h-full sm:h-[85vh] sm:max-h-[760px] bg-[#090d12]/98 border-r sm:border border-neutral-800 sm:rounded-2xl shadow-[0_0_60px_rgba(0,0,0,0.9)] overflow-hidden flex flex-col relative">
+        {/* Top Tactical Bar */}
+        <div className="px-3.5 sm:px-4 py-2.5 bg-gradient-to-r from-[#0e151d] via-[#121a24] to-[#0d131a] border-b border-neutral-800/90 flex items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-7 h-7 rounded-lg bg-amber-400/15 border border-amber-400/40 flex items-center justify-center text-amber-400 shrink-0 relative">
+              <Globe size={15} />
+              <span className={`absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full border border-neutral-950 ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-500'}`} />
+            </div>
+            <div className="min-w-0 flex items-center gap-2">
+              <h2 className="text-xs sm:text-sm font-black font-heading text-white uppercase tracking-wider truncate">
                 World Chat
               </h2>
-              <span className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
-                <Radio size={10} className="animate-pulse" />
+              <span className="text-[10px] font-mono font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1 shrink-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                 {onlineCount} Online
               </span>
             </div>
-            <p className="text-[11px] text-neutral-400">
-              Public Arena Comms · Call out rivals, recruit squads & drop open wagers
-            </p>
           </div>
-        </div>
 
-        {/* Channel Switcher Pills (CoD Mobile Style Tabs) */}
-        <div className="flex items-center gap-1 bg-black/70 p-1 rounded-xl border border-neutral-800">
-          {([
-            { id: 'all', label: 'World' },
-            { id: 'global', label: 'Global' },
-            { id: 'wagers', label: '1v1 Wagers' },
-            { id: 'lfg', label: 'Squad LFG' },
-          ] as const).map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => handleChannelSelect(tab.id)}
-              className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-[10px] sm:text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
-                activeChannel === tab.id
-                  ? 'bg-amber-400 text-neutral-950 shadow'
-                  : 'text-neutral-400 hover:text-white hover:bg-neutral-800/70'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Inline Toast Feedback */}
-      {statusFeedback && (
-        <div className={`mx-4 mt-2 px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-between border animate-in fade-in ${
-          statusFeedback.type === 'success'
-            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
-            : 'bg-rose-500/15 border-rose-500/40 text-rose-300'
-        }`}>
-          <span>{statusFeedback.text}</span>
-          <button onClick={() => setStatusFeedback(null)} className="opacity-70 hover:opacity-100">
-            <X size={14} />
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-2.5 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-700/80 text-neutral-300 hover:text-white text-[10px] font-black uppercase tracking-wider flex items-center gap-1 cursor-pointer transition-colors"
+            title="Return to Arena"
+          >
+            <X size={13} />
+            <span className="hidden sm:inline">Close</span>
           </button>
         </div>
-      )}
 
-      {/* World Chat Feed */}
-      <div
-        ref={feedRef}
-        onScroll={handleFeedScroll}
-        className="flex-1 overflow-y-auto px-3 sm:px-5 py-4 space-y-2.5 bg-[radial-gradient(ellipse_at_top,_rgba(251,191,36,0.03),_transparent_65%)]"
-      >
-        {isLoading ? (
-          <div className="h-full flex flex-col items-center justify-center text-neutral-500 gap-2">
-            <Loader2 size={24} className="animate-spin text-amber-400" />
-            <span className="text-xs font-mono uppercase tracking-widest">Connecting to Global Comms...</span>
+        {/* Inline Status Toast */}
+        {statusFeedback && (
+          <div className={`mx-3 mt-2 px-3 py-1.5 rounded-lg text-[11px] font-bold flex items-center justify-between border ${
+            statusFeedback.type === 'success'
+              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+              : 'bg-rose-500/15 border-rose-500/40 text-rose-300'
+          }`}>
+            <span>{statusFeedback.text}</span>
+            <button onClick={() => setStatusFeedback(null)} className="opacity-70 hover:opacity-100 cursor-pointer">
+              <X size={12} />
+            </button>
           </div>
-        ) : visibleMessages.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-center px-4 space-y-3">
-            <div className="w-14 h-14 rounded-2xl bg-neutral-900 border border-neutral-800 flex items-center justify-center text-amber-400">
-              <Globe size={28} />
-            </div>
-            <div className="text-sm font-black uppercase tracking-wider text-white">
-              Channel Quiet — Break the Silence
-            </div>
-            <p className="text-xs text-neutral-400 max-w-sm">
-              Send a message below or tap a quick callout to challenge players in the Arena.
-            </p>
-          </div>
-        ) : (
-          visibleMessages.map((msg) => {
-            const isOwn = msg.senderId === currentUser.id;
-            const isAdmin = msg.senderRole === 'admin' || msg.senderRole === 'super_admin';
-            const isMod = msg.senderRole === 'moderator';
-            const linkedMatch = msg.matchId
-              ? openChallenges.find((m) => m.id === msg.matchId || m.challengeCode === msg.challengeCode)
-              : undefined;
+        )}
 
-            return (
-              <div
-                key={msg.id}
-                className={`group flex items-start gap-2.5 p-2.5 sm:p-3 rounded-2xl border transition-all ${
-                  isOwn
-                    ? 'bg-amber-400/[0.06] border-amber-400/25'
-                    : isAdmin || isMod
-                    ? 'bg-rose-500/[0.06] border-rose-500/25'
-                    : 'bg-neutral-900/75 border-neutral-800/80 hover:border-neutral-700'
-                }`}
-              >
-                {/* Operator Avatar */}
+        {/* Body: CoD Mobile Side Channel Rail + High-Density Chat Stream */}
+        <div className="flex-1 min-h-0 flex flex-col sm:flex-row">
+          {/* Channel Rail (Top bar on mobile, vertical rail on desktop like CoD Mobile) */}
+          <div className="flex sm:flex-col gap-1 p-1.5 sm:p-2 bg-[#070a0e] border-b sm:border-b-0 sm:border-r border-neutral-800/80 sm:w-28 shrink-0 overflow-x-auto no-scrollbar">
+            {CHANNELS.map((chan) => {
+              const Icon = chan.icon;
+              const isActive = activeChannel === chan.id;
+              return (
                 <button
+                  key={chan.id}
                   type="button"
-                  onClick={() => !isOwn && setSelectedOperator(msg)}
-                  className={`relative shrink-0 ${isOwn ? 'cursor-default' : 'cursor-pointer hover:scale-105 transition-transform'}`}
-                  title={isOwn ? 'You' : `Inspect ${msg.senderIgn}`}
+                  onClick={() => handleChannelSelect(chan.id)}
+                  className={`flex-1 sm:flex-none flex items-center justify-center sm:justify-start gap-2 px-2.5 py-2 sm:py-2.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer shrink-0 border-l-2 ${
+                    isActive
+                      ? 'bg-amber-400/15 text-amber-400 border-amber-400 shadow-inner'
+                      : 'text-neutral-400 hover:text-white hover:bg-neutral-900/80 border-transparent'
+                  }`}
                 >
-                  {msg.senderAvatar ? (
-                    <img
-                      src={msg.senderAvatar}
-                      alt={msg.senderIgn}
-                      className="w-9 h-9 rounded-xl object-cover border border-neutral-700 bg-neutral-900"
-                    />
-                  ) : (
-                    <div className="w-9 h-9 rounded-xl bg-neutral-800 border border-neutral-700 flex items-center justify-center text-amber-400 font-black text-xs">
-                      {(msg.senderIgn || msg.senderName || '?').substring(0, 2).toUpperCase()}
-                    </div>
-                  )}
+                  <Icon size={13} className="shrink-0" />
+                  <span className="truncate">{chan.shortLabel}</span>
                 </button>
+              );
+            })}
+          </div>
 
-                {/* Message Content */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
-                    {/* Channel Tag when viewing ALL */}
-                    {activeChannel === 'all' && msg.channel !== 'global' && (
-                      <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded border ${
-                        msg.channel === 'wagers'
-                          ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                          : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                      }`}>
-                        {msg.channel === 'wagers' ? '1V1' : 'LFG'}
-                      </span>
-                    )}
+          {/* Stream + Composer Column */}
+          <div className="flex-1 min-w-0 min-h-0 flex flex-col relative">
+            {/* Compact Chat Stream */}
+            <div
+              ref={feedRef}
+              onScroll={handleFeedScroll}
+              className="flex-1 overflow-y-auto divide-y divide-white/[0.04] bg-[#080c10]"
+            >
+              {isLoading ? (
+                <div className="h-full flex flex-col items-center justify-center text-neutral-500 gap-2 p-6">
+                  <Loader2 size={20} className="animate-spin text-amber-400" />
+                  <span className="text-[11px] font-mono uppercase tracking-widest">Connecting Comms...</span>
+                </div>
+              ) : visibleMessages.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-center px-4 py-10 space-y-2">
+                  <Globe size={24} className="text-neutral-600" />
+                  <div className="text-xs font-black uppercase tracking-wider text-neutral-300">
+                    Channel Quiet
+                  </div>
+                  <p className="text-[11px] text-neutral-500 max-w-xs">
+                    Drop a quick callout below or post an open wager invite.
+                  </p>
+                </div>
+              ) : (
+                visibleMessages.map((msg) => {
+                  const isOwn = msg.senderId === currentUser.id;
+                  const tierBadge = getTierShortLabel(msg.senderTier, msg.senderRole);
+                  const linkedMatch = msg.matchId
+                    ? openChallenges.find((m) => m.id === msg.matchId || m.challengeCode === msg.challengeCode)
+                    : undefined;
 
-                    {/* Rank / Role Badge */}
-                    <span className={`text-[9px] font-mono font-bold uppercase px-1.5 py-0.5 rounded border ${getTierBadgeStyle(msg.senderTier, msg.senderRole)}`}>
-                      {isAdmin ? 'COMMAND' : isMod ? 'MOD' : (msg.senderTier || 'ROOKIE').replace(' TIER', '')}
-                    </span>
-
-                    {/* Clan Tag */}
-                    {msg.senderClan && (
-                      <span className="text-[10px] font-mono text-neutral-400 font-bold">
-                        {msg.senderClan}
-                      </span>
-                    )}
-
-                    {/* Operator IGN */}
-                    <button
-                      type="button"
-                      onClick={() => !isOwn && setSelectedOperator(msg)}
-                      className={`text-xs font-black tracking-wide truncate ${
+                  return (
+                    <div
+                      key={msg.id}
+                      className={`group px-3 py-2 transition-colors ${
                         isOwn
-                          ? 'text-amber-400 cursor-default'
-                          : 'text-white hover:text-amber-400 cursor-pointer underline-offset-2 hover:underline'
+                          ? 'bg-amber-400/[0.04] hover:bg-amber-400/[0.07]'
+                          : 'hover:bg-white/[0.025]'
                       }`}
                     >
-                      {msg.senderIgn || msg.senderName}
-                      {isOwn && <span className="text-[10px] text-neutral-500 font-normal ml-1">(You)</span>}
-                    </button>
+                      <div className="flex items-start gap-2">
+                        {/* Compact 24px Avatar */}
+                        <button
+                          type="button"
+                          onClick={() => !isOwn && setSelectedOperator(msg)}
+                          className={`shrink-0 mt-0.5 ${isOwn ? 'cursor-default' : 'cursor-pointer hover:opacity-85'}`}
+                          title={isOwn ? 'You' : `Inspect ${msg.senderIgn}`}
+                        >
+                          {msg.senderAvatar ? (
+                            <img
+                              src={msg.senderAvatar}
+                              alt={msg.senderIgn}
+                              className="w-6 h-6 rounded-md object-cover border border-neutral-700/80 bg-neutral-900"
+                            />
+                          ) : (
+                            <div className="w-6 h-6 rounded-md bg-neutral-800 border border-neutral-700 flex items-center justify-center text-amber-400 font-black text-[9px]">
+                              {(msg.senderIgn || msg.senderName || '?').substring(0, 2).toUpperCase()}
+                            </div>
+                          )}
+                        </button>
 
-                    <span className="text-[10px] font-mono text-neutral-500 ml-auto shrink-0">
-                      {formatTime(msg.timestamp)}
-                    </span>
+                        {/* CoD Style Inline Row */}
+                        <div className="flex-1 min-w-0 text-xs leading-snug">
+                          <div className="flex items-baseline flex-wrap gap-x-1.5 gap-y-0.5">
+                            {activeChannel === 'all' && msg.channel !== 'global' && (
+                              <span className={`text-[9px] font-black uppercase px-1 py-0 rounded border ${
+                                msg.channel === 'wagers'
+                                  ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                                  : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                              }`}>
+                                {msg.channel === 'wagers' ? '1V1' : 'LFG'}
+                              </span>
+                            )}
 
-                    {(isOwn || isAdminOrMod) && (
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteMsg(msg.id)}
-                        className="opacity-0 group-hover:opacity-100 p-1 text-neutral-500 hover:text-rose-400 transition-opacity cursor-pointer"
-                        title="Delete message"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    )}
-                  </div>
+                            <span className={`text-[9px] font-mono font-bold uppercase px-1 py-0 rounded border ${tierBadge.cls}`}>
+                              {tierBadge.text}
+                            </span>
 
-                  <p className="text-xs sm:text-[13px] text-neutral-200 leading-relaxed break-words">
-                    {msg.text}
-                  </p>
+                            {msg.senderClan && (
+                              <span className="text-[10px] font-mono text-neutral-500 font-bold">
+                                [{msg.senderClan}]
+                              </span>
+                            )}
 
-                  {/* Embedded Wager Invite Card (when shared from hosted match) */}
-                  {msg.matchId && msg.stakeAmount && (
-                    <div className="mt-2 p-2.5 rounded-xl bg-black/70 border border-amber-500/30 flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div className="w-8 h-8 rounded-lg bg-amber-400/15 text-amber-400 flex items-center justify-center shrink-0">
-                          <Flame size={16} />
+                            <button
+                              type="button"
+                              onClick={() => !isOwn && setSelectedOperator(msg)}
+                              className={`font-black tracking-wide shrink-0 ${
+                                isOwn
+                                  ? 'text-amber-400 cursor-default'
+                                  : 'text-sky-300 hover:text-amber-300 cursor-pointer hover:underline'
+                              }`}
+                            >
+                              {msg.senderIgn || msg.senderName}
+                            </button>
+                            <span className="text-neutral-500 font-bold">:</span>
+
+                            <span className="text-neutral-200 break-words">
+                              {msg.text}
+                            </span>
+                          </div>
+
+                          {/* Compact Inline Wager Invite Strip */}
+                          {msg.matchId && msg.stakeAmount && (
+                            <div className="mt-1.5 px-2.5 py-1.5 rounded-lg bg-[#0d141c] border border-amber-500/30 flex items-center justify-between gap-2 max-w-md">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <Flame size={13} className="text-amber-400 shrink-0" />
+                                <span className="text-[11px] font-black text-white truncate">
+                                  #{msg.challengeCode} · ₦{msg.stakeAmount.toLocaleString()}
+                                </span>
+                                <span className="text-[10px] text-neutral-400 truncate hidden sm:inline">
+                                  {msg.gameMode}
+                                </span>
+                              </div>
+                              {!isOwn && (
+                                linkedMatch ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      onClose();
+                                      onAcceptChallenge(linkedMatch);
+                                    }}
+                                    className="px-2.5 py-1 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-[10px] uppercase tracking-wider rounded cursor-pointer flex items-center gap-1 shrink-0"
+                                  >
+                                    <Swords size={11} />
+                                    Accept
+                                  </button>
+                                ) : (
+                                  <span className="text-[9px] font-mono uppercase text-neutral-500 shrink-0">
+                                    Closed
+                                  </span>
+                                )
+                              )}
+                            </div>
+                          )}
                         </div>
-                        <div className="min-w-0">
-                          <div className="text-[11px] font-black text-white uppercase truncate">
-                            #{msg.challengeCode} · ₦{msg.stakeAmount.toLocaleString()} Stake
-                          </div>
-                          <div className="text-[10px] text-neutral-400 truncate">
-                            {msg.gameMode || '1v1 Arena Match'}
-                          </div>
+
+                        {/* Time + Optional Delete */}
+                        <div className="flex items-center gap-1 shrink-0 mt-0.5">
+                          <span className="text-[9px] font-mono text-neutral-600">
+                            {formatTime(msg.timestamp)}
+                          </span>
+                          {(isOwn || isAdminOrMod) && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteMsg(msg.id)}
+                              className="opacity-0 group-hover:opacity-100 p-0.5 text-neutral-600 hover:text-rose-400 transition-opacity cursor-pointer"
+                              title="Delete message"
+                            >
+                              <Trash2 size={11} />
+                            </button>
+                          )}
                         </div>
                       </div>
-
-                      {!isOwn && (
-                        linkedMatch ? (
-                          <button
-                            type="button"
-                            onClick={() => onAcceptChallenge(linkedMatch)}
-                            className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-[10px] uppercase tracking-wider rounded-lg transition-all shadow cursor-pointer flex items-center gap-1"
-                          >
-                            <Swords size={12} />
-                            Accept Duel
-                          </button>
-                        ) : (
-                          <span className="text-[10px] font-mono uppercase text-neutral-500 px-2 py-1 rounded bg-neutral-900 border border-neutral-800">
-                            Match Filled / Closed
-                          </span>
-                        )
-                      )}
                     </div>
-                  )}
-                </div>
-              </div>
-            );
-          })
-        )}
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Scroll to Bottom Floating Pill */}
-      {showScrollBottom && (
-        <button
-          type="button"
-          onClick={() => {
-            setShowScrollBottom(false);
-            scrollToBottom(true);
-          }}
-          className="absolute bottom-36 right-6 z-20 px-3 py-1.5 rounded-full bg-amber-400 text-neutral-950 font-black text-[10px] uppercase tracking-wider shadow-xl flex items-center gap-1 cursor-pointer hover:bg-amber-300"
-        >
-          <ArrowDown size={12} />
-          Latest Comms
-        </button>
-      )}
-
-      {/* Selected Operator Action Drawer (Challenge / Add Rival) */}
-      {selectedOperator && (
-        <div className="mx-3 sm:mx-5 mb-2 p-3 rounded-2xl bg-neutral-900 border border-amber-400/40 shadow-2xl flex flex-wrap items-center justify-between gap-3 animate-in fade-in">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-amber-400/15 border border-amber-400/30 flex items-center justify-center text-amber-400 font-black text-xs shrink-0">
-              {(selectedOperator.senderIgn || '?').substring(0, 2).toUpperCase()}
+                  );
+                })
+              )}
+              <div ref={messagesEndRef} />
             </div>
-            <div className="min-w-0">
-              <div className="text-xs font-black text-white truncate">
-                {selectedOperator.senderIgn}
-              </div>
-              <div className="text-[10px] font-mono text-neutral-400">
-                {selectedOperator.senderTier || 'ROOKIE'} {selectedOperator.senderClan || ''}
-              </div>
-            </div>
-          </div>
 
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              onClick={() => {
-                onChallengePlayer(selectedOperator.senderId);
-                setSelectedOperator(null);
-              }}
-              className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-[10px] uppercase tracking-wider rounded-lg flex items-center gap-1 cursor-pointer"
-            >
-              <Swords size={12} />
-              Challenge 1v1
-            </button>
-
-            <button
-              type="button"
-              disabled={Boolean(addedRivalIds[selectedOperator.senderId])}
-              onClick={() => handleAddRival(selectedOperator.senderId, selectedOperator.senderIgn)}
-              className={`px-3 py-1.5 font-black text-[10px] uppercase tracking-wider rounded-lg flex items-center gap-1 cursor-pointer border ${
-                addedRivalIds[selectedOperator.senderId]
-                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                  : 'bg-neutral-800 hover:bg-neutral-700 text-white border-neutral-700'
-              }`}
-            >
-              {addedRivalIds[selectedOperator.senderId] ? <Check size={12} /> : <UserPlus size={12} />}
-              {addedRivalIds[selectedOperator.senderId] ? 'Request Sent' : 'Add Rival'}
-            </button>
-
-            {onNavigateToSocial && (
+            {/* Scroll to Bottom Floating Pill */}
+            {showScrollBottom && (
               <button
                 type="button"
                 onClick={() => {
-                  setSelectedOperator(null);
-                  onNavigateToSocial();
+                  isNearBottomRef.current = true;
+                  setShowScrollBottom(false);
+                  scrollToBottom(true);
                 }}
-                className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-[10px] uppercase tracking-wider rounded-lg flex items-center gap-1 border border-neutral-700 cursor-pointer"
+                className="absolute bottom-32 right-4 z-20 px-2.5 py-1 rounded-full bg-amber-400 text-neutral-950 font-black text-[10px] uppercase tracking-wider shadow-xl flex items-center gap-1 cursor-pointer hover:bg-amber-300"
               >
-                <MessageCircle size={12} />
-                Social
+                <ArrowDown size={11} />
+                Latest
               </button>
             )}
 
-            <button
-              type="button"
-              onClick={() => setSelectedOperator(null)}
-              className="p-1.5 text-neutral-400 hover:text-white cursor-pointer"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Share Open Match Modal / Tray */}
-      {showShareModal && myHostedBets.length > 0 && (
-        <div className="mx-3 sm:mx-5 mb-2 p-3 rounded-2xl bg-neutral-900 border border-emerald-500/40 space-y-2 animate-in fade-in">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
-              <Share2 size={13} />
-              Broadcast Open Wager to World Chat
-            </span>
-            <button onClick={() => setShowShareModal(false)} className="text-neutral-400 hover:text-white">
-              <X size={14} />
-            </button>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-32 overflow-y-auto">
-            {myHostedBets.map((bet) => (
-              <button
-                key={bet.id}
-                type="button"
-                onClick={() => handleShareHostedMatch(bet)}
-                className="p-2.5 rounded-xl bg-black/70 hover:bg-neutral-800 border border-neutral-800 hover:border-amber-400/50 text-left flex items-center justify-between gap-2 transition-all cursor-pointer"
-              >
-                <div className="min-w-0">
-                  <div className="text-xs font-black text-amber-400 truncate">#{bet.challengeCode} · ₦{bet.stakeAmount.toLocaleString()}</div>
-                  <div className="text-[10px] text-neutral-400 truncate">{bet.gameMode} · {bet.map}</div>
+            {/* Compact Operator Inspection Bar (when clicking any player IGN) */}
+            {selectedOperator && (
+              <div className="mx-2.5 mb-2 p-2.5 rounded-xl bg-[#101822] border border-amber-400/50 shadow-2xl flex flex-wrap items-center justify-between gap-2 animate-in fade-in duration-100">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="w-7 h-7 rounded-lg bg-amber-400/15 border border-amber-400/30 flex items-center justify-center text-amber-400 font-black text-[10px] shrink-0">
+                    {(selectedOperator.senderIgn || '?').substring(0, 2).toUpperCase()}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xs font-black text-white truncate">
+                      {selectedOperator.senderIgn}
+                    </div>
+                    <div className="text-[10px] font-mono text-neutral-400 flex items-center gap-1">
+                      <Shield size={9} className="text-amber-400" />
+                      {selectedOperator.senderTier || 'ROOKIE'} {selectedOperator.senderClan ? `· ${selectedOperator.senderClan}` : ''}
+                    </div>
+                  </div>
                 </div>
-                <span className="text-[10px] font-black uppercase bg-amber-400 text-neutral-950 px-2 py-1 rounded-lg shrink-0">
-                  Drop
-                </span>
-              </button>
-            ))}
+
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetId = selectedOperator.senderId;
+                      setSelectedOperator(null);
+                      onClose();
+                      onChallengePlayer(targetId);
+                    }}
+                    className="px-2.5 py-1 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-[10px] uppercase tracking-wider rounded-md flex items-center gap-1 cursor-pointer"
+                  >
+                    <Swords size={11} />
+                    1v1 Duel
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={Boolean(addedRivalIds[selectedOperator.senderId])}
+                    onClick={() => handleAddRival(selectedOperator.senderId, selectedOperator.senderIgn)}
+                    className={`px-2.5 py-1 font-black text-[10px] uppercase tracking-wider rounded-md flex items-center gap-1 cursor-pointer border ${
+                      addedRivalIds[selectedOperator.senderId]
+                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                        : 'bg-neutral-800 hover:bg-neutral-700 text-white border-neutral-700'
+                    }`}
+                  >
+                    {addedRivalIds[selectedOperator.senderId] ? <Check size={11} /> : <UserPlus size={11} />}
+                    {addedRivalIds[selectedOperator.senderId] ? 'Sent' : 'Add Rival'}
+                  </button>
+
+                  {onNavigateToSocial && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedOperator(null);
+                        onClose();
+                        onNavigateToSocial();
+                      }}
+                      className="px-2.5 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-[10px] uppercase tracking-wider rounded-md flex items-center gap-1 border border-neutral-700 cursor-pointer"
+                    >
+                      <MessageCircle size={11} />
+                      Social
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => setSelectedOperator(null)}
+                    className="p-1 text-neutral-400 hover:text-white cursor-pointer"
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Drop Open Match Selector */}
+            {showShareModal && myHostedBets.length > 0 && (
+              <div className="mx-2.5 mb-2 p-2.5 rounded-xl bg-[#0e161d] border border-emerald-500/40 space-y-1.5 animate-in fade-in duration-100">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1">
+                    <Share2 size={11} />
+                    Drop Open Wager to World Chat
+                  </span>
+                  <button onClick={() => setShowShareModal(false)} className="text-neutral-400 hover:text-white cursor-pointer">
+                    <X size={13} />
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-28 overflow-y-auto">
+                  {myHostedBets.map((bet) => (
+                    <button
+                      key={bet.id}
+                      type="button"
+                      onClick={() => handleShareHostedMatch(bet)}
+                      className="p-2 rounded-lg bg-black/70 hover:bg-neutral-800 border border-neutral-800 hover:border-amber-400/50 text-left flex items-center justify-between gap-2 transition-all cursor-pointer"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-black text-amber-400 truncate">#{bet.challengeCode} · ₦{bet.stakeAmount.toLocaleString()}</div>
+                        <div className="text-[10px] text-neutral-400 truncate">{bet.gameMode} · {bet.map}</div>
+                      </div>
+                      <span className="text-[9px] font-black uppercase bg-amber-400 text-neutral-950 px-2 py-0.5 rounded shrink-0">
+                        Post
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Quick Callouts + Typing Indicator + Input Bar */}
+            <div className="px-2.5 sm:px-3 py-2.5 bg-[#0a0e14] border-t border-neutral-800/90 space-y-2 shrink-0">
+              {/* Quick Callouts */}
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                {myHostedBets.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowShareModal((v) => !v)}
+                    className="px-2 py-1 rounded bg-amber-400/15 hover:bg-amber-400/25 text-amber-400 border border-amber-400/40 text-[10px] font-black uppercase tracking-wider shrink-0 flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    <Share2 size={10} />
+                    Drop Wager ({myHostedBets.length})
+                  </button>
+                )}
+                {QUICK_CALLOUTS.map((q) => (
+                  <button
+                    key={q.label}
+                    type="button"
+                    disabled={isSending}
+                    onClick={() => dispatchMessage(q.text, q.channel, undefined, true)}
+                    className="px-2 py-1 rounded bg-neutral-900 hover:bg-neutral-800 disabled:opacity-50 text-neutral-300 hover:text-white border border-neutral-800 text-[10px] font-bold uppercase tracking-wider shrink-0 cursor-pointer transition-colors"
+                  >
+                    {q.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Typing Indicator */}
+              {Object.values(typingUsers).length > 0 && (
+                <div className="flex items-center gap-1.5 text-[10px] font-mono text-emerald-400 px-0.5">
+                  <span className="flex items-center gap-0.5">
+                    <span className="w-1 h-1 rounded-full bg-emerald-400 animate-bounce [animation-delay:0ms]" />
+                    <span className="w-1 h-1 rounded-full bg-emerald-400 animate-bounce [animation-delay:150ms]" />
+                    <span className="w-1 h-1 rounded-full bg-emerald-400 animate-bounce [animation-delay:300ms]" />
+                  </span>
+                  <span>
+                    {Object.values(typingUsers).slice(0, 2).join(', ')}
+                    {Object.values(typingUsers).length > 2 ? ` +${Object.values(typingUsers).length - 2}` : ''}{' '}
+                    {Object.values(typingUsers).length === 1 ? 'is' : 'are'} typing...
+                  </span>
+                </div>
+              )}
+
+              {/* Input Form */}
+              <form onSubmit={handleSend} className="flex items-center gap-1.5">
+                {activeChannel === 'all' && (
+                  <select
+                    value={postChannel}
+                    onChange={(e) => setPostChannel(e.target.value as 'global' | 'wagers' | 'lfg')}
+                    className="bg-neutral-900 border border-neutral-800 text-[10px] font-black uppercase text-amber-400 rounded-lg px-2 py-2.5 focus:outline-none focus:border-amber-400 shrink-0 cursor-pointer"
+                    title="Target Channel"
+                  >
+                    <option value="global">Global</option>
+                    <option value="wagers">1v1</option>
+                    <option value="lfg">Squad</option>
+                  </select>
+                )}
+
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={inputText}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setInputText(val);
+                    if (!isGuest && socketRef.current?.connected) {
+                      socketRef.current.emit('world_typing', {
+                        userId: currentUser.id,
+                        senderIgn: currentUser.codmIgn || currentUser.username,
+                        isTyping: val.trim().length > 0,
+                      });
+                      if (myTypingTimeoutRef.current) clearTimeout(myTypingTimeoutRef.current);
+                      if (val.trim().length > 0) {
+                        myTypingTimeoutRef.current = setTimeout(() => {
+                          socketRef.current?.emit('world_typing', {
+                            userId: currentUser.id,
+                            senderIgn: currentUser.codmIgn || currentUser.username,
+                            isTyping: false,
+                          });
+                        }, 2000);
+                      }
+                    }
+                  }}
+                  maxLength={400}
+                  disabled={isGuest}
+                  placeholder={
+                    isGuest
+                      ? 'Sign in to chat in World Chat...'
+                      : 'Enter message to transmit...'
+                  }
+                  className="flex-1 min-w-0 bg-neutral-900 border border-neutral-800 focus:border-amber-400 text-xs text-white px-3 py-2.5 rounded-lg focus:outline-none placeholder:text-neutral-500 disabled:opacity-50"
+                />
+
+                <button
+                  type="submit"
+                  disabled={isGuest || isSending || !inputText.trim()}
+                  className="px-3.5 py-2.5 bg-amber-400 hover:bg-amber-300 disabled:opacity-40 disabled:hover:bg-amber-400 text-neutral-950 font-black text-xs uppercase tracking-wider rounded-lg transition-all flex items-center gap-1 shrink-0 cursor-pointer"
+                >
+                  {isSending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                  <span className="hidden sm:inline">Send</span>
+                </button>
+              </form>
+            </div>
           </div>
         </div>
-      )}
-
-      {/* Quick Tactical Callouts + Input Bar */}
-      <div className="p-3 sm:p-4 bg-neutral-950 border-t border-neutral-800 space-y-2.5">
-        {/* Quick Callout Chips + Drop Challenge */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-          {myHostedBets.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowShareModal((v) => !v)}
-              className="px-2.5 py-1 rounded-lg bg-amber-400/15 hover:bg-amber-400/25 text-amber-400 border border-amber-400/40 text-[10px] font-black uppercase tracking-wider shrink-0 flex items-center gap-1 cursor-pointer transition-all"
-            >
-              <Share2 size={11} />
-              Drop My Wager ({myHostedBets.length})
-            </button>
-          )}
-          {QUICK_CALLOUTS.map((q) => (
-            <button
-              key={q.label}
-              type="button"
-              onClick={() => dispatchMessage(q.text, q.channel)}
-              className="px-2.5 py-1 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-300 hover:text-white border border-neutral-800 text-[10px] font-bold uppercase tracking-wider shrink-0 cursor-pointer transition-all"
-            >
-              {q.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Live Typing Indicator Bar */}
-        {Object.values(typingUsers).length > 0 && (
-          <div className="flex items-center gap-2 text-[11px] font-mono text-emerald-400 px-1">
-            <span className="flex items-center gap-0.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce [animation-delay:0ms]" />
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce [animation-delay:150ms]" />
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-bounce [animation-delay:300ms]" />
-            </span>
-            <span>
-              {Object.values(typingUsers).slice(0, 2).join(', ')}
-              {Object.values(typingUsers).length > 2 ? ` +${Object.values(typingUsers).length - 2} others` : ''}{' '}
-              {Object.values(typingUsers).length === 1 ? 'is' : 'are'} typing...
-            </span>
-          </div>
-        )}
-
-        {/* Input Form */}
-        <form onSubmit={handleSend} className="flex items-center gap-2">
-          {activeChannel === 'all' && (
-            <select
-              value={postChannel}
-              onChange={(e) => setPostChannel(e.target.value as 'global' | 'wagers' | 'lfg')}
-              className="bg-neutral-900 border border-neutral-800 text-[10px] font-black uppercase text-amber-400 rounded-xl px-2.5 py-3 focus:outline-none focus:border-amber-400 shrink-0 cursor-pointer"
-              title="Target Channel"
-            >
-              <option value="global">Global</option>
-              <option value="wagers">1v1 Wager</option>
-              <option value="lfg">Squad LFG</option>
-            </select>
-          )}
-
-          <input
-            type="text"
-            value={inputText}
-            onChange={(e) => {
-              const val = e.target.value;
-              setInputText(val);
-              if (!isGuest && socketRef.current?.connected) {
-                socketRef.current.emit('world_typing', {
-                  userId: currentUser.id,
-                  senderIgn: currentUser.codmIgn || currentUser.username,
-                  isTyping: val.trim().length > 0,
-                });
-                if (myTypingTimeoutRef.current) clearTimeout(myTypingTimeoutRef.current);
-                if (val.trim().length > 0) {
-                  myTypingTimeoutRef.current = setTimeout(() => {
-                    socketRef.current?.emit('world_typing', {
-                      userId: currentUser.id,
-                      senderIgn: currentUser.codmIgn || currentUser.username,
-                      isTyping: false,
-                    });
-                  }, 2000);
-                }
-              }
-            }}
-            maxLength={400}
-            disabled={isGuest}
-            placeholder={
-              isGuest
-                ? 'Sign in to transmit in World Chat...'
-                : 'Transmit to Arena World Chat (e.g. 1v1 Shipment Sniper ₦1,000)...'
-            }
-            className="flex-1 bg-neutral-900 border border-neutral-800 focus:border-amber-400 text-xs sm:text-sm text-white px-4 py-3 rounded-xl focus:outline-none placeholder:text-neutral-500 disabled:opacity-50"
-          />
-
-          <button
-            type="submit"
-            disabled={isGuest || isSending || !inputText.trim()}
-            className="px-4 sm:px-5 py-3 bg-amber-400 hover:bg-amber-300 disabled:opacity-40 disabled:hover:bg-amber-400 text-neutral-950 font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg flex items-center gap-1.5 shrink-0 cursor-pointer"
-          >
-            {isSending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-            <span className="hidden sm:inline">Send</span>
-          </button>
-        </form>
       </div>
     </div>
   );
