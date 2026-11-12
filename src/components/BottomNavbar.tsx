@@ -23,6 +23,11 @@ export const BottomNavbar: React.FC<BottomNavbarProps> = ({
       icon: Swords,
     },
     {
+      id: 'leaderboards',
+      label: 'Ranks',
+      icon: Trophy,
+    },
+    {
       id: 'rules',
       label: 'Rules',
       icon: ShieldCheck,

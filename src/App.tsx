@@ -36,6 +36,7 @@ import { BackgroundUploadBanner } from './components/BackgroundUploadBanner';
 import { DisputesPage } from './components/DisputesPage';
 import { SocialTab } from './components/SocialTab';
 import { SupportPage } from './components/SupportPage';
+import { LeaderboardPage } from './components/LeaderboardPage';
 import { GlobalBroadcastBanner } from './components/GlobalBroadcastBanner';
 import { ShieldAlert, UserCheck, Lock, RefreshCw, Users as UsersIcon } from 'lucide-react';
 
@@ -497,6 +498,7 @@ function MainApp() {
   let currentTab = 'landing';
   if (pathname === '/auth' || (pathname === '/' && refCode && currentUser.id === 'guest')) currentTab = 'auth';
   else if (pathname === '/arena' || (pathname === '/' && currentUser.id !== 'guest' && !refCode)) currentTab = 'arena';
+  else if (pathname === '/leaderboards') currentTab = 'leaderboards';
   else if (pathname === '/rules') currentTab = 'rules';
   else if (pathname === '/history') currentTab = 'history';
   else if (pathname === '/disputes') currentTab = 'disputes';
@@ -1042,6 +1044,20 @@ function MainApp() {
                   onDismissMatch={(matchId) => {
                     setMatches(matches.filter(m => m.id !== matchId));
                   }}
+                />
+              )
+            }
+          />
+          <Route
+            path="/leaderboards"
+            element={
+              maintenanceActive && !['admin', 'super_admin', 'moderator'].includes(currentUser.role || '') ? (
+                <MaintenanceOverlay />
+              ) : (
+                <LeaderboardPage
+                  currentUser={currentUser}
+                  onNavigate={(tab) => navigate(`/${tab === 'arena' ? 'arena' : tab}`)}
+                  onViewProfile={(userId) => navigate('/social')}
                 />
               )
             }

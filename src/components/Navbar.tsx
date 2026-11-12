@@ -66,6 +66,14 @@ export const Navbar: React.FC<NavbarProps> = ({
       badgeColor: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40',
     },
     {
+      id: 'leaderboards',
+      label: 'Leaderboards',
+      subtitle: 'Top Gladiators, Wins & High Stakes',
+      icon: Trophy,
+      badge: 'TOP',
+      badgeColor: 'bg-amber-500/20 text-amber-400 border-amber-500/40',
+    },
+    {
       id: 'wallet',
       label: 'Wallet & Payouts',
       subtitle: `₦${currentUser.balance.toLocaleString()} Available`,

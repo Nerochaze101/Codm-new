@@ -1311,6 +1311,29 @@ async function clearMatchChatInDb(matchId) {
     console.error(`Error clearing chat in DB for match ${matchId}:`, err);
   }
 }
+function hashPassword(password: string): string {
+  const salt = crypto2.randomBytes(16).toString("hex");
+  const hash = crypto2.scryptSync(password, salt, 64).toString("hex");
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password: string, storedHash: string): boolean {
+  if (!storedHash) return false;
+  if (!storedHash.includes(":")) {
+    return storedHash === password;
+  }
+  const [salt, key] = storedHash.split(":");
+  if (!salt || !key) return false;
+  try {
+    const hashBuffer = crypto2.scryptSync(password, salt, 64);
+    const keyBuffer = Buffer.from(key, "hex");
+    if (hashBuffer.length !== keyBuffer.length) return false;
+    return crypto2.timingSafeEqual(hashBuffer, keyBuffer);
+  } catch {
+    return false;
+  }
+}
+
 async function getUserFromDb(idOrEmail) {
   try {
     if (!idOrEmail) return null;
@@ -1451,7 +1474,8 @@ async function getUserByReferralCodeOrIdentifier(identifier) {
 }
 async function saveUserToDb(user, password, forceBalanceUpdate = false) {
   try {
-    const passValue = password ? escapeSql(password) : "NULL";
+    const hashedPass = password ? (password.includes(":") ? password : hashPassword(password)) : null;
+    const passValue = hashedPass ? escapeSql(hashedPass) : "NULL";
     const balanceUpdateFragment = forceBalanceUpdate ? `balance = EXCLUDED.balance, escrow_balance = EXCLUDED.escrow_balance, total_winnings = EXCLUDED.total_winnings,` : `balance = users.balance, escrow_balance = users.escrow_balance, total_winnings = users.total_winnings,`;
     await pool.query(`
       INSERT INTO users (id, username, codm_ign, codm_uid, tier, clan, email, phone, password_hash, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, telegram_chat_id, telegram_username, created_at)
@@ -5341,7 +5365,8 @@ app.post("/api/auth/reset-password", async (req, res) => {
     if (Date.now() > parseInt(verification.expires_at, 10)) {
       return res.status(400).json({ error: "Verification code has expired" });
     }
-    await pool.query(`UPDATE users SET password_hash = $1 WHERE LOWER(email) = LOWER($2)`, [newPassword, cleanEmail]);
+    const hashedNewPass = hashPassword(newPassword);
+    await pool.query(`UPDATE users SET password_hash = $1 WHERE LOWER(email) = LOWER($2)`, [hashedNewPass, cleanEmail]);
     await pool.query(`DELETE FROM verification_codes WHERE email = $1`, [cleanEmail]);
     res.json({ success: true, message: "Password has been reset successfully." });
   } catch (err) {
@@ -5366,8 +5391,19 @@ app.post("/api/auth/login", async (req, res) => {
   if (account.user.email?.toLowerCase() === "b@gmail.com" || identifier.toLowerCase() === "b@gmail.com") {
     return res.json(account.user);
   }
-  if (account.passwordHash && password && account.passwordHash !== password) {
-    return res.status(401).json({ error: "Incorrect password. Please try again." });
+  if (account.passwordHash && password) {
+    if (!verifyPassword(password, account.passwordHash)) {
+      return res.status(401).json({ error: "Incorrect password. Please try again." });
+    }
+    // Auto-upgrade legacy plain text passwords to secure hashed format upon successful login
+    if (!account.passwordHash.includes(":")) {
+      try {
+        const secureHash = hashPassword(password);
+        await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [secureHash, account.user.id]);
+      } catch (upgErr) {
+        console.warn("Failed to auto-upgrade legacy password hash:", upgErr);
+      }
+    }
   }
   res.json(account.user);
 });
@@ -7445,6 +7481,90 @@ app.post("/api/telegram/test-welcome", async (req, res) => {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
+app.get("/api/leaderboard", async (req, res) => {
+  try {
+    const season = req.query.season === 'weekly' ? 'weekly' : 'all';
+    if (season === 'weekly') {
+      const now = Date.now();
+      const d = new Date(now);
+      const day = d.getDay();
+      const sun = new Date(d.setDate(d.getDate() - day));
+      sun.setHours(0, 0, 0, 0);
+      const weekStartMs = sun.getTime();
+
+      const matchesQuery = await pool.query(
+        `SELECT winner_id, winner_ign, winner_payout, stake_amount, creator_id, opponent_id, settled_at 
+         FROM matches WHERE status = 'settled' AND settled_at >= $1`,
+        [weekStartMs]
+      );
+
+      const statsMap = new Map<string, { id: string; ign: string; wins: number; losses: number; winnings: number; tier: string; clan: string; avatar: string }>();
+
+      const usersRes = await pool.query(`SELECT id, codm_ign, tier, clan, avatar FROM users`);
+      for (const u of usersRes.rows) {
+        statsMap.set(u.id, {
+          id: u.id,
+          ign: u.codm_ign || 'Gladiator',
+          wins: 0,
+          losses: 0,
+          winnings: 0,
+          tier: u.tier || 'LEGENDARY TIER',
+          clan: u.clan || '[1V1_PRO]',
+          avatar: u.avatar || 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=150'
+        });
+      }
+
+      for (const m of matchesQuery.rows) {
+        if (m.winner_id && statsMap.has(m.winner_id)) {
+          const st = statsMap.get(m.winner_id)!;
+          st.wins += 1;
+          st.winnings += parseFloat(m.winner_payout || m.stake_amount || 0);
+        }
+        const cId = m.creator_id;
+        const oId = m.opponent_id;
+        const loserId = m.winner_id === cId ? oId : (m.winner_id === oId ? cId : null);
+        if (loserId && statsMap.has(loserId)) {
+          const st = statsMap.get(loserId)!;
+          st.losses += 1;
+        }
+      }
+
+      const leaderboard = Array.from(statsMap.values()).map(st => ({
+        ...st,
+        win_rate: (st.wins + st.losses) > 0 ? Math.round((st.wins / (st.wins + st.losses)) * 100) : 0
+      }));
+
+      res.json(leaderboard);
+    } else {
+      const usersRes = await pool.query(
+        `SELECT id, codm_ign, tier, clan, avatar, wins, losses, total_winnings 
+         FROM users 
+         ORDER BY wins DESC, total_winnings DESC`
+      );
+      const leaderboard = usersRes.rows.map(u => {
+        const wins = parseInt(u.wins || 0, 10);
+        const losses = parseInt(u.losses || 0, 10);
+        const win_rate = (wins + losses) > 0 ? Math.round((wins / (wins + losses)) * 100) : 0;
+        return {
+          id: u.id,
+          ign: u.codm_ign || 'Gladiator',
+          tier: u.tier || 'LEGENDARY TIER',
+          clan: u.clan || '[1V1_PRO]',
+          avatar: u.avatar || 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=150',
+          wins,
+          losses,
+          winnings: parseFloat(u.total_winnings || 0),
+          win_rate
+        };
+      });
+      res.json(leaderboard);
+    }
+  } catch (err: any) {
+    console.error("Error fetching leaderboard:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/api/matches", async (req, res) => {
   const matchList = await getAllMatchesFromDb();
   res.json(matchList.map((m) => sanitizeMatchForPublic(m)));
