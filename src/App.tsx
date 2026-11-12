@@ -100,6 +100,21 @@ function MainApp() {
     initNotificationService();
   }, []);
 
+  // Continuous Presence Heartbeat so user appears active to rivals
+  useEffect(() => {
+    if (currentUser.id && currentUser.id !== 'guest') {
+      const sendPing = () => {
+        socket.emit('user_presence_ping', {
+          userId: currentUser.id,
+          activity: 'In Arena'
+        });
+      };
+      sendPing();
+      const interval = setInterval(sendPing, 20000);
+      return () => clearInterval(interval);
+    }
+  }, [currentUser.id]);
+
   const speakChatMessage = useCallback((text: string, senderName: string) => {
     try {
       const utterance = new SpeechSynthesisUtterance(`${senderName} says: ${text}`);

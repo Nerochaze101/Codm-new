@@ -9849,6 +9849,71 @@ app.get("/api/friends/list", async (req, res) => {
   }
 });
 
+const activeConnectedUsers = new Map();
+
+app.get("/api/friends/active-rivals", async (req, res) => {
+  try {
+    const userId = (req.query.userId || "").toString().trim();
+    if (!userId || userId === "guest") return res.json({ activeRivals: [] });
+
+    const friendsRes = await pool.query(`
+      SELECT 
+        u.id, 
+        u.username, 
+        u.codm_ign, 
+        u.avatar, 
+        u.tier,
+        u.clan,
+        u.wins,
+        u.losses,
+        f.id AS friendship_id,
+        f.status, 
+        f.user_id_1 AS requester_id,
+        f.created_at
+      FROM friendships f
+      JOIN users u ON (f.user_id_1 = u.id OR f.user_id_2 = u.id)
+      WHERE (f.user_id_1 = ${escapeSql(userId)} OR f.user_id_2 = ${escapeSql(userId)})
+        AND f.status = 'accepted'
+        AND u.id != ${escapeSql(userId)}
+      ORDER BY f.created_at DESC
+    `);
+
+    const now = Date.now();
+    const mapped = friendsRes.rows.map(row => {
+      const presence = activeConnectedUsers.get(row.id);
+      // Online if socket connected within 60 seconds
+      const isOnline = Boolean(presence && (now - presence.lastSeen < 60000));
+      return {
+        id: row.id,
+        username: row.username,
+        codm_ign: row.codm_ign,
+        codmIgn: row.codm_ign,
+        avatar: row.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(row.codm_ign || row.id)}`,
+        tier: row.tier || "LEGENDARY TIER",
+        clan: row.clan || "[1V1_PRO]",
+        wins: Number(row.wins || 0),
+        losses: Number(row.losses || 0),
+        friendshipId: row.friendship_id,
+        isOnline,
+        lastSeen: presence ? presence.lastSeen : null,
+        currentActivity: presence?.activity || (isOnline ? "Active in Arena" : "Offline"),
+      };
+    });
+
+    mapped.sort((a, b) => {
+      if (a.isOnline === b.isOnline) {
+        return b.wins - a.wins;
+      }
+      return a.isOnline ? -1 : 1;
+    });
+
+    res.json({ activeRivals: mapped });
+  } catch (err) {
+    console.error("[Friends] Failed to fetch active rivals:", err);
+    res.status(500).json({ error: "Failed to fetch active rivals" });
+  }
+});
+
 app.get("/api/friends/chat/:rivalId", async (req, res) => {
   try {
     const userId = (req.query.userId || "").toString().trim();
@@ -10048,6 +10113,24 @@ async function startServer() {
   io.on("connection", (socket) => {
     let currentMatchId = null;
     let currentUserId = null;
+
+    socket.on("user_presence_ping", (data) => {
+      const uid = typeof data === "string" ? data : data?.userId;
+      if (uid && uid !== "guest") {
+        currentUserId = uid;
+        activeConnectedUsers.set(uid, {
+          socketId: socket.id,
+          lastSeen: Date.now(),
+          activity: data?.activity || "In Arena"
+        });
+        io.emit("rival_presence_update", {
+          userId: uid,
+          isOnline: true,
+          lastSeen: Date.now(),
+          activity: data?.activity || "In Arena"
+        });
+      }
+    });
 
     socket.on("join_support_room", (data) => {
       if (data.room) {
@@ -10271,6 +10354,14 @@ async function startServer() {
       io.emit("balanceUpdated", data);
     });
     socket.on("disconnect", () => {
+      if (currentUserId && currentUserId !== "guest") {
+        activeConnectedUsers.delete(currentUserId);
+        io.emit("rival_presence_update", {
+          userId: currentUserId,
+          isOnline: false,
+          lastSeen: Date.now()
+        });
+      }
       if (currentMatchId && currentUserId) {
         const users = roomUsers.get(currentMatchId);
         if (users) {

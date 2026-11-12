@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { io } from 'socket.io-client';
 import { UserProfile, Match } from '../types';
 import {
   Swords, ShieldCheck, Trophy, Copy, Check, Share2, Upload,
   ArrowRight, AlertCircle, CheckCircle2, MessageCircle, Wallet,
   UserCheck, RefreshCw, Sparkles, Crosshair, Target, X, Plus,
   Flame, Zap, Users, Flag, Shield, Sliders, ChevronRight, Gamepad2, MapPin,
-  TrendingUp, Award, Clock, Lock, AlertTriangle, XCircle, Bell, Info, ExternalLink, Send
+  TrendingUp, Award, Clock, Lock, AlertTriangle, XCircle, Bell, Info, ExternalLink, Send,
+  Search, Radio
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { SkeletonLoader } from './SkeletonLoader';
@@ -15,7 +18,7 @@ import { requestNotificationPermission, getNotificationPermission, isIOS, isStan
 import { IOSNotificationGuideModal } from './IOSNotificationGuideModal';
 import { playShotgunSound } from '../hooks/useSound';
 import { VideoTutorial } from './VideoTutorial';
-import { uploadMatchVideoWithProgress } from '../services/api';
+import { uploadMatchVideoWithProgress, fetchActiveRivals } from '../services/api';
 
 const CardBackground = () => (
   <div className="absolute inset-0 z-0 opacity-10">
@@ -29,7 +32,7 @@ interface CoreArenaProps {
   matches: Match[];
   isMatchesLoading?: boolean;
   onCreateBet: (data: { stakeAmount: number; gameMode: string; map: string; rules: string[]; matchDurationMinutes?: number; isPublic?: boolean; matchType?: 'solo' | 'squad' }) => Promise<void>;
-  onOpenCreateBet?: (mode?: string, stake?: number) => void;
+  onOpenCreateBet?: (mode?: string, stake?: number, rivalId?: string) => void;
   onJoinMatch: (matchId: string, opponentId: string) => Promise<void>;
   onSquadJoin?: (matchId: string, slotIndex?: number, team?: 'ALPHA' | 'BRAVO') => Promise<void>;
   onSquadLeave?: (matchId: string) => Promise<void>;
@@ -50,6 +53,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   currentUser, matches, isMatchesLoading, onCreateBet, onJoinMatch, onSquadJoin, onSquadLeave, onOpponentStake, onCreatorStake,
   onSubmitResult, onCancelMatch, onAbandonMatch, onDismissMatch, onRefresh, onOpenNewUserOnboarding, onOpenCreateBet, onCashOut
 }) => {
+  const navigate = useNavigate();
 
   const [selectedClaim, setSelectedClaim] = useState<'VICTORY' | 'DEFEAT' | 'DRAW'>('VICTORY');
   const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
@@ -137,7 +141,62 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
     ? myActiveMatches.find(m => m.id === selectedActiveMatchId) || myActiveMatches[0]
     : myActiveMatches[0];
 
-  const [arenaTab, setArenaTab] = useState<'live' | 'active' | 'hosted'>(() => myActiveMatches.length > 0 ? 'active' : 'live');
+  const [arenaTab, setArenaTab] = useState<'live' | 'active' | 'rivals' | 'hosted'>(() => myActiveMatches.length > 0 ? 'active' : 'live');
+  const [activeRivals, setActiveRivals] = useState<any[]>([]);
+  const [rivalsLoading, setRivalsLoading] = useState<boolean>(false);
+  const [rivalsSearch, setRivalsSearch] = useState<string>('');
+  const [rivalsFilter, setRivalsFilter] = useState<'ALL' | 'ONLINE'>('ALL');
+
+  const loadActiveRivals = async () => {
+    if (!currentUser?.id || currentUser.id === 'guest') return;
+    try {
+      setRivalsLoading(true);
+      const data = await fetchActiveRivals(currentUser.id);
+      setActiveRivals(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Failed to load active rivals:', err);
+    } finally {
+      setRivalsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!currentUser?.id || currentUser.id === 'guest') return;
+
+    loadActiveRivals();
+
+    const socket = io();
+    socket.on('rival_presence_update', (data: { userId: string; isOnline: boolean; currentActivity?: string }) => {
+      setActiveRivals(prev => prev.map(r => {
+        if (r.id === data.userId) {
+          return {
+            ...r,
+            isOnline: data.isOnline,
+            currentActivity: data.currentActivity !== undefined ? data.currentActivity : r.currentActivity
+          };
+        }
+        return r;
+      }));
+    });
+
+    const friendUpdateEvent = `friend_update_${currentUser.id}`;
+    socket.on(friendUpdateEvent, () => {
+      loadActiveRivals();
+    });
+
+    const pollInterval = setInterval(() => {
+      fetchActiveRivals(currentUser.id)
+        .then(data => {
+          if (Array.isArray(data)) setActiveRivals(data);
+        })
+        .catch(() => {});
+    }, 15000);
+
+    return () => {
+      clearInterval(pollInterval);
+      socket.disconnect();
+    };
+  }, [currentUser?.id]);
 
   useEffect(() => {
     if (myActiveMatches.length > 0 && !selectedActiveMatchId) {
@@ -213,6 +272,17 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   const myHostedBets = matches.filter(m => m.creator.id === currentUser.id && m.status === 'PENDING_OPPONENT_STAKE');
   const isCreatorOfActive = myActiveMatch?.creator.id === currentUser.id;
   const filteredChallenges = openChallenges.filter(m => searchQuery.trim() === '' || m.challengeCode.toUpperCase().includes(searchQuery.trim().toUpperCase()));
+
+  const onlineRivalsCount = activeRivals.filter(r => r.isOnline).length;
+  const filteredRivals = activeRivals.filter(r => {
+    if (rivalsFilter === 'ONLINE' && !r.isOnline) return false;
+    if (!rivalsSearch.trim()) return true;
+    const q = rivalsSearch.toLowerCase().trim();
+    return (
+      (r.codmIgn && r.codmIgn.toLowerCase().includes(q)) ||
+      (r.username && r.username.toLowerCase().includes(q))
+    );
+  });
 
   const copyCode = (code: string) => { navigator.clipboard.writeText(code); setCopiedCode(true); setTimeout(() => setCopiedCode(false), 2000); };
   const copyInviteLink = (matchId: string) => { navigator.clipboard.writeText(`${window.location.origin}/?join=${matchId}`); setCopiedLink(true); setTimeout(() => setCopiedLink(false), 2000); };
@@ -360,13 +430,45 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
       )}
 
       {/* 2. Tab Switcher */}
-      <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-neutral-900 border border-neutral-800 max-w-xl mx-auto">
-        {(['live', 'active', 'hosted'] as const).map(tab => (
-          <button key={tab} onClick={() => setArenaTab(tab)} className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 ${arenaTab === tab ? 'bg-amber-400 text-neutral-950 shadow-lg' : 'text-neutral-400 hover:text-white'}`}>
-            {tab === 'live' && <Flame size={16} />} {tab === 'active' && <Zap size={16} />} {tab === 'hosted' && <Swords size={16} />}
-            <span className="capitalize">{tab} {tab === 'active' ? '' : `(${tab === 'live' ? openChallenges.length : myHostedBets.length})`}</span>
-          </button>
-        ))}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-1.5 rounded-2xl bg-neutral-900 border border-neutral-800 max-w-2xl mx-auto">
+        {(['live', 'active', 'rivals', 'hosted'] as const).map(tab => {
+          const isActive = arenaTab === tab;
+          return (
+            <button
+              key={tab}
+              onClick={() => setArenaTab(tab)}
+              className={`py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 relative ${
+                isActive ? 'bg-amber-400 text-neutral-950 shadow-lg scale-[1.02]' : 'text-neutral-400 hover:text-white hover:bg-neutral-800/60'
+              }`}
+            >
+              {tab === 'live' && <Flame size={15} className={isActive ? 'text-neutral-950' : 'text-amber-400'} />}
+              {tab === 'active' && <Zap size={15} className={isActive ? 'text-neutral-950' : 'text-amber-400'} />}
+              {tab === 'rivals' && <Users size={15} className={isActive ? 'text-neutral-950' : 'text-emerald-400'} />}
+              {tab === 'hosted' && <Swords size={15} className={isActive ? 'text-neutral-950' : 'text-amber-400'} />}
+
+              <span className="truncate">
+                {tab === 'live' && `Live (${openChallenges.length})`}
+                {tab === 'active' && `In Battle ${myActiveMatches.length > 0 ? `(${myActiveMatches.length})` : ''}`}
+                {tab === 'rivals' && (
+                  <span className="inline-flex items-center gap-1.5">
+                    Rivals
+                    {onlineRivalsCount > 0 ? (
+                      <span className={`inline-flex items-center gap-1 font-mono text-[10px] px-1.5 py-0.5 rounded-full ${
+                        isActive ? 'bg-neutral-950 text-emerald-400 font-bold' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                      }`}>
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        {onlineRivalsCount}
+                      </span>
+                    ) : (
+                      `(${activeRivals.length})`
+                    )}
+                  </span>
+                )}
+                {tab === 'hosted' && `Hosted (${myHostedBets.length})`}
+              </span>
+            </button>
+          );
+        })}
       </div>
 
       {/* 3. Live Lobby Tab */}
@@ -1223,6 +1325,289 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
               <div className="text-2xl font-black font-heading text-white uppercase">No Active Battle</div>
               <p className="text-xs text-neutral-400 max-w-sm mx-auto">You're not currently in a match. Start a new wager or accept a challenge!</p>
               <button onClick={() => setArenaTab('live')} className="px-8 py-3 bg-amber-400 text-neutral-950 font-black rounded-2xl text-xs uppercase shadow-lg">Browse Live Lobby</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 4. Active Rivals Radar Tab */}
+      {arenaTab === 'rivals' && (
+        <div className="space-y-6">
+          {/* Tactical Radar Header */}
+          <div className="relative overflow-hidden p-6 rounded-3xl bg-neutral-900 border border-neutral-800 shadow-2xl">
+            <CardBackground />
+            <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_10px_#10b981]" />
+                  <span className="text-[11px] font-black uppercase tracking-widest text-emerald-400">
+                    Tactical Radar · Live Roster
+                  </span>
+                </div>
+                <h2 className="text-2xl font-black text-white uppercase tracking-wider font-heading flex items-center gap-2">
+                  <Radio className="text-amber-400" size={24} />
+                  Active Rivals Command
+                </h2>
+                <p className="text-xs text-neutral-400 max-w-xl">
+                  Real-time presence radar of your rivals. Challenge active players to instant 1v1 wagers or coordinate matches via private comms.
+                </p>
+              </div>
+
+              {/* Status Chips & Actions */}
+              <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-black/60 border border-neutral-800 text-xs font-mono">
+                  <span className="text-neutral-400">Online Now:</span>
+                  <span className="text-emerald-400 font-black flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    {onlineRivalsCount} / {activeRivals.length}
+                  </span>
+                </div>
+                <button
+                  onClick={loadActiveRivals}
+                  disabled={rivalsLoading}
+                  className="p-2.5 bg-neutral-800 hover:bg-neutral-700 active:scale-95 text-neutral-200 rounded-xl transition-all cursor-pointer border border-neutral-700/60"
+                  title="Refresh Radar"
+                >
+                  <RefreshCw size={16} className={rivalsLoading ? 'animate-spin text-amber-400' : ''} />
+                </button>
+                <button
+                  onClick={() => navigate('/social')}
+                  className="px-4 py-2.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow cursor-pointer flex items-center gap-1.5"
+                >
+                  <Users size={14} />
+                  Find Rivals
+                </button>
+              </div>
+            </div>
+
+            {/* Tactical Search & Filter Bar */}
+            <div className="relative z-10 mt-6 pt-4 border-t border-neutral-800/80 flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
+              {/* Search Bar */}
+              <div className="relative flex-1 max-w-md">
+                <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-500" />
+                <input
+                  type="text"
+                  placeholder="Filter by rival IGN or username..."
+                  value={rivalsSearch}
+                  onChange={(e) => setRivalsSearch(e.target.value)}
+                  className="w-full bg-black/70 border border-neutral-800 focus:border-amber-400 text-xs text-white pl-10 pr-8 py-2.5 rounded-xl transition-all placeholder:text-neutral-600 focus:outline-none"
+                />
+                {rivalsSearch && (
+                  <button
+                    onClick={() => setRivalsSearch('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-white"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+
+              {/* Filter Tabs (All vs Online) */}
+              <div className="flex items-center gap-1.5 bg-black/60 p-1 rounded-xl border border-neutral-800 shrink-0">
+                <button
+                  onClick={() => setRivalsFilter('ALL')}
+                  className={`px-3 py-1.5 text-xs font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer ${
+                    rivalsFilter === 'ALL'
+                      ? 'bg-amber-400 text-neutral-950 shadow'
+                      : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  All ({activeRivals.length})
+                </button>
+                <button
+                  onClick={() => setRivalsFilter('ONLINE')}
+                  className={`px-3 py-1.5 text-xs font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                    rivalsFilter === 'ONLINE'
+                      ? 'bg-emerald-500 text-neutral-950 shadow font-black'
+                      : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  Online ({onlineRivalsCount})
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Rivals Grid or Empty States */}
+          {rivalsLoading && activeRivals.length === 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {[1, 2, 3, 4].map(idx => (
+                <div key={idx} className="p-5 rounded-2xl bg-neutral-900 border border-neutral-800 animate-pulse space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-xl bg-neutral-800" />
+                    <div className="space-y-2 flex-1">
+                      <div className="h-4 bg-neutral-800 rounded w-1/3" />
+                      <div className="h-3 bg-neutral-800 rounded w-1/2" />
+                    </div>
+                  </div>
+                  <div className="h-9 bg-neutral-800 rounded-xl" />
+                </div>
+              ))}
+            </div>
+          ) : activeRivals.length === 0 ? (
+            <div className="p-16 rounded-3xl bg-neutral-900 border border-neutral-800 text-center space-y-4">
+              <div className="w-16 h-16 rounded-2xl bg-neutral-800 text-neutral-500 flex items-center justify-center mx-auto">
+                <Users size={32} />
+              </div>
+              <div className="text-2xl font-black font-heading text-white uppercase">
+                No Rivals on Radar
+              </div>
+              <p className="text-xs text-neutral-400 max-w-sm mx-auto">
+                You haven't added any rivals to your battle roster yet. Recruit rivals from the Social network to challenge them to 1v1 wagers!
+              </p>
+              <button
+                onClick={() => navigate('/social')}
+                className="px-8 py-3 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-2xl text-xs uppercase shadow-lg transition-all"
+              >
+                Find & Add Rivals
+              </button>
+            </div>
+          ) : filteredRivals.length === 0 ? (
+            <div className="p-16 rounded-3xl bg-neutral-900 border border-neutral-800 text-center space-y-4">
+              <div className="w-16 h-16 rounded-2xl bg-neutral-800 text-neutral-500 flex items-center justify-center mx-auto">
+                <Target size={32} />
+              </div>
+              <div className="text-xl font-black font-heading text-white uppercase">
+                {rivalsFilter === 'ONLINE' ? 'No Rivals Currently Online' : 'No Rivals Matched Search'}
+              </div>
+              <p className="text-xs text-neutral-400 max-w-sm mx-auto">
+                {rivalsFilter === 'ONLINE'
+                  ? 'All of your rivals are currently offline. You can still challenge them or browse all rivals.'
+                  : `No rivals found matching "${rivalsSearch}". Try clearing your search.`}
+              </p>
+              <div className="flex items-center justify-center gap-3">
+                {rivalsFilter === 'ONLINE' && (
+                  <button
+                    onClick={() => setRivalsFilter('ALL')}
+                    className="px-6 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-white font-bold rounded-xl text-xs uppercase transition-all"
+                  >
+                    View All Rivals ({activeRivals.length})
+                  </button>
+                )}
+                {rivalsSearch && (
+                  <button
+                    onClick={() => setRivalsSearch('')}
+                    className="px-6 py-2.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black rounded-xl text-xs uppercase transition-all"
+                  >
+                    Clear Search
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {filteredRivals.map(rival => {
+                const isOnline = Boolean(rival.isOnline);
+                const wins = rival.stats?.wins ?? 0;
+                const losses = rival.stats?.losses ?? 0;
+                const winRate = rival.stats?.winRate ?? 0;
+                const tier = rival.tier || 'ROOKIE';
+
+                return (
+                  <div
+                    key={rival.id}
+                    className={`relative overflow-hidden p-5 rounded-2xl bg-neutral-900 border transition-all ${
+                      isOnline
+                        ? 'border-emerald-500/40 shadow-[0_0_20px_rgba(16,185,129,0.08)] hover:border-emerald-400/80'
+                        : 'border-neutral-800 hover:border-neutral-700'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        {/* Avatar with Presence Indicator */}
+                        <div className="relative shrink-0">
+                          {rival.avatarUrl ? (
+                            <img
+                              src={rival.avatarUrl}
+                              alt={rival.codmIgn}
+                              className="w-12 h-12 rounded-xl object-cover border border-neutral-700"
+                            />
+                          ) : (
+                            <div className="w-12 h-12 rounded-xl bg-neutral-800 border border-neutral-700 flex items-center justify-center text-amber-400 font-black text-base">
+                              {(rival.codmIgn || rival.username || '?').substring(0, 2).toUpperCase()}
+                            </div>
+                          )}
+                          <span
+                            className={`absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full border-2 border-neutral-900 ${
+                              isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-neutral-600'
+                            }`}
+                          />
+                        </div>
+
+                        {/* Name, Tier & Status */}
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-sm font-black text-white truncate font-heading tracking-wide">
+                              {rival.codmIgn || rival.username}
+                            </h3>
+                            <span className="text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-400/10 text-amber-400 border border-amber-400/30 shrink-0">
+                              {tier}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className={`text-[11px] font-bold flex items-center gap-1.5 ${
+                              isOnline ? 'text-emerald-400' : 'text-neutral-500'
+                            }`}>
+                              <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-neutral-600'}`} />
+                              {isOnline ? (rival.currentActivity || 'Active Online') : 'Offline'}
+                            </span>
+                            <span className="text-neutral-600 text-xs">·</span>
+                            <span className="text-neutral-400 text-[11px] font-mono">
+                              @{rival.username}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Online Status Tactical Pill */}
+                      {isOnline && (
+                        <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shrink-0">
+                          <Zap size={10} />
+                          READY TO BATTLE
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Stats HUD Bar */}
+                    <div className="mt-4 p-2.5 rounded-xl bg-black/60 border border-neutral-800/80 flex items-center justify-between text-xs font-mono">
+                      <div className="flex items-center gap-3">
+                        <span className="text-neutral-400">
+                          Wins: <strong className="text-emerald-400">{wins}</strong>
+                        </span>
+                        <span className="text-neutral-600">/</span>
+                        <span className="text-neutral-400">
+                          Losses: <strong className="text-rose-400">{losses}</strong>
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-neutral-400">Win Rate:</span>
+                        <span className="text-amber-400 font-bold">{winRate}%</span>
+                      </div>
+                    </div>
+
+                    {/* Actions: Challenge 1v1 + Chat */}
+                    <div className="mt-4 grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => onOpenCreateBet?.(undefined, undefined, rival.id)}
+                        className="py-2.5 px-3 bg-amber-400 hover:bg-amber-300 active:scale-95 text-neutral-950 font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Swords size={14} />
+                        Challenge 1v1
+                      </button>
+
+                      <button
+                        onClick={() => navigate(`/social?chat=${rival.id}`)}
+                        className="py-2.5 px-3 bg-neutral-800 hover:bg-neutral-700 active:scale-95 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition-all border border-neutral-700/60 flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <MessageCircle size={14} />
+                        Chat
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

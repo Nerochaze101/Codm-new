@@ -1048,3 +1048,9 @@ export async function fetchFriends(userId: string): Promise<any[]> {
   return data.friends || [];
 }
 
+export async function fetchActiveRivals(userId: string): Promise<any[]> {
+  const res = await fetch(`/api/friends/active-rivals?userId=${encodeURIComponent(userId)}`);
+  const data = await parseResponse(res);
+  return data.activeRivals || [];
+}
+
