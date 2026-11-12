@@ -520,6 +520,7 @@ function MainApp() {
     matchDurationMinutes?: number;
     isPublic?: boolean;
     matchType?: 'solo' | 'squad';
+    rivalId?: string;
   }) => {
     const newMatch = await createMatch({
       creatorId: currentUser.id,
@@ -528,7 +529,7 @@ function MainApp() {
       map: data.map,
       rules: data.rules,
       matchDurationMinutes: data.matchDurationMinutes,
-      isPublic: data.isPublic,
+      isPublic: data.rivalId ? false : data.isPublic,
       matchType: data.matchType || 'solo',
     });
 
@@ -543,26 +544,55 @@ function MainApp() {
         escrowBalance: prev.escrowBalance + data.stakeAmount,
       }));
 
-      // 3. Real-time alert notification showing exact payout amount
-      const isSquad = (data.matchType === 'squad') || (newMatch.matchType === 'squad');
-      const payoutText = isSquad
-        ? `5v5 Squad Created! Exact Payout: ₦${newMatch.winnerPayout.toLocaleString()} per winning player (₦${((newMatch.winnerPayout || 0) * 5).toLocaleString()} Team Prize Pool)`
-        : `1v1 Match Created! Winner Payout: ₦${newMatch.winnerPayout.toLocaleString()}`;
+      // 3. If challenging a specific rival, drop the challenge card into Rival Chat and manage it in chat
+      if (data.rivalId) {
+        try {
+          await fetch('/api/friends/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: `rival_chal_${newMatch.id}_${Date.now()}`,
+              rivalId: data.rivalId,
+              userId: currentUser.id,
+              senderId: currentUser.id,
+              senderName: currentUser.codmIgn || currentUser.username || 'Gladiator',
+              text: `⚔️ 1v1 CHALLENGE SENT: ₦${data.stakeAmount.toLocaleString()} on ${data.gameMode} (${data.map}) · Winner Payout ₦${newMatch.winnerPayout.toLocaleString()}`,
+              timestamp: Date.now(),
+              matchId: newMatch.id,
+              msgType: 'challenge',
+            }),
+          });
+        } catch (err) {
+          console.warn('Failed to post challenge card to rival chat:', err);
+        }
 
-      triggerNotificationAlert({
-        id: `match_created_${newMatch.id}`,
-        title: isSquad ? `🛡️ 5v5 Squad Wager Created!` : `⚔️ 1v1 Challenge Created!`,
-        body: payoutText,
-        soundType: 'default',
-        data: { matchId: newMatch.id, url: '/arena' },
-      });
+        setIsCreateBetOpen(false);
+        setCreateBetInitialMode(undefined);
+        setCreateBetInitialStake(undefined);
+        setCreateBetInitialRivalId(undefined);
+        navigate(`/social?chat=${encodeURIComponent(data.rivalId)}`);
+      } else {
+        // 3b. Real-time alert notification showing exact payout amount
+        const isSquad = (data.matchType === 'squad') || (newMatch.matchType === 'squad');
+        const payoutText = isSquad
+          ? `5v5 Squad Created! Exact Payout: ₦${newMatch.winnerPayout.toLocaleString()} per winning player (₦${((newMatch.winnerPayout || 0) * 5).toLocaleString()} Team Prize Pool)`
+          : `1v1 Match Created! Winner Payout: ₦${newMatch.winnerPayout.toLocaleString()}`;
 
-      // 4. Immediately close creation input modal, open payout success modal, and navigate to Arena view
-      setIsCreateBetOpen(false);
-      setCreateBetInitialMode(undefined);
-      setCreateBetInitialStake(undefined);
-      setCreatedMatchSuccess(newMatch);
-      navigate('/arena');
+        triggerNotificationAlert({
+          id: `match_created_${newMatch.id}`,
+          title: isSquad ? `🛡️ 5v5 Squad Wager Created!` : `⚔️ 1v1 Challenge Created!`,
+          body: payoutText,
+          soundType: 'default',
+          data: { matchId: newMatch.id, url: '/arena' },
+        });
+
+        // 4. Immediately close creation input modal, open payout success modal, and navigate to Arena view
+        setIsCreateBetOpen(false);
+        setCreateBetInitialMode(undefined);
+        setCreateBetInitialStake(undefined);
+        setCreatedMatchSuccess(newMatch);
+        navigate('/arena');
+      }
 
       // 5. Parallel background sync without blocking UI or showing full page loading spinners
       fetchUser(currentUser.id).then((u) => u && u.id && setCurrentUser(u)).catch(() => {});
@@ -993,7 +1023,7 @@ function MainApp() {
               maintenanceActive && !['admin', 'super_admin', 'moderator'].includes(currentUser.role || '') ? (
                 <MaintenanceOverlay />
               ) : (
-                <SocialTab currentUser={currentUser} onOpenCreateBet={handleOpenCreateBet} />
+                <SocialTab currentUser={currentUser} onOpenCreateBet={handleOpenCreateBet} onSyncAppState={loadData} />
               )
             }
           />

@@ -440,8 +440,30 @@ async function initDatabase() {
       CREATE INDEX IF NOT EXISTS idx_support_timestamp ON support_messages(timestamp);
       CREATE INDEX IF NOT EXISTS idx_support_status ON support_messages(status);
       
+      ALTER TABLE rival_chat_messages ADD COLUMN IF NOT EXISTS match_id VARCHAR(255);
+      ALTER TABLE rival_chat_messages ADD COLUMN IF NOT EXISTS msg_type VARCHAR(50) DEFAULT 'text';
       CREATE INDEX IF NOT EXISTS idx_rival_chat_rival_id ON rival_chat_messages(rival_id);
       CREATE INDEX IF NOT EXISTS idx_rival_chat_timestamp ON rival_chat_messages(timestamp);
+
+      CREATE TABLE IF NOT EXISTS world_chat_messages (
+        id VARCHAR(255) PRIMARY KEY,
+        sender_id VARCHAR(255) NOT NULL,
+        sender_name VARCHAR(255) NOT NULL,
+        sender_ign VARCHAR(255),
+        sender_avatar TEXT,
+        sender_tier VARCHAR(100),
+        sender_clan VARCHAR(100),
+        sender_role VARCHAR(50) DEFAULT 'user',
+        channel VARCHAR(50) DEFAULT 'global',
+        text TEXT NOT NULL,
+        match_id VARCHAR(255),
+        challenge_code VARCHAR(100),
+        stake_amount INTEGER,
+        game_mode VARCHAR(100),
+        timestamp BIGINT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_world_chat_timestamp ON world_chat_messages(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_world_chat_channel ON world_chat_messages(channel);
     `);
     const usersCountRes = await client.query("SELECT COUNT(*) FROM users");
     if (parseInt(usersCountRes.rows[0].count, 10) === 0) {
@@ -8928,7 +8950,8 @@ async function cleanHistoryOlderThan7Days() {
     );
     const depDel = await pool.query("DELETE FROM deposit_requests WHERE created_at < $1 AND status IN ('completed', 'expired')", [cutoff]);
     const withDel = await pool.query("DELETE FROM withdrawal_requests WHERE created_at < $1 AND status IN ('approved', 'rejected')", [cutoff]);
-    console.log(`[History Cleanup] Purged records older than 7 days: ${txDel.rowCount || 0} txs, ${matchDel.rowCount || 0} matches, ${depDel.rowCount || 0} deposits, ${withDel.rowCount || 0} withdrawals`);
+    const worldDel = await pool.query("DELETE FROM world_chat_messages WHERE timestamp < $1", [cutoff]);
+    console.log(`[History Cleanup] Purged records older than 7 days: ${txDel.rowCount || 0} txs, ${matchDel.rowCount || 0} matches, ${depDel.rowCount || 0} deposits, ${withDel.rowCount || 0} withdrawals, ${worldDel.rowCount || 0} world chat msgs`);
   } catch (err) {
     console.warn("[History Cleanup] Failed to run automated 7-day history purge:", err.message);
   }
@@ -9943,11 +9966,15 @@ app.get("/api/friends/chat/:rivalId", async (req, res) => {
       senderName: m.sender_name || "Rival",
       text: m.text,
       timestamp: Number(m.timestamp) || Date.now(),
+      matchId: m.match_id || undefined,
+      msgType: m.msg_type || "text",
       // Snake case fallbacks
       rival_id: m.rival_id,
       user_id: m.user_id,
       sender_id: m.sender_id,
       sender_name: m.sender_name,
+      match_id: m.match_id || undefined,
+      msg_type: m.msg_type || "text",
     }));
 
     res.json({ messages });
@@ -9959,7 +9986,7 @@ app.get("/api/friends/chat/:rivalId", async (req, res) => {
 
 app.post("/api/friends/chat", async (req, res) => {
   try {
-    const { rivalId, userId, text, id, senderName, timestamp } = req.body;
+    const { rivalId, userId, text, id, senderName, timestamp, matchId, msgType } = req.body;
     if (!rivalId || !userId || !text || !text.trim()) {
       return res.status(400).json({ error: "Missing required chat message parameters" });
     }
@@ -9968,12 +9995,14 @@ app.post("/api/friends/chat", async (req, res) => {
     const msgTime = Number(timestamp) || Date.now();
     const cleanText = text.trim();
     const cleanSenderName = senderName || "Rival";
+    const cleanMsgType = ["text", "challenge", "system"].includes(msgType) ? msgType : "text";
+    const cleanMatchId = matchId || null;
 
     await pool.query(
-      `INSERT INTO rival_chat_messages (id, rival_id, user_id, sender_id, sender_name, text, timestamp)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT (id) DO UPDATE SET text = EXCLUDED.text`,
-      [msgId, rivalId, userId, userId, cleanSenderName, cleanText, msgTime]
+      `INSERT INTO rival_chat_messages (id, rival_id, user_id, sender_id, sender_name, text, timestamp, match_id, msg_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (id) DO NOTHING`,
+      [msgId, rivalId, userId, userId, cleanSenderName, cleanText, msgTime, cleanMatchId, cleanMsgType]
     );
 
     const payload = {
@@ -9984,10 +10013,14 @@ app.post("/api/friends/chat", async (req, res) => {
       senderName: cleanSenderName,
       text: cleanText,
       timestamp: msgTime,
+      matchId: cleanMatchId || undefined,
+      msgType: cleanMsgType,
       rival_id: rivalId,
       user_id: userId,
       sender_id: userId,
       sender_name: cleanSenderName,
+      match_id: cleanMatchId || undefined,
+      msg_type: cleanMsgType,
     };
 
     if (globalIo) {
@@ -9999,17 +10032,18 @@ app.post("/api/friends/chat", async (req, res) => {
       // Push notification to the rival
       globalIo.emit("rivalNotification", {
         id: `chat_alert_${msgId}`,
-        type: "RIVAL_CHAT",
+        type: cleanMsgType === "challenge" ? "RIVAL_CHALLENGE" : "RIVAL_CHAT",
         targetUserId: rivalId,
         fromUserId: userId,
-        title: `💬 ${cleanSenderName} (1v1 Rival)`,
+        title: cleanMsgType === "challenge" ? `⚔️ 1v1 Challenge from ${cleanSenderName}` : `💬 ${cleanSenderName} (1v1 Rival)`,
         body: cleanText,
-        soundType: "default",
+        soundType: cleanMsgType === "challenge" ? "rival_joined" : "default",
         data: {
           type: "rival_chat",
           rivalId: userId,
           rivalIgn: cleanSenderName,
-          url: "/social"
+          matchId: cleanMatchId || undefined,
+          url: `/social?chat=${userId}`
         }
       });
     }
@@ -10049,6 +10083,186 @@ app.delete("/api/friends/chat/:rivalId", async (req, res) => {
   } catch (err) {
     console.error("[Friends] Failed to clear chat:", err);
     res.status(500).json({ error: "Failed to clear chat" });
+  }
+});
+
+// ==================== WORLD CHAT API ====================
+app.get("/api/world-chat", async (req, res) => {
+  try {
+    const channel = (req.query.channel || "all").toString().trim().toLowerCase();
+    const limit = Math.min(Math.max(parseInt((req.query.limit || "100").toString(), 10) || 100, 10), 200);
+
+    // Prune stale presence entries (> 65s)
+    const now = Date.now();
+    for (const [uid, info] of activeConnectedUsers.entries()) {
+      if (now - (info.lastSeen || 0) > 65000) {
+        activeConnectedUsers.delete(uid);
+      }
+    }
+
+    let queryRes;
+    if (channel !== "all" && ["global", "wagers", "lfg"].includes(channel)) {
+      queryRes = await pool.query(
+        `SELECT * FROM (
+          SELECT * FROM world_chat_messages
+          WHERE channel = $1
+          ORDER BY timestamp DESC
+          LIMIT $2
+        ) sub ORDER BY timestamp ASC`,
+        [channel, limit]
+      );
+    } else {
+      queryRes = await pool.query(
+        `SELECT * FROM (
+          SELECT * FROM world_chat_messages
+          ORDER BY timestamp DESC
+          LIMIT $1
+        ) sub ORDER BY timestamp ASC`,
+        [limit]
+      );
+    }
+
+    const messages = queryRes.rows.map((m) => ({
+      id: m.id,
+      senderId: m.sender_id,
+      senderName: m.sender_name,
+      senderIgn: m.sender_ign || m.sender_name,
+      senderAvatar: m.sender_avatar || undefined,
+      senderTier: m.sender_tier || "ROOKIE",
+      senderClan: m.sender_clan || undefined,
+      senderRole: m.sender_role || "user",
+      channel: (m.channel || "global") as "global" | "wagers" | "lfg",
+      text: m.text,
+      matchId: m.match_id || undefined,
+      challengeCode: m.challenge_code || undefined,
+      stakeAmount: m.stake_amount ? Number(m.stake_amount) : undefined,
+      gameMode: m.game_mode || undefined,
+      timestamp: Number(m.timestamp) || Date.now(),
+    }));
+
+    res.json({
+      messages,
+      onlineCount: Math.max(activeConnectedUsers.size, globalIo ? globalIo.engine.clientsCount : 1),
+    });
+  } catch (err) {
+    console.error("[WorldChat] Failed to fetch messages:", err);
+    res.status(500).json({ error: "Failed to load world chat" });
+  }
+});
+
+app.post("/api/world-chat", async (req, res) => {
+  try {
+    const {
+      id,
+      senderId,
+      senderName,
+      senderIgn,
+      senderAvatar,
+      senderTier,
+      senderClan,
+      senderRole,
+      channel,
+      text,
+      matchId,
+      challengeCode,
+      stakeAmount,
+      gameMode,
+      timestamp,
+    } = req.body || {};
+
+    if (!senderId || senderId === "guest") {
+      return res.status(401).json({ error: "Sign in to chat in World Chat" });
+    }
+    if (!text || !text.toString().trim()) {
+      return res.status(400).json({ error: "Message text cannot be empty" });
+    }
+
+    const cleanText = text.toString().trim().slice(0, 400);
+    const validChannel = ["global", "wagers", "lfg"].includes((channel || "").toLowerCase())
+      ? channel.toLowerCase()
+      : "global";
+
+    // Fetch authoritative user info from DB if available
+    const userObj = await getUserFromDb(senderId).catch(() => null);
+    const msgId = id || `wc_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    const msgTime = Number(timestamp) || Date.now();
+
+    const payload = {
+      id: msgId,
+      senderId,
+      senderName: userObj?.username || senderName || "Operator",
+      senderIgn: userObj?.codmIgn || senderIgn || senderName || "Operator",
+      senderAvatar: userObj?.avatar || senderAvatar || undefined,
+      senderTier: userObj?.tier || senderTier || "ROOKIE",
+      senderClan: userObj?.clan || senderClan || undefined,
+      senderRole: userObj?.role || senderRole || "user",
+      channel: validChannel,
+      text: cleanText,
+      matchId: matchId || undefined,
+      challengeCode: challengeCode || undefined,
+      stakeAmount: stakeAmount ? Number(stakeAmount) : undefined,
+      gameMode: gameMode || undefined,
+      timestamp: msgTime,
+    };
+
+    await pool.query(
+      `INSERT INTO world_chat_messages (
+        id, sender_id, sender_name, sender_ign, sender_avatar, sender_tier, sender_clan, sender_role,
+        channel, text, match_id, challenge_code, stake_amount, game_mode, timestamp
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      ON CONFLICT (id) DO NOTHING`,
+      [
+        payload.id,
+        payload.senderId,
+        payload.senderName,
+        payload.senderIgn,
+        payload.senderAvatar || null,
+        payload.senderTier,
+        payload.senderClan || null,
+        payload.senderRole,
+        payload.channel,
+        payload.text,
+        payload.matchId || null,
+        payload.challengeCode || null,
+        payload.stakeAmount || null,
+        payload.gameMode || null,
+        payload.timestamp,
+      ]
+    );
+
+    if (globalIo) {
+      globalIo.emit("world_chat_message", payload);
+    }
+
+    res.json({ success: true, message: payload });
+  } catch (err) {
+    console.error("[WorldChat] Failed to post message:", err);
+    res.status(500).json({ error: "Failed to send world chat message" });
+  }
+});
+
+app.delete("/api/world-chat/:id", async (req, res) => {
+  try {
+    const msgId = req.params.id;
+    const userId = (req.query.userId || "").toString().trim();
+    if (!msgId || !userId) return res.status(400).json({ error: "Missing parameters" });
+
+    const userObj = await getUserFromDb(userId).catch(() => null);
+    const isAdminOrMod = ["admin", "super_admin", "moderator"].includes(userObj?.role || "");
+
+    if (isAdminOrMod) {
+      await pool.query("DELETE FROM world_chat_messages WHERE id = $1", [msgId]);
+    } else {
+      await pool.query("DELETE FROM world_chat_messages WHERE id = $1 AND sender_id = $2", [msgId, userId]);
+    }
+
+    if (globalIo) {
+      globalIo.emit("world_chat_deleted", { id: msgId });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[WorldChat] Failed to delete message:", err);
+    res.status(500).json({ error: "Failed to delete message" });
   }
 });
 
@@ -10143,6 +10357,73 @@ async function startServer() {
       if (data.room) {
         socket.join(data.room);
         console.log(`Socket ${socket.id} joined rival room: ${data.room}`);
+      }
+    });
+
+    socket.on("join_world_chat", () => {
+      socket.join("world_chat");
+      io.to("world_chat").emit("world_chat_online", {
+        onlineCount: Math.max(activeConnectedUsers.size, io.engine.clientsCount),
+      });
+    });
+
+    socket.on("world_chat_message", async (data) => {
+      try {
+        if (!data || !data.senderId || data.senderId === "guest" || !data.text || !data.text.toString().trim()) return;
+        const cleanText = data.text.toString().trim().slice(0, 400);
+        const validChannel = ["global", "wagers", "lfg"].includes((data.channel || "").toLowerCase())
+          ? data.channel.toLowerCase()
+          : "global";
+        const userObj = await getUserFromDb(data.senderId).catch(() => null);
+        const msgId = data.id || `wc_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+        const msgTime = Number(data.timestamp) || Date.now();
+
+        const payload = {
+          id: msgId,
+          senderId: data.senderId,
+          senderName: userObj?.username || data.senderName || "Operator",
+          senderIgn: userObj?.codmIgn || data.senderIgn || data.senderName || "Operator",
+          senderAvatar: userObj?.avatar || data.senderAvatar || undefined,
+          senderTier: userObj?.tier || data.senderTier || "ROOKIE",
+          senderClan: userObj?.clan || data.senderClan || undefined,
+          senderRole: userObj?.role || data.senderRole || "user",
+          channel: validChannel,
+          text: cleanText,
+          matchId: data.matchId || undefined,
+          challengeCode: data.challengeCode || undefined,
+          stakeAmount: data.stakeAmount ? Number(data.stakeAmount) : undefined,
+          gameMode: data.gameMode || undefined,
+          timestamp: msgTime,
+        };
+
+        await pool.query(
+          `INSERT INTO world_chat_messages (
+            id, sender_id, sender_name, sender_ign, sender_avatar, sender_tier, sender_clan, sender_role,
+            channel, text, match_id, challenge_code, stake_amount, game_mode, timestamp
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          ON CONFLICT (id) DO NOTHING`,
+          [
+            payload.id,
+            payload.senderId,
+            payload.senderName,
+            payload.senderIgn,
+            payload.senderAvatar || null,
+            payload.senderTier,
+            payload.senderClan || null,
+            payload.senderRole,
+            payload.channel,
+            payload.text,
+            payload.matchId || null,
+            payload.challengeCode || null,
+            payload.stakeAmount || null,
+            payload.gameMode || null,
+            payload.timestamp,
+          ]
+        );
+
+        io.emit("world_chat_message", payload);
+      } catch (err) {
+        console.error("[WorldChat] Error processing socket world_chat_message:", err);
       }
     });
 
@@ -10256,6 +10537,8 @@ async function startServer() {
         const cleanText = data.text.trim();
         const cleanSenderName = data.senderName || "Rival";
         const senderId = data.senderId || data.userId;
+        const cleanMsgType = ["text", "challenge", "system"].includes(data.msgType) ? data.msgType : "text";
+        const cleanMatchId = data.matchId || null;
 
         const newMsg = {
           id: msgId,
@@ -10265,17 +10548,21 @@ async function startServer() {
           senderName: cleanSenderName,
           text: cleanText,
           timestamp: msgTime,
+          matchId: cleanMatchId || undefined,
+          msgType: cleanMsgType,
           rival_id: data.rivalId,
           user_id: data.userId,
           sender_id: senderId,
           sender_name: cleanSenderName,
+          match_id: cleanMatchId || undefined,
+          msg_type: cleanMsgType,
         };
 
         await pool.query(
-          `INSERT INTO rival_chat_messages (id, rival_id, user_id, sender_id, sender_name, text, timestamp)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
-           ON CONFLICT (id) DO UPDATE SET text = EXCLUDED.text`,
-          [msgId, data.rivalId, data.userId, senderId, cleanSenderName, cleanText, msgTime]
+          `INSERT INTO rival_chat_messages (id, rival_id, user_id, sender_id, sender_name, text, timestamp, match_id, msg_type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (id) DO NOTHING`,
+          [msgId, data.rivalId, data.userId, senderId, cleanSenderName, cleanText, msgTime, cleanMatchId, cleanMsgType]
         );
 
         const room = `rival_chat_${[data.rivalId, data.userId].sort().join('_')}`;
@@ -10286,22 +10573,45 @@ async function startServer() {
         // Push alert to rival
         io.emit("rivalNotification", {
           id: `chat_alert_${msgId}`,
-          type: "RIVAL_CHAT",
+          type: cleanMsgType === "challenge" ? "RIVAL_CHALLENGE" : "RIVAL_CHAT",
           targetUserId: data.rivalId,
           fromUserId: data.userId,
-          title: `💬 ${cleanSenderName} (1v1 Rival)`,
+          title: cleanMsgType === "challenge" ? `⚔️ 1v1 Challenge from ${cleanSenderName}` : `💬 ${cleanSenderName} (1v1 Rival)`,
           body: cleanText,
-          soundType: "default",
+          soundType: cleanMsgType === "challenge" ? "rival_joined" : "default",
           data: {
             type: "rival_chat",
             rivalId: data.userId,
             rivalIgn: cleanSenderName,
-            url: "/social"
+            matchId: cleanMatchId || undefined,
+            url: `/social?chat=${data.userId}`
           }
         });
       } catch (err) {
         console.error("Error processing rival chat message:", err);
       }
+    });
+
+    socket.on("rival_typing", (data) => {
+      if (!data || !data.userId || !data.rivalId) return;
+      const room = `rival_chat_${[data.rivalId, data.userId].sort().join('_')}`;
+      const typingPayload = {
+        userId: data.userId,
+        rivalId: data.rivalId,
+        senderName: data.senderName || "Rival",
+        isTyping: Boolean(data.isTyping),
+      };
+      socket.to(room).emit("rival_typing", typingPayload);
+      socket.broadcast.emit(`rival_typing_${data.rivalId}`, typingPayload);
+    });
+
+    socket.on("world_typing", (data) => {
+      if (!data || !data.userId || data.userId === "guest") return;
+      socket.to("world_chat").emit("world_typing", {
+        userId: data.userId,
+        senderIgn: data.senderIgn || "Operator",
+        isTyping: Boolean(data.isTyping),
+      });
     });
 
     socket.on("audio_stream", (data) => {

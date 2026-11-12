@@ -12,9 +12,10 @@ import { requestNotificationPermission, getNotificationPermission } from '../ser
 interface SocialTabProps {
   currentUser: UserProfile;
   onOpenCreateBet: (mode?: string, stake?: number, rivalId?: string) => void;
+  onSyncAppState?: () => Promise<void> | void;
 }
 
-export const SocialTab: React.FC<SocialTabProps> = ({ currentUser, onOpenCreateBet }) => {
+export const SocialTab: React.FC<SocialTabProps> = ({ currentUser, onOpenCreateBet, onSyncAppState }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [friends, setFriends] = useState<any[]>([]);
@@ -22,6 +23,7 @@ export const SocialTab: React.FC<SocialTabProps> = ({ currentUser, onOpenCreateB
   const [hasSearched, setHasSearched] = useState(false);
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [selectedRival, setSelectedRival] = useState<any>(null);
+  const [openChallengeInChat, setOpenChallengeInChat] = useState(false);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -167,10 +169,18 @@ export const SocialTab: React.FC<SocialTabProps> = ({ currentUser, onOpenCreateB
       <div className="w-full max-w-5xl mx-auto p-1 sm:p-2 animate-in fade-in duration-200">
         <RivalChat
           currentUser={currentUser}
-          rival={{ id: selectedRival.id, codm_ign: selectedRival.codm_ign || selectedRival.codmIgn }}
+          rival={{
+            id: selectedRival.id,
+            codm_ign: selectedRival.codm_ign || selectedRival.codmIgn,
+            avatar: selectedRival.avatar,
+            tier: selectedRival.tier,
+          }}
+          openChallengeOnMount={openChallengeInChat}
+          onSyncAppState={onSyncAppState}
           onChallenge={(rivalId) => onOpenCreateBet(undefined, undefined, rivalId)}
           onBack={() => {
             setSelectedRival(null);
+            setOpenChallengeInChat(false);
             loadFriends();
           }}
         />
@@ -498,7 +508,10 @@ export const SocialTab: React.FC<SocialTabProps> = ({ currentUser, onOpenCreateB
 
                 <div className="grid grid-cols-2 gap-2 pt-2 border-t border-neutral-800/80">
                   <button
-                    onClick={() => setSelectedRival(friend)}
+                    onClick={() => {
+                      setOpenChallengeInChat(false);
+                      setSelectedRival(friend);
+                    }}
                     className="py-2 px-3 bg-neutral-800 hover:bg-neutral-700 text-white rounded-lg text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95"
                   >
                     <MessageCircle className="w-3.5 h-3.5 text-cyan-400" />
@@ -506,7 +519,10 @@ export const SocialTab: React.FC<SocialTabProps> = ({ currentUser, onOpenCreateB
                   </button>
 
                   <button
-                    onClick={() => onOpenCreateBet(undefined, undefined, friend.id)}
+                    onClick={() => {
+                      setOpenChallengeInChat(true);
+                      setSelectedRival(friend);
+                    }}
                     className="py-2 px-3 bg-amber-400 hover:bg-amber-300 text-neutral-950 rounded-lg text-xs font-black uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95 shadow font-heading"
                   >
                     <Trophy className="w-3.5 h-3.5" />

@@ -1,24 +1,25 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
-import { UserProfile, Match } from '../types';
+import { UserProfile, Match, WorldChatMessage } from '../types';
 import {
   Swords, ShieldCheck, Trophy, Copy, Check, Share2, Upload,
   ArrowRight, AlertCircle, CheckCircle2, MessageCircle, Wallet,
   UserCheck, RefreshCw, Sparkles, Crosshair, Target, X, Plus,
   Flame, Zap, Users, Flag, Shield, Sliders, ChevronRight, Gamepad2, MapPin,
   TrendingUp, Award, Clock, Lock, AlertTriangle, XCircle, Bell, Info, ExternalLink, Send,
-  Search, Radio
+  Search, Radio, Globe
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { SkeletonLoader } from './SkeletonLoader';
 import { StakePaymentModal } from './StakePaymentModal';
 import { MatchLobbyChat } from './MatchLobbyChat';
+import { WorldChat } from './WorldChat';
 import { requestNotificationPermission, getNotificationPermission, isIOS, isStandalone } from '../services/notificationService';
 import { IOSNotificationGuideModal } from './IOSNotificationGuideModal';
 import { playShotgunSound } from '../hooks/useSound';
 import { VideoTutorial } from './VideoTutorial';
-import { uploadMatchVideoWithProgress, fetchActiveRivals } from '../services/api';
+import { uploadMatchVideoWithProgress, fetchActiveRivals, fetchWorldChatMessages } from '../services/api';
 
 const CardBackground = () => (
   <div className="absolute inset-0 z-0 opacity-10">
@@ -141,7 +142,19 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
     ? myActiveMatches.find(m => m.id === selectedActiveMatchId) || myActiveMatches[0]
     : myActiveMatches[0];
 
-  const [arenaTab, setArenaTab] = useState<'live' | 'active' | 'rivals' | 'hosted'>(() => myActiveMatches.length > 0 ? 'active' : 'live');
+  const [arenaTab, setArenaTab] = useState<'live' | 'active' | 'rivals' | 'world' | 'hosted'>(() => myActiveMatches.length > 0 ? 'active' : 'live');
+  const arenaTabRef = useRef(arenaTab);
+  useEffect(() => {
+    arenaTabRef.current = arenaTab;
+    if (arenaTab === 'world') {
+      setWorldChatUnread(0);
+    }
+  }, [arenaTab]);
+
+  const [latestWorldMsg, setLatestWorldMsg] = useState<WorldChatMessage | null>(null);
+  const [worldOnlineCount, setWorldOnlineCount] = useState<number>(1);
+  const [worldChatUnread, setWorldChatUnread] = useState<number>(0);
+
   const [activeRivals, setActiveRivals] = useState<any[]>([]);
   const [rivalsLoading, setRivalsLoading] = useState<boolean>(false);
   const [rivalsSearch, setRivalsSearch] = useState<string>('');
@@ -161,11 +174,38 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
   };
 
   useEffect(() => {
-    if (!currentUser?.id || currentUser.id === 'guest') return;
+    fetchWorldChatMessages('all')
+      .then((res) => {
+        if (res.messages.length > 0) {
+          setLatestWorldMsg(res.messages[res.messages.length - 1]);
+        }
+        if (res.onlineCount) setWorldOnlineCount(res.onlineCount);
+      })
+      .catch(() => {});
+
+    const socket = io();
+    socket.emit('join_world_chat');
+
+    socket.on('world_chat_message', (msg: WorldChatMessage) => {
+      if (!msg?.id) return;
+      setLatestWorldMsg(msg);
+      if (arenaTabRef.current !== 'world' && msg.senderId !== currentUser?.id) {
+        setWorldChatUnread((c) => Math.min(c + 1, 99));
+      }
+    });
+
+    socket.on('world_chat_online', (data: { onlineCount?: number }) => {
+      if (data?.onlineCount) setWorldOnlineCount(data.onlineCount);
+    });
+
+    if (!currentUser?.id || currentUser.id === 'guest') {
+      return () => {
+        socket.disconnect();
+      };
+    }
 
     loadActiveRivals();
 
-    const socket = io();
     socket.on('rival_presence_update', (data: { userId: string; isOnline: boolean; currentActivity?: string }) => {
       setActiveRivals(prev => prev.map(r => {
         if (r.id === data.userId) {
@@ -430,8 +470,8 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
       )}
 
       {/* 2. Tab Switcher */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-1.5 rounded-2xl bg-neutral-900 border border-neutral-800 max-w-2xl mx-auto">
-        {(['live', 'active', 'rivals', 'hosted'] as const).map(tab => {
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 p-1.5 rounded-2xl bg-neutral-900 border border-neutral-800 max-w-3xl mx-auto">
+        {(['live', 'active', 'world', 'rivals', 'hosted'] as const).map(tab => {
           const isActive = arenaTab === tab;
           return (
             <button
@@ -443,12 +483,23 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
             >
               {tab === 'live' && <Flame size={15} className={isActive ? 'text-neutral-950' : 'text-amber-400'} />}
               {tab === 'active' && <Zap size={15} className={isActive ? 'text-neutral-950' : 'text-amber-400'} />}
+              {tab === 'world' && <Globe size={15} className={isActive ? 'text-neutral-950' : 'text-sky-400'} />}
               {tab === 'rivals' && <Users size={15} className={isActive ? 'text-neutral-950' : 'text-emerald-400'} />}
               {tab === 'hosted' && <Swords size={15} className={isActive ? 'text-neutral-950' : 'text-amber-400'} />}
 
               <span className="truncate">
                 {tab === 'live' && `Live (${openChallenges.length})`}
                 {tab === 'active' && `In Battle ${myActiveMatches.length > 0 ? `(${myActiveMatches.length})` : ''}`}
+                {tab === 'world' && (
+                  <span className="inline-flex items-center gap-1.5">
+                    World
+                    {worldChatUnread > 0 && !isActive && (
+                      <span className="inline-flex items-center justify-center font-mono text-[10px] px-1.5 py-0.5 rounded-full bg-sky-500/20 text-sky-300 border border-sky-400/40 font-black">
+                        {worldChatUnread}
+                      </span>
+                    )}
+                  </span>
+                )}
                 {tab === 'rivals' && (
                   <span className="inline-flex items-center gap-1.5">
                     Rivals
@@ -474,6 +525,33 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
       {/* 3. Live Lobby Tab */}
       {arenaTab === 'live' && (
         <div className="space-y-6">
+          {/* CoD Mobile Style World Chat Live Ticker */}
+          <button
+            type="button"
+            onClick={() => setArenaTab('world')}
+            className="w-full p-3 sm:px-4 sm:py-3 rounded-2xl bg-[#0b1117] hover:bg-[#101821] border border-sky-500/30 hover:border-amber-400/60 transition-all flex items-center justify-between gap-3 text-left shadow-lg cursor-pointer group"
+          >
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              <div className="px-2.5 py-1 rounded-lg bg-sky-500/15 border border-sky-400/30 text-sky-300 text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 shrink-0">
+                <Globe size={12} className="animate-pulse" />
+                World Chat
+              </div>
+              {latestWorldMsg ? (
+                <div className="text-xs text-neutral-300 truncate flex items-center gap-1.5 min-w-0">
+                  <span className="font-black text-amber-400 shrink-0">[{latestWorldMsg.senderIgn || latestWorldMsg.senderName}]:</span>
+                  <span className="truncate text-neutral-200">{latestWorldMsg.text}</span>
+                </div>
+              ) : (
+                <span className="text-xs text-neutral-400 truncate">
+                  {worldOnlineCount} operators online — Tap to chat publicly, recruit squads & drop 1v1 wagers!
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-amber-400 group-hover:translate-x-0.5 transition-transform shrink-0">
+              <span>Open Comms</span>
+              <ArrowRight size={14} />
+            </div>
+          </button>
           {myActiveMatch && (
             <div className={`p-4 rounded-2xl bg-neutral-900 border-2 flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in shadow-xl ${
               myActiveMatch.matchType === 'squad' ? 'border-emerald-500/80' : 'border-amber-400'
@@ -1613,7 +1691,28 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
         </div>
       )}
 
-      {/* 5. Hosted Bets Tab */}
+      {/* 5. World Chat Tab */}
+      {arenaTab === 'world' && (
+        <WorldChat
+          currentUser={currentUser}
+          myHostedBets={myHostedBets}
+          openChallenges={openChallenges}
+          onAcceptChallenge={(match) => {
+            const isSquad = match.matchType === 'squad' || Boolean(match.squadData);
+            if (isSquad) {
+              setArenaTab('live');
+            } else {
+              setStakeTargetMatch(match);
+              setStakeRole('opponent');
+              setIsStakeModalOpen(true);
+            }
+          }}
+          onChallengePlayer={(playerId) => onOpenCreateBet?.(undefined, undefined, playerId)}
+          onNavigateToSocial={() => navigate('/social')}
+        />
+      )}
+
+      {/* 6. Hosted Bets Tab */}
       {arenaTab === 'hosted' && (
         <div className="space-y-6">
           <h2 className="text-2xl font-black text-white uppercase tracking-widest">My Hosted Bets</h2>

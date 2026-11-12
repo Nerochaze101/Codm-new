@@ -1054,3 +1054,45 @@ export async function fetchActiveRivals(userId: string): Promise<any[]> {
   return data.activeRivals || [];
 }
 
+export async function fetchWorldChatMessages(channel: string = 'all'): Promise<{ messages: any[]; onlineCount: number }> {
+  const res = await fetch(`/api/world-chat?channel=${encodeURIComponent(channel)}&limit=100`);
+  const data = await parseResponse(res);
+  return {
+    messages: data.messages || [],
+    onlineCount: Number(data.onlineCount) || 1,
+  };
+}
+
+export async function postWorldChatMessage(payload: {
+  id: string;
+  senderId: string;
+  senderName: string;
+  senderIgn: string;
+  senderAvatar?: string;
+  senderTier?: string;
+  senderClan?: string;
+  senderRole?: string;
+  channel: 'global' | 'wagers' | 'lfg';
+  text: string;
+  matchId?: string;
+  challengeCode?: string;
+  stakeAmount?: number;
+  gameMode?: string;
+  timestamp: number;
+}): Promise<any> {
+  const res = await fetch('/api/world-chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return await parseResponse(res);
+}
+
+export async function deleteWorldChatMessage(msgId: string, userId: string): Promise<void> {
+  const res = await fetch(`/api/world-chat/${encodeURIComponent(msgId)}?userId=${encodeURIComponent(userId)}`, {
+    method: 'DELETE',
+  });
+  await parseResponse(res);
+}
+
+

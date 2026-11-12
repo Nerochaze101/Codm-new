@@ -263,5 +263,26 @@ export interface RivalChatMessage {
   senderName: string;
   text: string;
   timestamp: number;
+  matchId?: string;
+  msgType?: 'text' | 'challenge' | 'system';
 }
+
+export interface WorldChatMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  senderIgn: string;
+  senderAvatar?: string;
+  senderTier?: string;
+  senderClan?: string;
+  senderRole?: string;
+  channel: 'global' | 'wagers' | 'lfg';
+  text: string;
+  matchId?: string;
+  challengeCode?: string;
+  stakeAmount?: number;
+  gameMode?: string;
+  timestamp: number;
+}
+
 
