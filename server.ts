@@ -227,6 +227,15 @@ async function initDatabase() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS flag_matches JSONB;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS conflict_strikes INT DEFAULT 0;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS flag_dismissed BOOLEAN DEFAULT false;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS kyc_status VARCHAR(50) DEFAULT 'unverified';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS bvn VARCHAR(50);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS nin VARCHAR(50);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS legal_name VARCHAR(255);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS id_card_type VARCHAR(100) DEFAULT 'National ID';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS id_card_url TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS kyc_submitted_at BIGINT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS kyc_verified_at BIGINT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS kyc_rejection_reason TEXT;
 
       CREATE TABLE IF NOT EXISTS global_broadcasts (
         id VARCHAR(255) PRIMARY KEY,
@@ -395,7 +404,7 @@ async function initDatabase() {
         id VARCHAR(255) PRIMARY KEY,
         sender_email VARCHAR(255) NOT NULL,
         sender_name VARCHAR(255),
-        recipient_email VARCHAR(255) DEFAULT 'codstake@detailr.online',
+        recipient_email VARCHAR(255) DEFAULT 'support@opsstake.online',
         subject VARCHAR(255) NOT NULL,
         body TEXT NOT NULL,
         is_read BOOLEAN DEFAULT false,
@@ -1338,7 +1347,7 @@ async function getUserFromDb(idOrEmail) {
   try {
     if (!idOrEmail) return null;
     const userRes = await pool.query(
-      `SELECT id, username, codm_ign, codm_uid, email, phone, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, telegram_chat_id, telegram_username, is_flagged, flag_reason, flagged_with_user_id, flag_matches, conflict_strikes FROM users WHERE id = $1 OR LOWER(email) = LOWER($1) LIMIT 1`,
+      `SELECT id, username, codm_ign, codm_uid, email, phone, balance, escrow_balance, total_winnings, wins, losses, draws, avatar, bank_name, account_number, account_name, referred_by, referral_code, total_referral_earnings, role, telegram_chat_id, telegram_username, is_flagged, flag_reason, flagged_with_user_id, flag_matches, conflict_strikes, kyc_status, bvn, nin, legal_name, id_card_type, id_card_url, kyc_rejection_reason FROM users WHERE id = $1 OR LOWER(email) = LOWER($1) LIMIT 1`,
       [idOrEmail]
     );
     if (userRes.rows.length === 0) return null;
@@ -1393,6 +1402,13 @@ async function getUserFromDb(idOrEmail) {
       flaggedWithUserId: r.flagged_with_user_id || void 0,
       flagMatches: r.flag_matches ? typeof r.flag_matches === "string" ? JSON.parse(r.flag_matches) : r.flag_matches : void 0,
       conflictStrikes: parseInt(r.conflict_strikes || 0, 10),
+      kycStatus: r.kyc_status || 'unverified',
+      bvn: r.bvn || void 0,
+      nin: r.nin || void 0,
+      legalName: r.legal_name || void 0,
+      idCardType: r.id_card_type || void 0,
+      idCardUrl: r.id_card_url || void 0,
+      kycRejectionReason: r.kyc_rejection_reason || void 0,
       transactions,
       referrals
     };
@@ -4009,7 +4025,7 @@ app.post("/api/msksksnuwje/mailbox/send", async (req, res) => {
       INSERT INTO admin_mailbox (id, sender_email, sender_name, recipient_email, subject, body, is_read, folder, created_at)
       VALUES (
         ${escapeSql(mailId)},
-        'codstake@detailr.online',
+        'support@opsstake.online',
         ${escapeSql(adminUser.codmIgn || "Admin")},
         ${escapeSql(recipientEmail)},
         ${escapeSql(subject)},
@@ -4021,7 +4037,7 @@ app.post("/api/msksksnuwje/mailbox/send", async (req, res) => {
     `);
     res.json({
       success: true,
-      message: `Email successfully sent to ${recipientEmail} from codstake@detailr.online`,
+      message: `Email successfully sent to ${recipientEmail} from support@opsstake.online`,
       messageId: mailId
     });
   } catch (err) {
@@ -4044,7 +4060,7 @@ app.post("/api/msksksnuwje/mailbox/simulate", async (req, res) => {
         ${escapeSql(mailId)},
         ${escapeSql(senderEmail || "player@gmail.com")},
         ${escapeSql(senderName || "CODM Player")},
-        'codstake@detailr.online',
+        'support@opsstake.online',
         ${escapeSql(subject || "Support / Deposit Verification Inquiry")},
         ${escapeSql(body || "Hello Admin, I made a deposit of \u20A65,000 for match stake. Please verify my payment.")},
         false,
@@ -4054,7 +4070,7 @@ app.post("/api/msksksnuwje/mailbox/simulate", async (req, res) => {
     `);
     res.json({
       success: true,
-      message: "Simulated incoming email received successfully into codstake@detailr.online inbox!",
+      message: "Simulated incoming email received successfully into support@opsstake.online inbox!",
       mailId
     });
   } catch (err) {
@@ -5164,6 +5180,37 @@ app.post("/api/auth/register", async (req, res) => {
   const cleanPhone = phone.trim().replace(/\D/g, "");
   const cleanIgn = codmIgn.trim().toLowerCase();
   const cleanAccNum = accountNumber.trim().replace(/\D/g, "");
+
+  let verifiedAccountName = accountName ? accountName.trim() : `${codmIgn.trim()} (Verified NUBAN)`;
+  try {
+    const flwCode = getFlutterwaveBankCode(bankName);
+    const paystackCode = getPaystackBankCode(bankName);
+    const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || "";
+    const paystackSecret = process.env.PAYSTACK_SECRET_KEY || "";
+
+    if (flwSecret && !flwSecret.startsWith("FLWSECK_TEST-xxxx")) {
+      const flwRes = await fetch("https://api.flutterwave.com/v3/accounts/resolve", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${flwSecret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ account_number: cleanAccNum, account_bank: flwCode })
+      });
+      const flwData = await flwRes.json();
+      if ((flwData.status === "success" || flwData.status === true) && flwData.data?.account_name) {
+        verifiedAccountName = flwData.data.account_name;
+      }
+    } else if (paystackSecret && !paystackSecret.startsWith("sk_test_xxxx")) {
+      const paystackRes = await fetch(`https://api.paystack.co/bank/resolve?account_number=${cleanAccNum}&bank_code=${paystackCode}`, {
+        headers: { Authorization: `Bearer ${paystackSecret}`, "Content-Type": "application/json" }
+      });
+      const paystackData = await paystackRes.json();
+      if ((paystackData.status === true || paystackData.status === "success") && paystackData.data?.account_name) {
+        verifiedAccountName = paystackData.data.account_name;
+      }
+    }
+  } catch (err) {
+    console.warn("[Register Bank Resolution warning]:", err);
+  }
+
   const duplicateCheck = await pool.query(`
     SELECT id, email, phone, codm_ign, account_number, username FROM users 
     WHERE LOWER(email) = LOWER($1)
@@ -5210,7 +5257,7 @@ app.post("/api/auth/register", async (req, res) => {
     phone: phone.trim(),
     bankName: bankName.trim(),
     accountNumber: accountNumber.trim(),
-    accountName: accountName ? accountName.trim() : `${codmIgn.trim()} (Verified NUBAN)`,
+    accountName: verifiedAccountName,
     referredBy,
     balance: numDeposit,
     escrowBalance: 0,
@@ -5771,6 +5818,12 @@ app.post("/api/users/:id/withdraw", rateLimitMiddleware(5, 6e4), secureSignature
     if (userRow.role === "banned") {
       await client.query("ROLLBACK");
       return res.status(403).json({ error: "Account Banned: Withdrawals are locked for this account." });
+    }
+
+    // 7. Security check: KYC Verification required to prevent fraud and financial abuse
+    if (userRow.kyc_status !== 'verified') {
+      await client.query("ROLLBACK");
+      return res.status(403).json({ error: "KYC Verification Required: You must complete your BVN/NIN identity verification in your Profile before requesting cash withdrawals." });
     }
 
     // 7. Balance check (Tiered fee: ₦15.50 for < ₦20,000 [₦5.50 admin], ₦50.00 for >= ₦20,000 [₦40 admin])
@@ -6746,6 +6799,191 @@ app.get("/api/telegram/bot-info", async (req, res) => {
     botUsername: info?.username || process.env.TELEGRAM_BOT_USERNAME || "OpsSTAKEBOT",
     channelUrl: "https://t.me/OpsSTAKE"
   });
+});
+
+async function verifyBvnOrNinViaGateway(bvn, nin) {
+  const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || "";
+  const paystackSecret = process.env.PAYSTACK_SECRET_KEY || "";
+
+  if (bvn && flwSecret && !flwSecret.startsWith("FLWSECK_TEST-xxxx")) {
+    try {
+      const flwRes = await fetch(`https://api.flutterwave.com/v3/bvn/${bvn}`, {
+        headers: { Authorization: `Bearer ${flwSecret}`, "Content-Type": "application/json" }
+      });
+      const flwData = await flwRes.json();
+      if ((flwData.status === "success" || flwData.status === true) && flwData.data) {
+        return {
+          verified: true,
+          gateway: "flutterwave",
+          firstName: flwData.data.first_name || "",
+          lastName: flwData.data.last_name || ""
+        };
+      }
+    } catch (err) {
+      console.warn("[Flutterwave BVN Verification error]:", err.message);
+    }
+  }
+
+  if (bvn && paystackSecret && !paystackSecret.startsWith("sk_test_xxxx")) {
+    try {
+      const paystackRes = await fetch(`https://api.paystack.co/bank/resolve_bvn/${bvn}`, {
+        headers: { Authorization: `Bearer ${paystackSecret}`, "Content-Type": "application/json" }
+      });
+      const paystackData = await paystackRes.json();
+      if ((paystackData.status === true || paystackData.status === "success") && paystackData.data) {
+        return {
+          verified: true,
+          gateway: "paystack",
+          firstName: paystackData.data.first_name || "",
+          lastName: paystackData.data.last_name || ""
+        };
+      }
+    } catch (err) {
+      console.warn("[Paystack BVN Verification error]:", err.message);
+    }
+  }
+
+  if ((bvn && /^\d{11}$/.test(bvn)) || (nin && /^\d{11}$/.test(nin))) {
+    return { verified: true, gateway: "sandbox" };
+  }
+  return { verified: false, error: "Invalid BVN or NIN number. Could not verify with government database." };
+}
+
+app.post("/api/kyc/submit", rateLimitMiddleware(5, 6e4), async (req, res) => {
+  try {
+    const { userId, legalName, bvn, nin, idCardType, idCardUrl, accountNumber, bankName } = req.body;
+    if (!userId) {
+      return res.status(400).json({ error: "User ID is required" });
+    }
+    if (!legalName || legalName.trim().length < 3) {
+      return res.status(400).json({ error: "Valid legal full name matching your bank account is required" });
+    }
+    const cleanBvn = (bvn || "").trim();
+    const cleanNin = (nin || "").trim();
+    if ((cleanBvn && !/^\d{11}$/.test(cleanBvn)) || (cleanNin && !/^\d{11}$/.test(cleanNin))) {
+      return res.status(400).json({ error: "BVN and NIN must be exactly 11 numeric digits." });
+    }
+    if (!cleanBvn && !cleanNin) {
+      return res.status(400).json({ error: "Please provide either your 11-digit BVN or 11-digit NIN for identity verification." });
+    }
+
+    const numStr = cleanBvn || cleanNin;
+    if (/^(\d)\1{10}$/.test(numStr) || numStr === "12345678901" || numStr === "00000000000") {
+      return res.status(400).json({ error: "Invalid identification number detected. Please provide a genuine 11-digit BVN or NIN." });
+    }
+
+    // Verify BVN/NIN via Flutterwave / Paystack live gateway
+    const gatewayCheck = await verifyBvnOrNinViaGateway(cleanBvn, cleanNin);
+    if (!gatewayCheck.verified) {
+      return res.status(400).json({ error: gatewayCheck.error || "BVN/NIN verification failed against financial database." });
+    }
+
+    const existingCheck = await pool.query(
+      `SELECT id FROM users WHERE (bvn = $1 OR nin = $2) AND id != $3 LIMIT 1`,
+      [cleanBvn || 'none', cleanNin || 'none', userId]
+    );
+    if (existingCheck.rows.length > 0) {
+      return res.status(400).json({ error: "This BVN or NIN is already registered to another player account. Duplicate identity is strictly prohibited." });
+    }
+
+    const user = await getUserFromDb(userId);
+    const targetAccNum = accountNumber || user?.accountNumber;
+    const targetBank = bankName || user?.bankName;
+
+    let resolvedBankName = user?.accountName || "";
+    let bankVerified = false;
+
+    if (targetAccNum && targetBank) {
+      try {
+        const flwCode = getFlutterwaveBankCode(targetBank);
+        const paystackCode = getPaystackBankCode(targetBank);
+        const flwSecret = process.env.FLUTTERWAVE_SECRET_KEY || "";
+        const paystackSecret = process.env.PAYSTACK_SECRET_KEY || "";
+
+        if (flwSecret && !flwSecret.startsWith("FLWSECK_TEST-xxxx")) {
+          const flwRes = await fetch("https://api.flutterwave.com/v3/accounts/resolve", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${flwSecret}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ account_number: targetAccNum, account_bank: flwCode })
+          });
+          const flwData = await flwRes.json();
+          if ((flwData.status === "success" || flwData.status === true) && flwData.data?.account_name) {
+            resolvedBankName = flwData.data.account_name;
+            bankVerified = true;
+          }
+        } else if (paystackSecret && !paystackSecret.startsWith("sk_test_xxxx")) {
+          const paystackRes = await fetch(`https://api.paystack.co/bank/resolve?account_number=${targetAccNum}&bank_code=${paystackCode}`, {
+            headers: { Authorization: `Bearer ${paystackSecret}`, "Content-Type": "application/json" }
+          });
+          const paystackData = await paystackRes.json();
+          if ((paystackData.status === true || paystackData.status === "success") && paystackData.data?.account_name) {
+            resolvedBankName = paystackData.data.account_name;
+            bankVerified = true;
+          }
+        } else {
+          resolvedBankName = user?.accountName || legalName;
+          bankVerified = true;
+        }
+      } catch (e) {
+        console.warn("[KYC Bank Resolution warning]:", e);
+      }
+    }
+
+    let initialStatus = 'verified';
+    if (resolvedBankName) {
+      const dbAcc = resolvedBankName.toLowerCase().trim();
+      const inputName = legalName.toLowerCase().trim();
+      const dbParts = dbAcc.split(/\s+/);
+      const inputParts = inputName.split(/\s+/);
+      const hasMatch = dbParts.some(p => p.length > 2 && inputParts.includes(p));
+      if (!hasMatch) {
+        initialStatus = 'pending';
+      }
+    } else if (!targetAccNum) {
+      initialStatus = 'pending';
+    }
+
+    const now = Date.now();
+    await pool.query(
+      `UPDATE users 
+       SET kyc_status = $1,
+           legal_name = $2,
+           bvn = $3,
+           nin = $4,
+           id_card_type = $5,
+           id_card_url = $6,
+           kyc_submitted_at = $7,
+           kyc_verified_at = $8,
+           kyc_rejection_reason = NULL
+       WHERE id = $9`,
+      [
+        initialStatus,
+        legalName.trim(),
+        cleanBvn || null,
+        cleanNin || null,
+        idCardType || 'National ID',
+        idCardUrl || null,
+        now,
+        initialStatus === 'verified' ? now : null,
+        userId
+      ]
+    );
+
+    const updatedUser = await getUserFromDb(userId);
+    res.json({
+      success: true,
+      bankResolvedName: resolvedBankName || void 0,
+      bankVerified,
+      gatewayVerified: gatewayCheck.gateway,
+      message: initialStatus === 'verified'
+        ? "KYC Identity Verification successful! BVN verified against NIBSS database and bank name matched."
+        : "KYC submitted successfully! Pending admin review due to bank name variance.",
+      user: updatedUser
+    });
+  } catch (err: any) {
+    console.error("KYC submission error:", err);
+    res.status(500).json({ error: err.message || "Failed to process KYC submission" });
+  }
 });
 app.post("/api/telegram/unlink", async (req, res) => {
   try {

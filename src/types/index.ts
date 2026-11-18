@@ -39,6 +39,13 @@ export interface UserProfile {
   role?: string;
   telegramChatId?: string;
   telegramUsername?: string;
+  kycStatus?: 'unverified' | 'pending' | 'verified' | 'rejected';
+  bvn?: string;
+  nin?: string;
+  legalName?: string;
+  idCardType?: string;
+  idCardUrl?: string;
+  kycRejectionReason?: string;
   isFlagged?: boolean;
   flagReason?: string;
   conflictStrikes?: number;
