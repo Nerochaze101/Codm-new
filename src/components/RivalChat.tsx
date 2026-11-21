@@ -18,10 +18,18 @@ import {
 import { calculateMatchEconomics } from '../utils/pricing';
 import { StakePaymentModal } from './StakePaymentModal';
 import { playIncomingMessageSound } from '../services/notificationService';
+import { formatLastSeen, formatReadTime } from '../utils/presence';
 
 interface RivalChatProps {
   currentUser: UserProfile;
-  rival: { id: string; codm_ign: string; avatar?: string; tier?: string };
+  rival: {
+    id: string;
+    codm_ign: string;
+    avatar?: string;
+    tier?: string;
+    isOnline?: boolean;
+    lastSeen?: number | null;
+  };
   onChallenge?: (rivalId: string) => void;
   onBack?: () => void;
   onSyncAppState?: () => Promise<void> | void;
@@ -56,6 +64,14 @@ export const RivalChat: React.FC<RivalChatProps> = ({
   const [isSending, setIsSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [isConnected, setIsConnected] = useState(false);
+  const [rivalPresence, setRivalPresence] = useState<{
+    isOnline: boolean;
+    lastSeen: number | null;
+    activity?: string;
+  }>({
+    isOnline: Boolean(rival.isOnline),
+    lastSeen: rival.lastSeen ?? null,
+  });
 
   // Typing indicator
   const [isRivalTyping, setIsRivalTyping] = useState(false);
@@ -144,6 +160,7 @@ export const RivalChat: React.FC<RivalChatProps> = ({
         senderName: sName,
         text: m.text || '',
         timestamp: Number(m.timestamp) || Date.now(),
+        readAt: m.readAt || m.read_at ? Number(m.readAt || m.read_at) : undefined,
         matchId: m.matchId || m.match_id || undefined,
         msgType: m.msgType || m.msg_type || (m.matchId || m.match_id ? 'challenge' : 'text'),
       };
@@ -221,7 +238,7 @@ export const RivalChat: React.FC<RivalChatProps> = ({
             // Prevent unnecessary re-render / scroll jitter if nothing changed
             if (
               merged.length === prev.length &&
-              merged.every((m, idx) => m.id === prev[idx].id && m.text === prev[idx].text)
+              merged.every((m, idx) => m.id === prev[idx].id && m.text === prev[idx].text && m.readAt === prev[idx].readAt)
             ) {
               return prev;
             }
@@ -249,6 +266,39 @@ export const RivalChat: React.FC<RivalChatProps> = ({
       .catch(() => {});
   }, []);
 
+  // Fetch rival's initial presence & last_seen
+  useEffect(() => {
+    if (!rival.id) return;
+    fetch(`/api/users/${encodeURIComponent(rival.id)}/presence`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d) {
+          setRivalPresence({
+            isOnline: Boolean(d.isOnline),
+            lastSeen: d.lastSeen ? Number(d.lastSeen) : null,
+            activity: d.currentActivity,
+          });
+        }
+      })
+      .catch(() => {});
+  }, [rival.id]);
+
+  // Helper to mark incoming rival messages as read
+  const markRivalMessagesRead = useCallback(() => {
+    if (!effectiveUserId || effectiveUserId === 'guest' || !rival.id) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+
+    if (socketRef.current?.connected) {
+      socketRef.current.emit('rival_chat_read', { userId: effectiveUserId, rivalId: rival.id });
+    } else {
+      fetch(`/api/friends/chat/${encodeURIComponent(rival.id)}/read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: effectiveUserId }),
+      }).catch(() => {});
+    }
+  }, [effectiveUserId, rival.id]);
+
   // Main Socket & Lifecycle Effect
   useEffect(() => {
     (window as any).__activeRivalChatId = rival.id;
@@ -272,6 +322,7 @@ export const RivalChat: React.FC<RivalChatProps> = ({
       setIsConnected(true);
       s.emit('join_rival_room', { room, userId: effectiveUserId, rivalId: rival.id });
       fetchHistory(true);
+      markRivalMessagesRead();
     };
 
     if (s.connected) {
@@ -314,6 +365,41 @@ export const RivalChat: React.FC<RivalChatProps> = ({
 
     s.on('rival_chat', handleIncomingMessage);
     s.on(`rival_chat_${effectiveUserId}`, handleIncomingMessage);
+
+    s.on('rival_presence_update', (data: { userId: string; isOnline: boolean; lastSeen?: number; activity?: string }) => {
+      if (data?.userId === rival.id) {
+        setRivalPresence((prev) => ({
+          isOnline: Boolean(data.isOnline),
+          lastSeen: data.lastSeen ? Number(data.lastSeen) : prev.lastSeen,
+          activity: data.activity,
+        }));
+      }
+    });
+
+    const handleReadReceipt = (data: { readerId: string; rivalId: string; readAt: number; messageIds?: string[] }) => {
+      if (!data) return;
+      if (data.readerId === rival.id || data.readerId === effectiveUserId) {
+        const idSet = data.messageIds ? new Set(data.messageIds) : null;
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (data.readerId === rival.id && m.senderId === effectiveUserId && !m.readAt) {
+              if (!idSet || idSet.has(m.id)) {
+                return { ...m, readAt: data.readAt };
+              }
+            }
+            if (data.readerId === effectiveUserId && m.senderId === rival.id && !m.readAt) {
+              if (!idSet || idSet.has(m.id)) {
+                return { ...m, readAt: data.readAt };
+              }
+            }
+            return m;
+          })
+        );
+      }
+    };
+
+    s.on('rival_chat_read', handleReadReceipt);
+    s.on(`rival_chat_read_${effectiveUserId}`, handleReadReceipt);
 
     const handleTypingEvent = (data: any) => {
       if (!data || data.userId !== rival.id) return;
@@ -374,6 +460,29 @@ export const RivalChat: React.FC<RivalChatProps> = ({
       s.disconnect();
     };
   }, [effectiveUserId, effectiveIgn, rival.id, belongsToThisConversation, normalizeMsg, fetchHistory]);
+
+  // Automatically mark unread messages from rival as read while chat is visible
+  useEffect(() => {
+    const hasUnreadFromRival = messages.some((m) => m.senderId === rival.id && !m.readAt);
+    if (hasUnreadFromRival) {
+      markRivalMessagesRead();
+    }
+  }, [messages, rival.id, markRivalMessagesRead]);
+
+  useEffect(() => {
+    const onFocusOrVisible = () => {
+      if (document.visibilityState !== 'hidden') {
+        const hasUnreadFromRival = messages.some((m) => m.senderId === rival.id && !m.readAt);
+        if (hasUnreadFromRival) markRivalMessagesRead();
+      }
+    };
+    window.addEventListener('focus', onFocusOrVisible);
+    document.addEventListener('visibilitychange', onFocusOrVisible);
+    return () => {
+      window.removeEventListener('focus', onFocusOrVisible);
+      document.removeEventListener('visibilitychange', onFocusOrVisible);
+    };
+  }, [messages, rival.id, markRivalMessagesRead]);
 
   // Smart auto-scroll when messages arrive while user is near bottom
   useEffect(() => {
@@ -1208,7 +1317,7 @@ export const RivalChat: React.FC<RivalChatProps> = ({
             />
             <span
               className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-[#1f2c34] ${
-                isConnected ? 'bg-emerald-400' : 'bg-amber-400'
+                rivalPresence.isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-neutral-500'
               }`}
             />
           </div>
@@ -1218,17 +1327,27 @@ export const RivalChat: React.FC<RivalChatProps> = ({
               <span className="text-white font-bold tracking-wide font-heading truncate">
                 {rival.codm_ign}
               </span>
-              <span className={`text-[10px] font-mono shrink-0 ${isConnected ? 'text-emerald-400' : 'text-amber-300'}`}>
-                · {isConnected ? 'Online' : 'Syncing'}
+              <span
+                className={`text-[10px] font-mono shrink-0 flex items-center gap-1 ${
+                  rivalPresence.isOnline ? 'text-emerald-400' : 'text-neutral-400'
+                }`}
+              >
+                · {rivalPresence.isOnline ? 'Active now' : 'Offline'}
               </span>
             </div>
             <div className="text-[11px] font-mono flex items-center gap-1 h-4">
               {isRivalTyping ? (
                 <span className="text-emerald-400 font-bold animate-pulse">is typing...</span>
+              ) : !rivalPresence.isOnline ? (
+                <span className="text-neutral-400 truncate">
+                  {formatLastSeen(rivalPresence.lastSeen)}
+                </span>
               ) : (
                 <span className="text-neutral-400 flex items-center gap-1 truncate">
                   <Shield size={10} className="text-emerald-400 shrink-0" />
-                  <span className="truncate">Encrypted 1v1 Channel</span>
+                  <span className="truncate">
+                    {isConnected ? (rivalPresence.activity || 'Encrypted 1v1 Channel') : 'Reconnecting...'}
+                  </span>
                 </span>
               )}
             </div>
@@ -1571,7 +1690,25 @@ export const RivalChat: React.FC<RivalChatProps> = ({
                       </button>
                     )}
                     <span>{formatTime(m.timestamp)}</span>
-                    {isMe && !isFailed && <CheckCheck size={12} className="text-emerald-400" />}
+                    {isMe && !isFailed && (
+                      m.readAt ? (
+                        <span
+                          className="inline-flex items-center gap-0.5 text-sky-400 font-semibold"
+                          title={`Read at ${formatReadTime(m.readAt)}`}
+                        >
+                          <CheckCheck size={12} />
+                          <span>Read</span>
+                        </span>
+                      ) : (
+                        <span
+                          className="inline-flex items-center gap-0.5 text-neutral-400"
+                          title="Sent"
+                        >
+                          <Check size={11} />
+                          <span>Sent</span>
+                        </span>
+                      )
+                    )}
                   </div>
                 </div>
               </div>

@@ -106,6 +106,7 @@ function MainApp() {
   useEffect(() => {
     if (currentUser.id && currentUser.id !== 'guest') {
       const sendPing = () => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
         socket.emit('user_presence_ping', {
           userId: currentUser.id,
           activity: 'In Arena'
@@ -113,7 +114,13 @@ function MainApp() {
       };
       sendPing();
       const interval = setInterval(sendPing, 20000);
-      return () => clearInterval(interval);
+      window.addEventListener('focus', sendPing);
+      document.addEventListener('visibilitychange', sendPing);
+      return () => {
+        clearInterval(interval);
+        window.removeEventListener('focus', sendPing);
+        document.removeEventListener('visibilitychange', sendPing);
+      };
     }
   }, [currentUser.id]);
 

@@ -20,6 +20,7 @@ import { IOSNotificationGuideModal } from './IOSNotificationGuideModal';
 import { playShotgunSound } from '../hooks/useSound';
 import { VideoTutorial } from './VideoTutorial';
 import { uploadMatchVideoWithProgress, fetchActiveRivals, fetchWorldChatMessages, postWorldChatMessage } from '../services/api';
+import { formatLastSeen } from '../utils/presence';
 import { calculateLast5WinStreak } from '../utils/winStreak';
 import { WinStreakBadge } from './WinStreakBadge';
 
@@ -195,7 +196,6 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
     const prefix = isPrivate
       ? `PRIVATE ${isSquad ? '5v5 SQUAD' : '1v1'} INVITE`
       : `OPEN ${isSquad ? '5v5 SQUAD' : '1v1'} WAGER`;
-    const joinUrl = `${window.location.origin}/?join=${bet.id}`;
     const msg: WorldChatMessage = {
       id: `wc_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
       senderId: currentUser.id,
@@ -206,7 +206,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
       senderClan: currentUser.clan,
       senderRole: currentUser.role || 'user',
       channel: 'wagers',
-      text: `${prefix}: ₦${bet.stakeAmount.toLocaleString()} on ${bet.gameMode} (${bet.map}) · #${bet.challengeCode} · ${joinUrl}`,
+      text: `${prefix}: ₦${bet.stakeAmount.toLocaleString()} on ${bet.gameMode} (${bet.map}) · #${bet.challengeCode}`,
       matchId: bet.id,
       challengeCode: bet.challengeCode,
       stakeAmount: bet.stakeAmount,
@@ -323,13 +323,16 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
 
     loadActiveRivals();
 
-    socket.on('rival_presence_update', (data: { userId: string; isOnline: boolean; currentActivity?: string }) => {
+    socket.on('rival_presence_update', (data: { userId: string; isOnline: boolean; lastSeen?: number; activity?: string; currentActivity?: string }) => {
       setActiveRivals(prev => prev.map(r => {
         if (r.id === data.userId) {
           return {
             ...r,
             isOnline: data.isOnline,
-            currentActivity: data.currentActivity !== undefined ? data.currentActivity : r.currentActivity
+            lastSeen: data.lastSeen ?? r.lastSeen,
+            currentActivity: (data.activity ?? data.currentActivity) !== undefined
+              ? (data.activity ?? data.currentActivity)
+              : r.currentActivity
           };
         }
         return r;
@@ -1560,6 +1563,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                       <MatchLobbyChat
                         matchId={myActiveMatch.id}
                         currentUser={currentUser}
+                        opponentId={isCreatorOfActive ? myActiveMatch.opponent?.id : myActiveMatch.creator.id}
                         opponentName={isCreatorOfActive ? (myActiveMatch.opponent?.codmIgn || 'Opponent') : myActiveMatch.creator.codmIgn}
                         initialMessages={myActiveMatch.chatMessages || []}
                         isSettled={['SETTLED', 'ABANDONED', 'CANCELLED'].includes(myActiveMatch.status)}
@@ -1796,12 +1800,14 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                             </span>
                           </div>
 
-                          <div className="flex items-center gap-2 mt-1">
+                          <div className="flex items-center gap-2 mt-1 flex-wrap">
                             <span className={`text-[11px] font-bold flex items-center gap-1.5 ${
                               isOnline ? 'text-emerald-400' : 'text-neutral-500'
                             }`}>
-                              <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-neutral-600'}`} />
-                              {isOnline ? (rival.currentActivity || 'Active Online') : 'Offline'}
+                              <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-neutral-600'}`} />
+                              {isOnline
+                                ? (rival.currentActivity || 'Active Online')
+                                : `Offline · ${formatLastSeen(rival.lastSeen)}`}
                             </span>
                             <span className="text-neutral-600 text-xs">·</span>
                             <span className="text-neutral-400 text-[11px] font-mono">
@@ -1871,6 +1877,28 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
         myHostedBets={myHostedBets}
         openChallenges={openChallenges}
         allPendingMatches={matches.filter(m => m.status === 'PENDING_OPPONENT_STAKE')}
+        allMatches={matches}
+        onOpenRoom={(match) => {
+          if (match.status !== 'PENDING_OPPONENT_STAKE') return;
+          const isHostOrParticipant =
+            match.creator?.id === currentUser.id ||
+            match.opponent?.id === currentUser.id ||
+            Boolean(match.squadData?.slots?.some(s => s.userId === currentUser.id && s.staked));
+          if (isHostOrParticipant) {
+            setSelectedActiveMatchId(match.id);
+            setArenaTab('active');
+            return;
+          }
+          const isSquad = match.matchType === 'squad' || Boolean(match.squadData);
+          if (isSquad) {
+            setSearchQuery(match.challengeCode || '');
+            setArenaTab('live');
+          } else {
+            setStakeTargetMatch(match);
+            setStakeRole('opponent');
+            setIsStakeModalOpen(true);
+          }
+        }}
         onAcceptChallenge={(match) => {
           const isSquad = match.matchType === 'squad' || Boolean(match.squadData);
           if (isSquad) {
@@ -1969,7 +1997,10 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
 
                       <button
                         type="button"
-                        onClick={() => setArenaTab('active')}
+                        onClick={() => {
+                          setSelectedActiveMatchId(m.id);
+                          setArenaTab('active');
+                        }}
                         className="py-2 px-3 bg-amber-400 text-neutral-950 font-black rounded-xl text-[11px] uppercase cursor-pointer hover:bg-amber-300 transition-all"
                       >
                         Open Room

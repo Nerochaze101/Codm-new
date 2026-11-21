@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Globe, Send, Swords, Users, UserPlus, MessageCircle, Trash2,
-  Radio, X, Share2, Check, Loader2, ArrowDown, Flame, Shield, Lock, ExternalLink
+  Radio, X, Share2, Check, Loader2, ArrowDown, Flame, Shield, Lock
 } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import { UserProfile, Match, WorldChatMessage } from '../types';
@@ -20,7 +20,9 @@ interface WorldChatProps {
   myHostedBets: Match[];
   openChallenges: Match[];
   allPendingMatches?: Match[];
+  allMatches?: Match[];
   onAcceptChallenge: (match: Match) => void;
+  onOpenRoom?: (match: Match) => void;
   onChallengePlayer: (playerId: string) => void;
   onNavigateToSocial?: () => void;
 }
@@ -46,7 +48,9 @@ export const WorldChat: React.FC<WorldChatProps> = ({
   myHostedBets,
   openChallenges,
   allPendingMatches,
+  allMatches,
   onAcceptChallenge,
+  onOpenRoom,
   onChallengePlayer,
   onNavigateToSocial,
 }) => {
@@ -337,15 +341,14 @@ export const WorldChat: React.FC<WorldChatProps> = ({
     const label = isPrivate
       ? `PRIVATE ${isSquad ? '5v5 SQUAD' : '1v1'} INVITE`
       : `OPEN ${isSquad ? '5v5 SQUAD' : '1v1'} WAGER`;
-    const joinUrl = `${window.location.origin}/?join=${match.id}`;
-    const summaryText = `${label}: ₦${match.stakeAmount.toLocaleString()} on ${match.gameMode} (${match.map}) · #${match.challengeCode} · ${joinUrl}`;
+    const summaryText = `${label}: ₦${match.stakeAmount.toLocaleString()} on ${match.gameMode} (${match.map}) · #${match.challengeCode}`;
     await dispatchMessage(summaryText, 'wagers', {
       matchId: match.id,
       challengeCode: match.challengeCode,
       stakeAmount: match.stakeAmount,
       gameMode: `${match.gameMode} · ${match.map}`,
     });
-    showToast('success', `Shared #${match.challengeCode} link to World Chat.`);
+    showToast('success', `Shared #${match.challengeCode} to World Chat.`);
   };
 
   const handleAddRival = async (targetUserId: string, targetIgn: string) => {
@@ -488,32 +491,37 @@ export const WorldChat: React.FC<WorldChatProps> = ({
           ) : (
             visibleMessages.map((msg) => {
               const isOwn = msg.senderId === currentUser.id;
-              const linkedMatch = msg.matchId
-                ? searchableMatches.find((m) => m.id === msg.matchId || m.challengeCode === msg.challengeCode)
+              const matchPool = allMatches && allMatches.length > 0 ? allMatches : searchableMatches;
+              const matchedHost = msg.matchId
+                ? matchPool.find((m) => m.id === msg.matchId || (msg.challengeCode && m.challengeCode === msg.challengeCode))
                 : undefined;
-              const isPrivateShared = linkedMatch?.isPublic === false || msg.text.toUpperCase().includes('PRIVATE');
-              const joinUrl = msg.matchId && typeof window !== 'undefined'
-                ? `${window.location.origin}/?join=${msg.matchId}`
-                : '';
+              const isPendingAccept = Boolean(matchedHost && matchedHost.status === 'PENDING_OPPONENT_STAKE');
+              const isAlreadyAccepted = Boolean(
+                matchedHost &&
+                ['OPPONENT_STAKED_AWAITING_CREATOR', 'READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(matchedHost.status)
+              );
+              const isPrivateShared = matchedHost?.isPublic === false || msg.text.toUpperCase().includes('PRIVATE');
+
+              const handleOpenHostedRoom = () => {
+                if (!isPendingAccept || !matchedHost) return;
+                onClose();
+                if (onOpenRoom) {
+                  onOpenRoom(matchedHost);
+                } else {
+                  onAcceptChallenge(matchedHost);
+                }
+              };
 
               const renderMessageWithLinks = (text: string) => {
                 const parts = text.split(/(https?:\/\/[^\s]+)/g);
                 return parts.map((part, idx) => {
                   if (/^https?:\/\/[^\s]+$/.test(part)) {
-                    const isJoinLink = part.includes('?join=');
                     return (
                       <a
                         key={idx}
                         href={part}
-                        target={isJoinLink ? undefined : '_blank'}
-                        rel={isJoinLink ? undefined : 'noopener noreferrer'}
-                        onClick={(e) => {
-                          if (isJoinLink && linkedMatch && !isOwn) {
-                            e.preventDefault();
-                            onClose();
-                            onAcceptChallenge(linkedMatch);
-                          }
-                        }}
+                        target="_blank"
+                        rel="noopener noreferrer"
                         className="text-amber-400 hover:text-amber-300 underline break-all font-medium"
                       >
                         {part}
@@ -550,9 +558,14 @@ export const WorldChat: React.FC<WorldChatProps> = ({
                         </span>
                       </div>
 
-                      {/* Inline Wager Invite Strip (supports both Public and Private shared bets) */}
+                      {/* Inline Shared Host Room Card (opens room if not yet accepted) */}
                       {msg.matchId && msg.stakeAmount && (
-                        <div className="mt-2 px-3 py-2 rounded-xl bg-[#0e151d] border border-neutral-800 flex flex-wrap items-center justify-between gap-2 max-w-lg">
+                        <div
+                          onClick={isPendingAccept ? handleOpenHostedRoom : undefined}
+                          className={`mt-2 px-3 py-2 rounded-xl bg-[#0e151d] border border-neutral-800 flex flex-wrap items-center justify-between gap-2 max-w-lg ${
+                            isPendingAccept ? 'hover:border-amber-400/50 cursor-pointer transition-colors' : ''
+                          }`}
+                        >
                           <div className="flex items-center gap-2 min-w-0">
                             {isPrivateShared ? (
                               <Lock size={14} className="text-amber-400 shrink-0" />
@@ -567,41 +580,22 @@ export const WorldChat: React.FC<WorldChatProps> = ({
                             </span>
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
-                            {joinUrl && (
-                              <a
-                                href={joinUrl}
+                            {isPendingAccept ? (
+                              <button
+                                type="button"
                                 onClick={(e) => {
-                                  if (linkedMatch && !isOwn) {
-                                    e.preventDefault();
-                                    onClose();
-                                    onAcceptChallenge(linkedMatch);
-                                  }
+                                  e.stopPropagation();
+                                  handleOpenHostedRoom();
                                 }}
-                                className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-sky-300 hover:text-sky-200 text-[11px] font-bold flex items-center gap-1 whitespace-nowrap"
-                                title={joinUrl}
+                                className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-[11px] uppercase tracking-wider rounded-lg cursor-pointer flex items-center gap-1 shrink-0 whitespace-nowrap"
                               >
-                                <ExternalLink size={11} />
-                                <span>Open Link</span>
-                              </a>
-                            )}
-                            {!isOwn && (
-                              linkedMatch ? (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    onClose();
-                                    onAcceptChallenge(linkedMatch);
-                                  }}
-                                  className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-[11px] uppercase tracking-wider rounded-lg cursor-pointer flex items-center gap-1 shrink-0 whitespace-nowrap"
-                                >
-                                  <Swords size={12} />
-                                  <span>Accept</span>
-                                </button>
-                              ) : (
-                                <span className="text-[11px] font-mono text-neutral-500 shrink-0">
-                                  Closed
-                                </span>
-                              )
+                                <Swords size={12} />
+                                <span>Open Room</span>
+                              </button>
+                            ) : (
+                              <span className="text-[11px] font-mono text-neutral-500 shrink-0">
+                                {isAlreadyAccepted ? 'Accepted' : 'Closed'}
+                              </span>
                             )}
                           </div>
                         </div>

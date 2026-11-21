@@ -1405,6 +1405,7 @@ export const MatchRoom: React.FC<MatchRoomProps> = ({
           <MatchLobbyChat
             matchId={match.id}
             currentUser={currentUser}
+            opponentId={isCreator ? match.opponent?.id : match.creator.id}
             opponentName={isCreator ? (match.opponent?.codmIgn || 'Opponent') : match.creator.codmIgn}
             initialMessages={match.chatMessages || []}
             isSettled={['SETTLED', 'ABANDONED', 'CANCELLED'].includes(match.status)}

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { RivalChat } from './RivalChat';
 import { requestNotificationPermission, getNotificationPermission } from '../services/notificationService';
+import { formatLastSeen } from '../utils/presence';
 
 interface SocialTabProps {
   currentUser: UserProfile;
@@ -47,9 +48,39 @@ export const SocialTab: React.FC<SocialTabProps> = ({ currentUser, onOpenCreateB
       }
     });
 
+    s.on('rival_presence_update', (data: { userId: string; isOnline: boolean; lastSeen?: number; activity?: string }) => {
+      if (!data?.userId) return;
+      setFriends(prev => prev.map(f =>
+        f.id === data.userId
+          ? {
+              ...f,
+              isOnline: data.isOnline,
+              lastSeen: data.lastSeen ?? f.lastSeen,
+              currentActivity: data.activity ?? (data.isOnline ? 'Active in Arena' : 'Offline'),
+            }
+          : f
+      ));
+      setSearchResults(prev => prev.map(u =>
+        u.id === data.userId
+          ? {
+              ...u,
+              isOnline: data.isOnline,
+              lastSeen: data.lastSeen ?? u.lastSeen,
+              currentActivity: data.activity ?? (data.isOnline ? 'Active in Arena' : 'Offline'),
+            }
+          : u
+      ));
+      setSelectedRival((prev: any) =>
+        prev && prev.id === data.userId
+          ? { ...prev, isOnline: data.isOnline, lastSeen: data.lastSeen ?? prev.lastSeen }
+          : prev
+      );
+    });
+
     return () => {
       s.off(userUpdateEvent);
       s.off('rivalNotification');
+      s.off('rival_presence_update');
       s.disconnect();
     };
   }, [currentUser.id]);
@@ -181,6 +212,8 @@ export const SocialTab: React.FC<SocialTabProps> = ({ currentUser, onOpenCreateB
             codm_ign: selectedRival.codm_ign || selectedRival.codmIgn,
             avatar: selectedRival.avatar,
             tier: selectedRival.tier,
+            isOnline: selectedRival.isOnline,
+            lastSeen: selectedRival.lastSeen,
           }}
           openChallengeOnMount={openChallengeInChat}
           onSyncAppState={onSyncAppState}
@@ -214,7 +247,7 @@ export const SocialTab: React.FC<SocialTabProps> = ({ currentUser, onOpenCreateB
                   CODM Rivals & Squad Net
                 </h1>
                 <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-mono font-bold tracking-widest uppercase">
-                  ONLINE
+                  {activeRivals.filter(r => r.isOnline).length} ACTIVE
                 </span>
               </div>
               <p className="text-xs text-neutral-400 font-mono mt-0.5">
@@ -321,15 +354,25 @@ export const SocialTab: React.FC<SocialTabProps> = ({ currentUser, onOpenCreateB
                       className="p-3 rounded-xl bg-neutral-900/90 border border-neutral-800 hover:border-amber-400/40 transition-all flex items-center justify-between gap-3"
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
-                        <img
-                          src={user.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(ign)}`}
-                          alt={ign}
-                          className="w-9 h-9 rounded-lg bg-neutral-800 object-cover shrink-0 border border-neutral-700"
-                        />
+                        <div className="relative shrink-0">
+                          <img
+                            src={user.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(ign)}`}
+                            alt={ign}
+                            className="w-9 h-9 rounded-lg bg-neutral-800 object-cover border border-neutral-700"
+                          />
+                          <span
+                            className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-neutral-900 ${
+                              user.isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-neutral-600'
+                            }`}
+                          />
+                        </div>
                         <div className="min-w-0">
                           <div className="text-xs font-bold text-white truncate font-heading">{ign}</div>
-                          <div className="text-[10px] text-neutral-400 font-mono">
-                            {user.wins || 0}W - {user.losses || 0}L
+                          <div className="text-[10px] text-neutral-400 font-mono truncate">
+                            {user.wins || 0}W - {user.losses || 0}L ·{' '}
+                            <span className={user.isOnline ? 'text-emerald-400 font-bold' : 'text-neutral-500'}>
+                              {user.isOnline ? 'Active' : formatLastSeen(user.lastSeen)}
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -498,19 +541,32 @@ export const SocialTab: React.FC<SocialTabProps> = ({ currentUser, onOpenCreateB
                 className="p-4 rounded-xl bg-neutral-900 border border-neutral-800 hover:border-amber-500/40 transition-all flex flex-col justify-between gap-3 group"
               >
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <img
-                      src={friend.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(friend.codm_ign)}`}
-                      alt={friend.codm_ign}
-                      className="w-11 h-11 rounded-xl object-cover bg-neutral-800 border border-neutral-700"
-                    />
-                    <div>
-                      <div className="font-heading font-black text-sm text-white group-hover:text-amber-400 transition-colors">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="relative shrink-0">
+                      <img
+                        src={friend.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(friend.codm_ign)}`}
+                        alt={friend.codm_ign}
+                        className="w-11 h-11 rounded-xl object-cover bg-neutral-800 border border-neutral-700"
+                      />
+                      <span
+                        className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-neutral-900 ${
+                          friend.isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-neutral-600'
+                        }`}
+                      />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-heading font-black text-sm text-white group-hover:text-amber-400 transition-colors truncate">
                         {friend.codm_ign}
                       </div>
-                      <div className="text-[11px] text-emerald-400 font-mono flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                        <span>Ready for duel</span>
+                      <div className={`text-[11px] font-mono flex items-center gap-1.5 truncate ${
+                        friend.isOnline ? 'text-emerald-400' : 'text-neutral-500'
+                      }`}>
+                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                          friend.isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-neutral-600'
+                        }`} />
+                        <span className="truncate">
+                          {friend.isOnline ? 'Active now' : `Offline · ${formatLastSeen(friend.lastSeen)}`}
+                        </span>
                       </div>
                     </div>
                   </div>

@@ -6,10 +6,12 @@ import {
 } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import { playIncomingMessageSound } from '../services/notificationService';
+import { formatLastSeen, formatReadTime } from '../utils/presence';
 
 interface MatchLobbyChatProps {
   matchId: string;
   currentUser: UserProfile;
+  opponentId?: string;
   opponentName?: string;
   initialMessages?: ChatMessage[];
   isSettled?: boolean;
@@ -69,6 +71,7 @@ function formatTime(timestamp?: number): string {
 export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   matchId,
   currentUser,
+  opponentId,
   opponentName = 'Opponent',
   initialMessages = [],
   isSettled = false,
@@ -83,6 +86,10 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   const [isMuted, setIsMuted] = useState(false);
   const [audioError, setAudioError] = useState<string | null>(null);
   const [opponentPresence, setOpponentPresence] = useState<boolean>(false);
+  const [opponentGlobalPresence, setOpponentGlobalPresence] = useState<{
+    isOnline: boolean;
+    lastSeen: number | null;
+  }>({ isOnline: false, lastSeen: null });
   const [isOpponentTyping, setIsOpponentTyping] = useState<boolean>(false);
   const [isTtsEnabled, setIsTtsEnabled] = useState<boolean>(true);
   const [micLevel, setMicLevel] = useState<number>(0);
@@ -127,12 +134,31 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
   useEffect(() => {
     if (initialMessages?.length) {
       setMessages(prev => {
-        const ids = new Set(prev.map(m => m.id));
-        const filtered = initialMessages.filter(m => !ids.has(m.id));
-        return [...prev, ...filtered].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+        const byId = new Map<string, ChatMessage>();
+        for (const m of prev) byId.set(m.id, m);
+        for (const m of initialMessages) {
+          const existing = byId.get(m.id);
+          byId.set(m.id, existing ? { ...m, readAt: m.readAt || existing.readAt, readBy: m.readBy || existing.readBy } : m);
+        }
+        return Array.from(byId.values()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
       });
     }
   }, [initialMessages]);
+
+  useEffect(() => {
+    if (!opponentId) return;
+    fetch(`/api/users/${encodeURIComponent(opponentId)}/presence`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d) {
+          setOpponentGlobalPresence({
+            isOnline: Boolean(d.isOnline),
+            lastSeen: d.lastSeen ? Number(d.lastSeen) : null,
+          });
+        }
+      })
+      .catch(() => {});
+  }, [opponentId]);
 
   const initAudioCtx = async () => {
     try {
@@ -282,6 +308,9 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
     socket.on('connect', () => {
       setIsConnected(true);
       socket.emit('joinMatch', { matchId, userId: currentUser.id });
+      if (currentUser.id && currentUser.id !== 'guest' && (typeof document === 'undefined' || document.visibilityState !== 'hidden')) {
+        socket.emit('match_chat_read', { matchId, userId: currentUser.id });
+      }
     });
 
     socket.on('disconnect', () => setIsConnected(false));
@@ -304,6 +333,33 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
           return isPresent;
         });
       }
+    });
+
+    socket.on('rival_presence_update', (data: { userId: string; isOnline: boolean; lastSeen?: number }) => {
+      if (opponentId && data?.userId === opponentId) {
+        setOpponentGlobalPresence((prev) => ({
+          isOnline: Boolean(data.isOnline),
+          lastSeen: data.lastSeen ? Number(data.lastSeen) : prev.lastSeen,
+        }));
+      }
+    });
+
+    socket.on('match_chat_read', (data: { matchId: string; readerId: string; readAt: number; messageIds?: string[] }) => {
+      if (!data || data.matchId !== matchId) return;
+      const idSet = data.messageIds ? new Set(data.messageIds) : null;
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.senderId !== data.readerId && (!idSet || idSet.has(m.id))) {
+            const readBy = Array.isArray(m.readBy) ? m.readBy : [];
+            return {
+              ...m,
+              readAt: m.readAt || data.readAt,
+              readBy: readBy.includes(data.readerId) ? readBy : [...readBy, data.readerId],
+            };
+          }
+          return m;
+        })
+      );
     });
 
     socket.on('chat', (msg: ChatMessage) => {
@@ -367,7 +423,39 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       stopVoice();
       if (audioCtxRef.current) audioCtxRef.current.close();
     };
+  }, [matchId, currentUser.id, opponentId]);
+
+  const markMatchMessagesRead = useCallback(() => {
+    if (!currentUser.id || currentUser.id === 'guest' || !socketRef.current?.connected) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    socketRef.current.emit('match_chat_read', { matchId, userId: currentUser.id });
   }, [matchId, currentUser.id]);
+
+  useEffect(() => {
+    const hasUnread = messages.some(
+      (m) => m.senderId !== currentUser.id && (!Array.isArray(m.readBy) || !m.readBy.includes(currentUser.id))
+    );
+    if (hasUnread) {
+      markMatchMessagesRead();
+    }
+  }, [messages, currentUser.id, markMatchMessagesRead]);
+
+  useEffect(() => {
+    const onFocus = () => {
+      if (document.visibilityState !== 'hidden') {
+        const hasUnread = messages.some(
+          (m) => m.senderId !== currentUser.id && (!Array.isArray(m.readBy) || !m.readBy.includes(currentUser.id))
+        );
+        if (hasUnread) markMatchMessagesRead();
+      }
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, [messages, currentUser.id, markMatchMessagesRead]);
 
   useEffect(() => {
     if (opponentSpeaking) {
@@ -414,7 +502,11 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
             <div className="w-10 h-10 rounded-full bg-emerald-600 flex items-center justify-center text-white font-bold text-sm shadow-md ring-2 ring-emerald-500/30">
               {opponentName.charAt(0).toUpperCase()}
             </div>
-            <span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[#1f2c34] ${isConnected ? 'bg-emerald-400' : 'bg-rose-500'}`} />
+            <span
+              className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[#1f2c34] ${
+                opponentPresence || opponentGlobalPresence.isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-neutral-500'
+              }`}
+            />
           </div>
           <div>
             <div className="flex items-center gap-2">
@@ -422,11 +514,16 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
               {opponentPresence ? (
                 <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-widest flex items-center gap-1">
                   <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />
-                  Online
+                  Active in Room
+                </span>
+              ) : opponentGlobalPresence.isOnline ? (
+                <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-widest flex items-center gap-1">
+                  <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full" />
+                  Active
                 </span>
               ) : (
-                <span className="text-[10px] text-neutral-500 font-bold uppercase tracking-widest flex items-center gap-1">
-                  <div className="w-1.5 h-1.5 bg-neutral-600 rounded-full" />
+                <span className="text-[10px] text-neutral-400 font-bold uppercase tracking-widest flex items-center gap-1">
+                  <div className="w-1.5 h-1.5 bg-neutral-500 rounded-full" />
                   Offline
                 </span>
               )}
@@ -438,7 +535,11 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
               )}
             </div>
             <div className="text-[10px] flex items-center gap-1.5">
-              {isConnected ? (
+              {!opponentPresence && !opponentGlobalPresence.isOnline && opponentGlobalPresence.lastSeen ? (
+                <span className="text-neutral-400 font-mono">
+                  {formatLastSeen(opponentGlobalPresence.lastSeen)}
+                </span>
+              ) : isConnected ? (
                 <div className="flex items-center gap-1 text-emerald-500/70">
                   <Wifi size={10} />
                   <span>Encrypted</span>
@@ -510,14 +611,32 @@ export const MatchLobbyChat: React.FC<MatchLobbyChatProps> = ({
       <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-[#0b141a]">
         {messages.map((m, idx) => {
           const isMe = m.senderId === currentUser.id;
+          const isRead = Boolean(
+            m.readAt || (Array.isArray(m.readBy) && m.readBy.some((uid) => uid !== currentUser.id))
+          );
           return (
             <div key={m.id || idx} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
               <div className={`p-2.5 rounded-2xl shadow-sm max-w-[85%] relative ${isMe ? 'bg-[#005c4b] text-white rounded-tr-none' : 'bg-[#202c33] text-[#e9edef] rounded-tl-none border border-white/5'}`}>
                 {!isMe && <p className="text-[10px] font-bold text-amber-500 mb-0.5 uppercase tracking-tighter">{m.senderName || opponentName}</p>}
                 <p className="text-sm leading-relaxed whitespace-pre-wrap">{m.text}</p>
-                <div className="flex justify-end mt-1 gap-1 text-[9px] text-[#8696a0]">
+                <div className="flex items-center justify-end mt-1 gap-1.5 text-[9px] text-[#8696a0]">
                   <span>{formatTime(m.timestamp)}</span>
-                  {isMe && <CheckCheck size={11} className="text-emerald-400" />}
+                  {isMe && (
+                    isRead ? (
+                      <span
+                        className="inline-flex items-center gap-0.5 text-sky-400 font-semibold"
+                        title={m.readAt ? `Read at ${formatReadTime(m.readAt)}` : 'Read'}
+                      >
+                        <CheckCheck size={12} />
+                        <span>Read</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-0.5 text-neutral-400" title="Sent">
+                        <Check size={11} />
+                        <span>Sent</span>
+                      </span>
+                    )
+                  )}
                 </div>
               </div>
             </div>

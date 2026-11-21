@@ -44,6 +44,8 @@ export interface UserProfile {
   conflictStrikes?: number;
   transactions: Transaction[];
   referrals?: UserReferral[];
+  isOnline?: boolean;
+  lastSeen?: number | null;
 }
 
 export interface SystemAiDetection {
@@ -104,6 +106,8 @@ export interface ChatMessage {
   senderName: string;
   text: string;
   timestamp: number;
+  readAt?: number;
+  readBy?: string[];
 }
 
 export interface SquadSlot {
@@ -265,6 +269,7 @@ export interface RivalChatMessage {
   senderName: string;
   text: string;
   timestamp: number;
+  readAt?: number;
   matchId?: string;
   msgType?: 'text' | 'challenge' | 'system';
 }

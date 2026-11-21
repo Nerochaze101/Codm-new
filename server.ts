@@ -227,6 +227,7 @@ async function initDatabase() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS flag_matches JSONB;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS conflict_strikes INT DEFAULT 0;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS flag_dismissed BOOLEAN DEFAULT false;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen BIGINT;
 
       CREATE TABLE IF NOT EXISTS global_broadcasts (
         id VARCHAR(255) PRIMARY KEY,
@@ -453,6 +454,7 @@ async function initDatabase() {
       
       ALTER TABLE rival_chat_messages ADD COLUMN IF NOT EXISTS match_id VARCHAR(255);
       ALTER TABLE rival_chat_messages ADD COLUMN IF NOT EXISTS msg_type VARCHAR(50) DEFAULT 'text';
+      ALTER TABLE rival_chat_messages ADD COLUMN IF NOT EXISTS read_at BIGINT;
       CREATE INDEX IF NOT EXISTS idx_rival_chat_rival_id ON rival_chat_messages(rival_id);
       CREATE INDEX IF NOT EXISTS idx_rival_chat_timestamp ON rival_chat_messages(timestamp);
 
@@ -10157,7 +10159,7 @@ app.get("/api/friends/search", async (req, res) => {
 
     const userExcludeClause = currentUserId ? `AND id != ${escapeSql(currentUserId)}` : "";
     const usersRes = await pool.query(`
-      SELECT id, username, codm_ign, avatar, tier, clan, wins, losses
+      SELECT id, username, codm_ign, avatar, tier, clan, wins, losses, last_seen
       FROM users
       WHERE (
         LOWER(codm_ign) LIKE LOWER(${escapeSql(`%${rawQuery}%`)})
@@ -10184,8 +10186,10 @@ app.get("/api/friends/search", async (req, res) => {
       });
     }
 
+    const now = Date.now();
     const mapped = usersRes.rows.map(u => {
       const friendData = existingFriendships.get(u.id);
+      const presence = getUserPresenceSnapshot(u.id, u.last_seen, now);
       return {
         id: u.id,
         username: u.username || u.codm_ign,
@@ -10197,6 +10201,9 @@ app.get("/api/friends/search", async (req, res) => {
         losses: Number(u.losses || 0),
         friendshipStatus: friendData ? friendData.status : "none",
         isRequester: friendData ? friendData.isRequester : false,
+        isOnline: presence.isOnline,
+        lastSeen: presence.lastSeen,
+        currentActivity: presence.currentActivity,
       };
     });
 
@@ -10353,6 +10360,47 @@ app.post("/api/friends/action", async (req, res) => {
   }
 });
 
+const activeConnectedUsers = new Map<string, { socketId?: string; lastSeen: number; dbSyncedAt?: number; activity: string }>();
+const userSocketIds = new Map<string, Set<string>>();
+
+function getUserPresenceSnapshot(userId: string, dbLastSeen: any, now: number = Date.now()) {
+  const presence = activeConnectedUsers.get(userId);
+  const socketsCount = userSocketIds.get(userId)?.size || 0;
+  const isOnline = Boolean(presence && (socketsCount > 0 || (now - presence.lastSeen < 60000)));
+  const dbTime = dbLastSeen ? Number(dbLastSeen) : null;
+  const lastSeen = presence?.lastSeen || (dbTime && Number.isFinite(dbTime) ? dbTime : null);
+  return {
+    isOnline,
+    lastSeen,
+    currentActivity: isOnline ? (presence?.activity || "Active in Arena") : "Offline",
+  };
+}
+
+function recordUserOnlinePresence(userId: string, socketId: string, activity: string = "In Arena") {
+  if (!userId || userId === "guest") return;
+  if (!userSocketIds.has(userId)) {
+    userSocketIds.set(userId, new Set());
+  }
+  userSocketIds.get(userId)!.add(socketId);
+
+  const now = Date.now();
+  const prev = activeConnectedUsers.get(userId);
+  const shouldSyncDb = !prev?.dbSyncedAt || (now - prev.dbSyncedAt > 25000);
+
+  activeConnectedUsers.set(userId, {
+    socketId,
+    lastSeen: now,
+    dbSyncedAt: shouldSyncDb ? now : prev?.dbSyncedAt,
+    activity: activity || prev?.activity || "In Arena",
+  });
+
+  if (shouldSyncDb) {
+    pool.query(`UPDATE users SET last_seen = $1 WHERE id = $2`, [now, userId]).catch(() => {});
+  }
+
+  return now;
+}
+
 app.get("/api/friends/list", async (req, res) => {
   try {
     const userId = (req.query.userId || "").toString().trim();
@@ -10365,6 +10413,7 @@ app.get("/api/friends/list", async (req, res) => {
         u.codm_ign, 
         u.avatar, 
         u.tier,
+        u.last_seen,
         f.id AS friendship_id,
         f.status, 
         f.user_id_1 AS requester_id,
@@ -10376,14 +10425,44 @@ app.get("/api/friends/list", async (req, res) => {
       ORDER BY f.created_at DESC
     `);
 
-    res.json({ friends: friendsRes.rows });
+    const now = Date.now();
+    const friends = friendsRes.rows.map(row => {
+      const presence = getUserPresenceSnapshot(row.id, row.last_seen, now);
+      return {
+        ...row,
+        isOnline: presence.isOnline,
+        lastSeen: presence.lastSeen,
+        currentActivity: presence.currentActivity,
+      };
+    });
+
+    res.json({ friends });
   } catch (err) {
     console.error("[Friends] Failed to fetch friends list:", err);
     res.status(500).json({ error: "Failed to fetch friends" });
   }
 });
 
-const activeConnectedUsers = new Map();
+app.get("/api/users/:id/presence", async (req, res) => {
+  try {
+    const targetId = (req.params.id || "").toString().trim();
+    if (!targetId || targetId === "guest") {
+      return res.json({ userId: targetId, isOnline: false, lastSeen: null, currentActivity: "Offline" });
+    }
+    const userRes = await pool.query(`SELECT id, last_seen FROM users WHERE id = $1 LIMIT 1`, [targetId]);
+    const dbLastSeen = userRes.rows[0]?.last_seen || null;
+    const presence = getUserPresenceSnapshot(targetId, dbLastSeen);
+    res.json({
+      userId: targetId,
+      isOnline: presence.isOnline,
+      lastSeen: presence.lastSeen,
+      currentActivity: presence.currentActivity,
+    });
+  } catch (err) {
+    console.error("[Presence] Failed to fetch user presence:", err);
+    res.status(500).json({ error: "Failed to fetch user presence" });
+  }
+});
 
 app.get("/api/friends/active-rivals", async (req, res) => {
   try {
@@ -10400,6 +10479,7 @@ app.get("/api/friends/active-rivals", async (req, res) => {
         u.clan,
         u.wins,
         u.losses,
+        u.last_seen,
         f.id AS friendship_id,
         f.status, 
         f.user_id_1 AS requester_id,
@@ -10414,9 +10494,7 @@ app.get("/api/friends/active-rivals", async (req, res) => {
 
     const now = Date.now();
     const mapped = friendsRes.rows.map(row => {
-      const presence = activeConnectedUsers.get(row.id);
-      // Online if socket connected within 60 seconds
-      const isOnline = Boolean(presence && (now - presence.lastSeen < 60000));
+      const presence = getUserPresenceSnapshot(row.id, row.last_seen, now);
       return {
         id: row.id,
         username: row.username,
@@ -10428,9 +10506,9 @@ app.get("/api/friends/active-rivals", async (req, res) => {
         wins: Number(row.wins || 0),
         losses: Number(row.losses || 0),
         friendshipId: row.friendship_id,
-        isOnline,
-        lastSeen: presence ? presence.lastSeen : null,
-        currentActivity: presence?.activity || (isOnline ? "Active in Arena" : "Offline"),
+        isOnline: presence.isOnline,
+        lastSeen: presence.lastSeen,
+        currentActivity: presence.currentActivity,
       };
     });
 
@@ -10477,6 +10555,7 @@ app.get("/api/friends/chat/:rivalId", async (req, res) => {
       senderName: m.sender_name || "Rival",
       text: m.text,
       timestamp: Number(m.timestamp) || Date.now(),
+      readAt: m.read_at ? Number(m.read_at) : undefined,
       matchId: m.match_id || undefined,
       msgType: m.msg_type || "text",
       // Snake case fallbacks
@@ -10484,6 +10563,7 @@ app.get("/api/friends/chat/:rivalId", async (req, res) => {
       user_id: m.user_id,
       sender_id: m.sender_id,
       sender_name: m.sender_name,
+      read_at: m.read_at ? Number(m.read_at) : undefined,
       match_id: m.match_id || undefined,
       msg_type: m.msg_type || "text",
     }));
@@ -10492,6 +10572,41 @@ app.get("/api/friends/chat/:rivalId", async (req, res) => {
   } catch (err) {
     console.error("[Friends] Failed to fetch chat messages:", err);
     res.status(500).json({ error: "Failed to fetch chat messages" });
+  }
+});
+
+app.post("/api/friends/chat/:rivalId/read", async (req, res) => {
+  try {
+    const rivalId = (req.params.rivalId || "").toString().trim();
+    const userId = (req.body?.userId || req.query.userId || "").toString().trim();
+    if (!userId || !rivalId || userId === "guest") {
+      return res.status(400).json({ error: "Missing userId or rivalId" });
+    }
+
+    const readAt = Date.now();
+    const updatedRes = await pool.query(
+      `UPDATE rival_chat_messages
+       SET read_at = $1
+       WHERE sender_id = $2
+         AND (rival_id = $3 OR user_id = $3)
+         AND read_at IS NULL
+       RETURNING id`,
+      [readAt, rivalId, userId]
+    );
+
+    const messageIds = updatedRes.rows.map((r: any) => r.id);
+    if (messageIds.length > 0 && globalIo) {
+      const room = `rival_chat_${[rivalId, userId].sort().join('_')}`;
+      const payload = { readerId: userId, rivalId, readAt, messageIds };
+      globalIo.to(room).emit("rival_chat_read", payload);
+      globalIo.emit(`rival_chat_read_${rivalId}`, payload);
+      globalIo.emit(`rival_chat_read_${userId}`, payload);
+    }
+
+    res.json({ success: true, readAt, messageIds });
+  } catch (err) {
+    console.error("[Friends] Failed to mark rival messages as read:", err);
+    res.status(500).json({ error: "Failed to mark messages as read" });
   }
 });
 
@@ -10844,16 +10959,13 @@ async function startServer() {
       const uid = typeof data === "string" ? data : data?.userId;
       if (uid && uid !== "guest") {
         currentUserId = uid;
-        activeConnectedUsers.set(uid, {
-          socketId: socket.id,
-          lastSeen: Date.now(),
-          activity: data?.activity || "In Arena"
-        });
+        const activity = data?.activity || "In Arena";
+        const pingTime = recordUserOnlinePresence(uid, socket.id, activity) || Date.now();
         io.emit("rival_presence_update", {
           userId: uid,
           isOnline: true,
-          lastSeen: Date.now(),
-          activity: data?.activity || "In Arena"
+          lastSeen: pingTime,
+          activity
         });
       }
     });
@@ -10870,6 +10982,13 @@ async function startServer() {
         socket.join(data.room);
         if (data.userId && data.userId !== "guest") {
           currentUserId = data.userId;
+          const pingTime = recordUserOnlinePresence(data.userId, socket.id, "In 1v1 Chat") || Date.now();
+          io.emit("rival_presence_update", {
+            userId: data.userId,
+            isOnline: true,
+            lastSeen: pingTime,
+            activity: "In 1v1 Chat"
+          });
         }
         console.log(`Socket ${socket.id} joined rival room: ${data.room}`);
       }
@@ -10997,8 +11116,15 @@ async function startServer() {
       if (matchId) {
         socket.join(matchId);
         currentMatchId = matchId;
-        if (userId) {
+        if (userId && userId !== "guest") {
           currentUserId = userId;
+          const pingTime = recordUserOnlinePresence(userId, socket.id, "In Match Lobby") || Date.now();
+          io.emit("rival_presence_update", {
+            userId,
+            isOnline: true,
+            lastSeen: pingTime,
+            activity: "In Match Lobby"
+          });
           if (!roomUsers.has(matchId)) {
             roomUsers.set(matchId, /* @__PURE__ */ new Set());
           }
@@ -11133,6 +11259,77 @@ async function startServer() {
       }
     });
 
+    socket.on("rival_chat_read", async (data) => {
+      try {
+        const userId = (data?.userId || "").toString().trim();
+        const rivalId = (data?.rivalId || "").toString().trim();
+        if (!userId || !rivalId || userId === "guest") return;
+
+        const readAt = Date.now();
+        const updatedRes = await pool.query(
+          `UPDATE rival_chat_messages
+           SET read_at = $1
+           WHERE sender_id = $2
+             AND (rival_id = $3 OR user_id = $3)
+             AND read_at IS NULL
+           RETURNING id`,
+          [readAt, rivalId, userId]
+        );
+        const messageIds = updatedRes.rows.map((r: any) => r.id);
+        if (messageIds.length > 0) {
+          const room = `rival_chat_${[rivalId, userId].sort().join('_')}`;
+          const payload = { readerId: userId, rivalId, readAt, messageIds };
+          io.to(room).emit("rival_chat_read", payload);
+          io.emit(`rival_chat_read_${rivalId}`, payload);
+          io.emit(`rival_chat_read_${userId}`, payload);
+        }
+      } catch (err) {
+        console.error("Error marking rival chat messages as read via socket:", err);
+      }
+    });
+
+    socket.on("match_chat_read", async (data) => {
+      try {
+        const matchId = (data?.matchId || "").toString().trim();
+        const userId = (data?.userId || "").toString().trim();
+        if (!matchId || !userId || userId === "guest" || matchId === "lobby_global") return;
+
+        const matchRes = await pool.query(`SELECT chat_messages FROM matches WHERE id = $1 LIMIT 1`, [matchId]);
+        if (matchRes.rows.length === 0) return;
+
+        const rawMsgs = Array.isArray(matchRes.rows[0].chat_messages) ? matchRes.rows[0].chat_messages : [];
+        const readAt = Date.now();
+        const updatedIds: string[] = [];
+
+        const updatedMsgs = rawMsgs.map((m: any) => {
+          if (!m || m.senderId === userId) return m;
+          const existingReadBy: string[] = Array.isArray(m.readBy) ? m.readBy : [];
+          if (existingReadBy.includes(userId)) return m;
+          if (m.id) updatedIds.push(m.id);
+          return {
+            ...m,
+            readAt: m.readAt || readAt,
+            readBy: [...existingReadBy, userId],
+          };
+        });
+
+        if (updatedIds.length > 0) {
+          await pool.query(
+            `UPDATE matches SET chat_messages = $1::jsonb WHERE id = $2`,
+            [JSON.stringify(updatedMsgs), matchId]
+          );
+          io.to(matchId).emit("match_chat_read", {
+            matchId,
+            readerId: userId,
+            readAt,
+            messageIds: updatedIds,
+          });
+        }
+      } catch (err) {
+        console.error("Error marking match chat messages as read via socket:", err);
+      }
+    });
+
     socket.on("rival_typing", (data) => {
       if (!data || !data.userId || !data.rivalId) return;
       const room = `rival_chat_${[data.rivalId, data.userId].sort().join('_')}`;
@@ -11232,12 +11429,22 @@ async function startServer() {
         activeTypingTarget = null;
       }
       if (currentUserId && currentUserId !== "guest") {
-        activeConnectedUsers.delete(currentUserId);
-        io.emit("rival_presence_update", {
-          userId: currentUserId,
-          isOnline: false,
-          lastSeen: Date.now()
-        });
+        const sockets = userSocketIds.get(currentUserId);
+        if (sockets) {
+          sockets.delete(socket.id);
+        }
+        const remainingSockets = sockets ? sockets.size : 0;
+        if (remainingSockets === 0) {
+          userSocketIds.delete(currentUserId);
+          activeConnectedUsers.delete(currentUserId);
+          const offlineAt = Date.now();
+          pool.query(`UPDATE users SET last_seen = $1 WHERE id = $2`, [offlineAt, currentUserId]).catch(() => {});
+          io.emit("rival_presence_update", {
+            userId: currentUserId,
+            isOnline: false,
+            lastSeen: offlineAt
+          });
+        }
       }
       if (currentMatchId && currentUserId) {
         const users = roomUsers.get(currentMatchId);
