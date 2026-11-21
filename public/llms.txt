@@ -1,0 +1,28 @@
+# OpsSTAKE
+
+> OpsSTAKE is an independent Nigerian Naira (₦) competitive esports wagering and automated escrow arena for tactical mobile shooter players (1v1 duels and 5v5 squad matches), featuring AI scoreboard verification, real-time comms, and instant bank payouts.
+
+Call of Duty: Mobile is a trademark of Activision Publishing, Inc. OpsSTAKE is an independent third-party esports platform and is not affiliated with, endorsed by, or sponsored by Activision.
+
+## Core Documentation
+- [Full Platform Documentary (AI & Crawler Reference)](https://opsstake.online/llms-full.txt): Complete specification of escrow rules, commission tiers, game formats, AI referee verification, real-time presence/chat systems, wallet payouts, and indexing policies.
+- [Interactive Platform Documentation Page](https://opsstake.online/docs): Structured web guide covering escrow mechanics, fee schedules, fair-play rules, and search engine indexing readiness.
+- [Official Arena Rules & Escrow Protocols](https://opsstake.online/rules): Loadout rules, scoreboard proof protocol, stalled match policy, and repeat-offense strike penalties.
+
+## Public Platform Routes
+- [Landing & Wager Calculator](https://opsstake.online/): Public overview, battle formats, live challenge board, interactive payout calculator, and FAQs.
+- [Live Battle Arena](https://opsstake.online/arena): Active 1v1 and 5v5 wagers, World Chat with one-tap room opening, Active Rivals radar, and live match rooms.
+- [Global Leaderboards](https://opsstake.online/leaderboards): Ranked players by wins, total Naira earnings, and performance tiers.
+- [24/7 Player Support](https://opsstake.online/support): Live support desk for match disputes, deposits, and withdrawals.
+
+## Crawling & Technical Endpoints
+- [XML Sitemap](https://opsstake.online/sitemap.xml)
+- [Robots Policy](https://opsstake.online/robots.txt)
+
+## Key Facts
+- **Currency**: Nigerian Naira (NGN / ₦)
+- **Escrow Model**: Two-step on-demand escrow (host creates link with ₦0 upfront; opponent stakes first; host matches stake to unlock the official Private Room Code).
+- **Platform Rake**: Tiered 1v1 fees from 10% (micro-wagers under ₦2,500 pot) down to 3.5% (high-roller pots ₦100,000+). 5v5 Squad matches carry a reduced 5% base fee down to 3.0%.
+- **Stalled / Abandoned Matches**: Strictly no automatic settlement or unilateral refunds. Both players must agree to restart the countdown timer or trigger a 100% mutual refund, or submit video proof to human moderators.
+- **Verification**: AI-assisted scoreboard screenshot forensics plus human moderator dispute queue.
+- **Real-Time Features**: World Chat, Rivals roster with live Active/Offline/Last Seen presence, 1v1 Encrypted Chat & Match Lobby Chat with Sent/Read receipts, browser voice chat, and dynamic Last-5-Match Win Streak badges.

@@ -1,13 +1,23 @@
 User-agent: *
 Allow: /
+Allow: /docs
 Allow: /arena
+Allow: /leaderboards
+Allow: /rules
+Allow: /support
+Allow: /llms.txt
+Allow: /llms-full.txt
 Disallow: /profile/
+Disallow: /profile
 Disallow: /admin/
 Disallow: /msksksnuwje/
+Disallow: /msksksnuwje
 Disallow: /api/
 Disallow: /settings/
 Disallow: /wallet/
+Disallow: /wallet
 Disallow: /withdraw/
 Disallow: /deposit/
+Disallow: /auth
 
 Sitemap: https://opsstake.online/sitemap.xml

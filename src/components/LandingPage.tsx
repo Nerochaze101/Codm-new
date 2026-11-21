@@ -121,6 +121,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             <a href="#faq" className="hover:text-amber-400 transition-colors">
               FAQ
             </a>
+            <a href="/docs" className="hover:text-amber-400 transition-colors">
+              Docs
+            </a>
           </nav>
 
           {/* Action CTAs: Sign In & Sign Up OR Enter Arena if Authenticated */}
@@ -697,7 +700,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           <div className="flex items-center gap-4">
             <span>Call of Duty: Mobile is a trademark of Activision</span>
             <span>·</span>
-            <span>10% Platform Rake</span>
+            <a href="/docs" className="text-amber-400 hover:text-amber-300 hover:underline font-semibold">
+              Platform Docs
+            </a>
+            <span>·</span>
+            <a href="/rules" className="text-neutral-400 hover:text-white hover:underline">
+              Rules
+            </a>
             <span>·</span>
             <button
               onClick={() => {

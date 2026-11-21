@@ -1,0 +1,143 @@
+# OpsSTAKE — Complete Platform Documentary for Search Engines & AI Systems
+
+> Official Reference Document · Last Updated: 2026-11-21
+> Primary Domain: https://opsstake.online
+> Currency: Nigerian Naira (NGN / ₦)
+> Category: Skill-Based Tactical Mobile Shooter Esports Escrow Platform
+
+**Trademark Notice**: Call of Duty: Mobile (CODM) is a registered trademark of Activision Publishing, Inc. OpsSTAKE is an independent competitive esports escrow and matchmaking platform operated in Nigeria and is not affiliated with, sponsored by, or endorsed by Activision.
+
+---
+
+## 1. Platform Overview & Value Proposition
+
+OpsSTAKE solves trust, payment, and dispute challenges in peer-to-peer competitive mobile shooter wagering. Instead of relying on informal social media transfers where opponents abandon matches or refuse to pay after losing, OpsSTAKE locks both sides' Nigerian Naira (₦) stakes inside an automated server-authoritative escrow ledger before generating the private match room code.
+
+### Target Audience
+- Competitive mobile shooter players in Nigeria seeking 1v1 skill duels and 5v5 clan/squad wagers.
+- Tournament organizers, rivals, and clan leaders coordinating verifiable head-to-head matches with instant bank settlement.
+
+---
+
+## 2. How the Two-Step On-Demand Escrow Protocol Works
+
+OpsSTAKE uses an on-demand escrow flow designed so players can issue challenges immediately without pre-locking idle capital:
+
+1. **Challenge Creation (₦0 Locked Upfront)**
+   - The host chooses the format (1v1 Solo Duel or 5v5 Squad), game mode, map, wager stake per player (minimum ₦100 in-arena / ₦1,000 featured), match duration (15, 20, or 30 minutes), and custom rules.
+   - The system creates a unique challenge code (e.g., `OPS-XXXX`) and allows sharing the room directly to World Chat (which renders an **Open Room** action for unaccepted rooms) or privately via a 1v1 Rival Chat challenge card or invite link.
+2. **Opponent Acceptance & First Escrow Deposit (`PENDING_OPPONENT_STAKE` -> `OPPONENT_STAKED_AWAITING_CREATOR`)**
+   - When an opponent opens the room or challenge invite and agrees to play, they deposit/lock their stake into escrow via Wallet Balance, Paystack, Flutterwave, OPay/PalmPay, or Nigerian bank transfer.
+3. **Host Matching Stake & Private Room Unlock (`READY_TO_PLAY`)**
+   - Once the opponent's stake is secured, the host receives instant push/audio/Telegram notifications to lock their matching stake.
+   - Immediately upon confirming both stakes, OpsSTAKE locks the total escrow pot and generates the official in-game Private Room identifier and starts the match countdown timer.
+4. **In-Game Match & Live Lobby Comms (`IN_PROGRESS` / `SUBMITTING_RESULTS`)**
+   - Players add each other using one-tap CODM IGN copy, join the private lobby in-game, and coordinate via real-time Match Lobby Chat (featuring live text messaging, read receipts, typing indicators, opponent room/app presence, and Web Audio tactical voice chat).
+5. **Post-Match Verification & Settlement (`VERIFYING` / `SETTLED` / `DISPUTED`)**
+   - After the match ends, both players submit their outcome claim (`VICTORY`, `DEFEAT`, or `DRAW`) along with an uncropped end-game scoreboard screenshot.
+   - **Agreement / Clear Victory**: Matching claims or verified scoreboard analysis automatically release the winner payout to the winner's OpsSTAKE wallet balance (crediting wins, losses, total earnings, and updating Win Streak badges).
+   - **Draw**: Verified draws trigger a 100% full stake refund to both participants with zero rake.
+   - **Dispute / Conflict**: Conflicting claims freeze the pot immediately and move the match to `DISPUTED`. Both players can upload screen-recording video evidence directly on the web or via the Telegram Referee Bot for human moderator resolution.
+6. **Instant Nigerian Bank Withdrawal**
+   - Winners can withdraw available wallet balance anytime to any Nigerian commercial bank or mobile bank (OPay, PalmPay, Kuda, Moniepoint, GTBank, Access Bank, Zenith Bank, UBA, etc.).
+
+---
+
+## 3. Competitive Game Formats & Maps
+
+### 1v1 Solo Duels
+- **Modes**:
+  - `1v1 Sniper Only` (Default allowed snipers when no custom agreement overrides: DL Q33, Locus, Koshka, Arctic.50, Outlaw; no thermite ammo, no secondary pistols, no melee)
+  - `1v1 Gunfight (All Guns)`
+  - `1v1 Shotgun / Melee`
+  - `1v1 Assault / SMG`
+  - `1v1 Hardcore FFA`
+- **Maps**: Shipment, Nuketown, Killhouse, Rust, Firing Range, Standoff.
+
+### 5v5 Squad ("Squared") Matches
+- **Modes**: Search & Destroy, Hardpoint, Domination.
+- **Maps**: Standoff, Summit, Firing Range.
+- **Structure**: 10 slots total (5 slots Team Alpha vs 5 slots Team Bravo). Each player stakes individually; the winning 5-player squad splits the net winning pool equally.
+
+---
+
+## 4. Platform Fee & Tiered Commission Schedule
+
+OpsSTAKE uses a transparent tiered commission (rake) model where platform fees decrease as total match pots increase:
+
+### Solo 1v1 Fee Tiers (Applied to Total Pot = 2 × Stake)
+| Per-Player Stake | Total Escrow Pot | Platform Rake | Platform Fee | Winner Payout |
+|---:|---:|---:|---:|---:|
+| ₦100 | ₦200 | 10% | ₦20 | ₦180 |
+| ₦500 | ₦1,000 | 10% | ₦100 | ₦900 |
+| ₦1,000 | ₦2,000 | 10% | ₦200 | ₦1,800 |
+| ₦2,500 | ₦5,000 | 8% | ₦400 | ₦4,600 |
+| ₦5,000 | ₦10,000 | 7% | ₦700 | ₦9,300 |
+| ₦10,000 | ₦20,000 | 5% | ₦1,000 | ₦19,000 |
+| ₦25,000+ (₦50,000+ pot) | ₦50,000+ | 4% | Scaled | 96% of pot |
+| ₦50,000+ (₦100,000+ pot) | ₦100,000+ | 3.5% | Scaled | 96.5% of pot |
+
+### 5v5 Squad Fee Tiers (Applied to Total Pot = 10 × Stake Per Player)
+- **Standard Squad Pot (< ₦25,000)**: 5% platform rake (95% split equally among winning 5 squad members).
+- **₦25,000+ Squad Pot**: 4% platform rake.
+- **₦50,000+ Squad Pot**: 3.5% platform rake.
+- **₦100,000+ Mega Squad Pot**: 3% platform rake.
+
+---
+
+## 5. Anti-Fraud, AI Forensics & Fair Play Rules
+
+### AI Scoreboard & Forensic Inspection
+- Submitted screenshots undergo server-side image metadata, aspect ratio, file signature, and AI vision inspection to extract match outcome (`VICTORY` / `DEFEAT` / `DRAW`), visible CODM IGNs, and final scores while flagging manipulated or edited images.
+
+### Abandoned & Stalled Match Policy (Strictly No Auto-Settlement)
+- If a match countdown expires, an opponent goes AFK, or a match stalls, OpsSTAKE **never** automatically settles the wager or awards a default win/unilateral refund.
+- Resolution requires **Mutual Consent**: both players must accept either a **Countdown Timer Restart** or a **Mutual 100% Refund**. If mutual consent fails, funds remain safeguarded in escrow while moderators review uploaded video proof.
+
+### Conflict Fraud Repeat-Offense Strikes
+- **Strike 1**: Submitting a false claim or triggering an intentional dispute flags the account under probation, deducts a 10% conflict penalty fee, and dispatches a formal warning.
+- **Strike 2+**: Escalated permanent account ban with forfeiture of disputed escrow funds.
+
+---
+
+## 6. Social, Chat, Presence & Engagement Features
+
+- **World Chat (`global`, `wagers`, `lfg` channels)**: Clean username-and-message live chat feed. Hosts sharing unaccepted challenges post an interactive **Open Room** action that opens the battle room directly.
+- **Rivals Roster & Tactical Radar (`/social`, `/arena`)**: Player discovery by CODM IGN/username, friend/rival requests, and live online radar.
+- **Active, Offline & Last Seen Presence**: Multi-socket heartbeat tracking persisted to PostgreSQL (`users.last_seen`) showing real-time `Active now`, `Active in Room`, or `Offline · Last seen ...` across Rivals, 1v1 Chat, and Match Lobby Chat.
+- **Real-Time Read Receipts**: Persisted message read tracking (`read_at` in `rival_chat_messages` and `readBy`/`readAt` in `matches.chat_messages`) displaying live `Sent` vs `Read` status with timestamps.
+- **Win Streak Badges**: Dynamic Win Streak indicator on user profiles and match cards computed chronologically from each player's last 5 settled matches.
+- **Leaderboard & History**: Public ranked leaderboard (`/leaderboards`) and 7-day rolling match history ledger (`/history`).
+- **Referral Program**: Unique referral codes and commission earnings tracked per referred player.
+
+---
+
+## 7. URL Structure & Search Indexing Guide
+
+### Public Indexable Pages (Allowed in `robots.txt` & Listed in `sitemap.xml`)
+- `/` — Landing page, battle format showcase, interactive wager calculator, and FAQs.
+- `/docs` — Full public platform documentation and indexing guide.
+- `/arena` — Live wager lobby, World Chat, and battle arena.
+- `/leaderboards` — Global player rankings and stats.
+- `/rules` — Official tournament, loadout, escrow, and anti-fraud rules.
+- `/support` — Live 24/7 customer & match support portal.
+- `/llms.txt` — Concise LLM index summary.
+- `/llms-full.txt` — Full platform reference documentary.
+
+### Private / Non-Indexable Routes (`Disallow` / `noindex`)
+- `/auth` (Authentication)
+- `/wallet` (Personal wallet & bank withdrawals)
+- `/profile` (User account settings)
+- `/history` (Personal match history)
+- `/disputes` (Account dispute center)
+- `/referrals` (Personal referral dashboard)
+- `/social` (Private 1v1 chats)
+- `/msksksnuwje` (Internal staff & admin console)
+- `/api/*` (Backend REST endpoints)
+
+---
+
+## 8. Technology Stack Summary
+
+- **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, React Router, Lucide Icons, Socket.IO Client.
+- **Backend**: Node.js, Express, Socket.IO, PostgreSQL (`pg`), Paystack & Flutterwave payment/transfer APIs, Telegram Bot webhook/polling alerts, automated AI scoreboard verification.

@@ -10926,6 +10926,62 @@ async function startServer() {
       console.warn("\u26A0\uFE0F Telegram Bot init error (handled non-fatally):", err.message);
     }
   })();
+  app.get("/robots.txt", (req, res) => {
+    const proto = (req.headers["x-forwarded-proto"] || req.protocol || "https").toString().split(",")[0].trim();
+    const host = req.get("host");
+    const baseUrl = process.env.APP_URL || (host ? `${proto}://${host}` : "https://opsstake.online");
+    res.type("text/plain; charset=utf-8").send(
+`User-agent: *
+Allow: /
+Allow: /docs
+Allow: /arena
+Allow: /leaderboards
+Allow: /rules
+Allow: /support
+Allow: /llms.txt
+Allow: /llms-full.txt
+Disallow: /profile/
+Disallow: /profile
+Disallow: /admin/
+Disallow: /msksksnuwje/
+Disallow: /msksksnuwje
+Disallow: /api/
+Disallow: /settings/
+Disallow: /wallet/
+Disallow: /wallet
+Disallow: /withdraw/
+Disallow: /deposit/
+Disallow: /auth
+
+Sitemap: ${baseUrl.replace(/\/+$/, "")}/sitemap.xml
+`
+    );
+  });
+
+  app.get("/sitemap.xml", (req, res) => {
+    const proto = (req.headers["x-forwarded-proto"] || req.protocol || "https").toString().split(",")[0].trim();
+    const host = req.get("host");
+    const baseUrl = (process.env.APP_URL || (host ? `${proto}://${host}` : "https://opsstake.online")).replace(/\/+$/, "");
+    const today = new Date().toISOString().split("T")[0];
+    const urls = [
+      { path: "/", changefreq: "daily", priority: "1.0" },
+      { path: "/docs", changefreq: "weekly", priority: "0.9" },
+      { path: "/arena", changefreq: "always", priority: "0.9" },
+      { path: "/leaderboards", changefreq: "daily", priority: "0.8" },
+      { path: "/rules", changefreq: "monthly", priority: "0.7" },
+      { path: "/support", changefreq: "monthly", priority: "0.6" },
+      { path: "/llms.txt", changefreq: "weekly", priority: "0.5" },
+      { path: "/llms-full.txt", changefreq: "weekly", priority: "0.5" },
+    ];
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls
+      .map(
+        (u) =>
+          `  <url>\n    <loc>${baseUrl}${u.path}</loc>\n    <lastmod>${today}</lastmod>\n    <changefreq>${u.changefreq}</changefreq>\n    <priority>${u.priority}</priority>\n  </url>`
+      )
+      .join("\n")}\n</urlset>\n`;
+    res.type("application/xml; charset=utf-8").send(xml);
+  });
+
   const publicPath = path.resolve(__dirname, "public");
   if (fs.existsSync(publicPath)) {
     app.use(express.static(publicPath));

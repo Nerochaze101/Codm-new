@@ -38,6 +38,8 @@ import { SocialTab } from './components/SocialTab';
 import { SupportPage } from './components/SupportPage';
 import { LeaderboardPage } from './components/LeaderboardPage';
 import { GlobalBroadcastBanner } from './components/GlobalBroadcastBanner';
+import { SeoManager } from './components/SeoManager';
+import { DocsPage } from './components/DocsPage';
 import { ShieldAlert, UserCheck, Lock, RefreshCw, Users as UsersIcon } from 'lucide-react';
 
 const socket = io('/');
@@ -514,6 +516,7 @@ function MainApp() {
   else if (pathname === '/profile') currentTab = 'profile';
   else if (pathname === '/social') currentTab = 'social';
   else if (pathname === '/support') currentTab = 'support';
+  else if (pathname === '/docs') currentTab = 'docs';
   else if (pathname === '/msksksnuwje') currentTab = 'admin';
 
   // Initial Data Fetch & URL Deep Link Check
@@ -952,6 +955,7 @@ function MainApp() {
   if (currentTab === 'landing') {
     return (
       <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col bg-tactical-grid selection:bg-amber-500 selection:text-black">
+        <SeoManager />
         <GlobalBroadcastBanner />
         <LandingPage
           matches={matches}
@@ -972,6 +976,7 @@ function MainApp() {
   if (currentTab === 'auth') {
     return (
       <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col bg-tactical-grid selection:bg-amber-500 selection:text-black">
+        <SeoManager />
         <GlobalBroadcastBanner />
         <AuthPage
           initialMode={authMode}
@@ -991,6 +996,7 @@ function MainApp() {
   // 3. IN-APP PAGES WITH ROUTING & NAVBAR / BOTTOM DOCK
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col bg-tactical-grid selection:bg-amber-500 selection:text-black relative">
+      <SeoManager />
       <GlobalBroadcastBanner />
       <BackgroundUploadBanner
         isUploading={globalUploading}
@@ -1075,6 +1081,16 @@ function MainApp() {
               <RulesPage
                 onOpenCreateBet={handleOpenCreateBet}
                 onNavigateToArena={() => navigate('/arena')}
+              />
+            }
+          />
+          <Route
+            path="/docs"
+            element={
+              <DocsPage
+                onNavigateToArena={() => navigate('/arena')}
+                onNavigateToRules={() => navigate('/rules')}
+                onNavigateToLanding={() => navigate('/')}
               />
             }
           />
@@ -1226,6 +1242,17 @@ function MainApp() {
             <span>Tactical Mobile Shooter Esports Escrow Wagering in Nigerian Naira (₦)</span>
           </div>
           <div className="flex items-center gap-4">
+            <a
+              href="/docs"
+              onClick={(e) => {
+                e.preventDefault();
+                navigate('/docs');
+              }}
+              className="text-amber-400 hover:text-amber-300 hover:underline font-semibold"
+            >
+              Docs &amp; Indexing
+            </a>
+            <span>·</span>
             <span className="text-neutral-400">Escrow Protected</span>
             <span>·</span>
             <span>Min Wager: ₦100</span>
