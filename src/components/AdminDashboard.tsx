@@ -47,8 +47,11 @@ import {
   Headphones,
   MessageCircle,
   Megaphone,
-  ClipboardList
+  ClipboardList,
+  FileText,
+  Download
 } from 'lucide-react';
+import { generateArticlesOfAssociationPdf } from '../utils/articlesOfAssociationPdf';
 import {
   fetchAdminUsers,
   assignUserRole,
@@ -123,7 +126,19 @@ interface AdminFinanceData {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onRefreshUser }) => {
-  const [activeTab, setActiveTab] = useState<'review_queue' | 'finance' | 'users' | 'gmail' | 'disputes' | 'multi_accounts' | 'broadcast' | 'audit_logs' | 'maintenance' | 'support'>('review_queue');
+  const [activeTab, setActiveTab] = useState<'review_queue' | 'finance' | 'users' | 'gmail' | 'disputes' | 'multi_accounts' | 'broadcast' | 'audit_logs' | 'legal_docs' | 'maintenance' | 'support'>('review_queue');
+  const [aoaConfig, setAoaConfig] = useState({
+    companyName: 'OPS STAKE TECHNOLOGIES LIMITED',
+    rcNumber: 'RC-PENDING / CAC-NG',
+    registeredAddress: 'Plot 14, Admiralty Way, Lekki Phase 1, Lagos, Nigeria',
+    supportEmail: 'support@opsstake.online',
+    shareCapital: '₦1,000,000 divided into 1,000,000 Ordinary Shares of ₦1.00 each',
+    directorName: currentUser.accountName || currentUser.codmIgn || 'Managing Director',
+    directorEmail: currentUser.email || 'support@opsstake.online',
+    coDirectorName: '',
+    adoptionDate: new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }),
+  });
+  const [aoaDownloadSuccess, setAoaDownloadSuccess] = useState(false);
   const [flaggedAccounts, setFlaggedAccounts] = useState<FlaggedAccountItem[]>([]);
   const [multiAccountClusters, setMultiAccountClusters] = useState<any[]>([]);
   const [flaggedLoading, setFlaggedLoading] = useState(false);
@@ -1192,6 +1207,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
               { id: 'gmail', icon: Mail, label: 'Sync Engine', badge: emailsList.length, roles: ['admin', 'super_admin'] },
               { id: 'multi_accounts', icon: ShieldAlert, label: 'Multi-Accounts', badge: flaggedAccounts.length, roles: ['admin', 'super_admin'] },
               { id: 'audit_logs', icon: ClipboardList, label: 'Audit Logs', badge: auditLogs.length, roles: ['admin', 'super_admin'] },
+              { id: 'legal_docs', icon: FileText, label: 'Legal & Articles PDF', badge: 'PDF', roles: ['admin', 'super_admin'] },
               { id: 'maintenance', icon: Settings, label: 'Maintenance & IP', badge: maintenanceEnabled ? 'ACTIVE' : 'OFF', roles: ['admin', 'super_admin'] }
             ].filter(tab => tab.roles.includes(currentUser.role || 'user')).map(tab => (
               <button
@@ -4067,6 +4083,171 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, onR
                 </div>
               </section>
             </div>
+          </div>
+        )}
+
+        {activeTab === 'legal_docs' && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
+            <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-400/10 border border-amber-400/30 flex items-center justify-center text-amber-400">
+                    <FileText size={22} />
+                  </div>
+                  <h3 className="text-3xl font-black text-white uppercase tracking-tighter leading-none">
+                    Articles of Association (PDF)
+                  </h3>
+                </div>
+                <p className="text-neutral-500 text-[13px] font-medium">
+                  Generate and download your CAMA 2020 Memorandum & Articles of Association PDF for corporate compliance & Flutterwave onboarding.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  generateArticlesOfAssociationPdf(aoaConfig);
+                  setAoaDownloadSuccess(true);
+                  setTimeout(() => setAoaDownloadSuccess(false), 3500);
+                }}
+                className="px-6 py-4 rounded-2xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-widest flex items-center gap-2.5 shadow-xl shadow-amber-400/20 transition-all active:scale-95 cursor-pointer shrink-0"
+              >
+                <Download size={18} className="stroke-[2.5]" />
+                <span>Download Articles PDF Now</span>
+              </button>
+            </header>
+
+            {aoaDownloadSuccess && (
+              <div className="p-4 rounded-2xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 text-xs font-black uppercase tracking-wider flex items-center gap-2">
+                <CheckCircle2 size={18} />
+                <span>Memorandum & Articles of Association PDF generated and downloaded!</span>
+              </div>
+            )}
+
+            <section className="bg-neutral-900 border border-neutral-800 rounded-[2.5rem] p-8 md:p-10 shadow-2xl space-y-6">
+              <div className="border-b border-neutral-800 pb-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h4 className="text-lg font-black text-white uppercase tracking-tight">Corporate Document Details</h4>
+                  <p className="text-xs text-neutral-400">Customize any entity details below or click Download immediately to export with pre-filled Ops Stake defaults.</p>
+                </div>
+                <span className="px-3 py-1 rounded-full bg-amber-400/10 border border-amber-400/30 text-amber-400 text-[10px] font-mono font-bold uppercase">
+                  CAMA 2020 FORMAT
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-neutral-400 uppercase tracking-widest">Registered Company Name</label>
+                  <input
+                    type="text"
+                    value={aoaConfig.companyName}
+                    onChange={(e) => setAoaConfig({ ...aoaConfig, companyName: e.target.value })}
+                    className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold text-white focus:border-amber-400 focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-neutral-400 uppercase tracking-widest">RC / Registration Reference</label>
+                  <input
+                    type="text"
+                    value={aoaConfig.rcNumber}
+                    onChange={(e) => setAoaConfig({ ...aoaConfig, rcNumber: e.target.value })}
+                    className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-mono font-bold text-white focus:border-amber-400 focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="text-[10px] font-black text-neutral-400 uppercase tracking-widest">Registered Office Address</label>
+                  <input
+                    type="text"
+                    value={aoaConfig.registeredAddress}
+                    onChange={(e) => setAoaConfig({ ...aoaConfig, registeredAddress: e.target.value })}
+                    className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold text-white focus:border-amber-400 focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-neutral-400 uppercase tracking-widest">Managing Director / Primary Subscriber</label>
+                  <input
+                    type="text"
+                    value={aoaConfig.directorName}
+                    onChange={(e) => setAoaConfig({ ...aoaConfig, directorName: e.target.value })}
+                    className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold text-white focus:border-amber-400 focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-neutral-400 uppercase tracking-widest">Co-Director / 2nd Subscriber (Optional)</label>
+                  <input
+                    type="text"
+                    value={aoaConfig.coDirectorName}
+                    onChange={(e) => setAoaConfig({ ...aoaConfig, coDirectorName: e.target.value })}
+                    placeholder="Leave blank for single-member company"
+                    className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold text-white focus:border-amber-400 focus:outline-none placeholder:text-neutral-600"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-neutral-400 uppercase tracking-widest">Official Support Email</label>
+                  <input
+                    type="email"
+                    value={aoaConfig.supportEmail}
+                    onChange={(e) => setAoaConfig({ ...aoaConfig, supportEmail: e.target.value })}
+                    className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-mono font-bold text-white focus:border-amber-400 focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-neutral-400 uppercase tracking-widest">Date of Adoption</label>
+                  <input
+                    type="text"
+                    value={aoaConfig.adoptionDate}
+                    onChange={(e) => setAoaConfig({ ...aoaConfig, adoptionDate: e.target.value })}
+                    className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold text-white focus:border-amber-400 focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="text-[10px] font-black text-neutral-400 uppercase tracking-widest">Authorized Share Capital Clause</label>
+                  <input
+                    type="text"
+                    value={aoaConfig.shareCapital}
+                    onChange={(e) => setAoaConfig({ ...aoaConfig, shareCapital: e.target.value })}
+                    className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold text-white focus:border-amber-400 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-black/50 border border-neutral-800 space-y-2 text-xs text-neutral-400">
+                <div className="font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                  <ShieldCheck size={16} className="text-emerald-400" />
+                  <span>Included Clauses in Generated PDF</span>
+                </div>
+                <ul className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 list-disc list-inside text-[11px]">
+                  <li>Part I: CAMA 2020 Memorandum of Association & Objects</li>
+                  <li>Part II: Private Company Share & Governance Articles</li>
+                  <li>Article 6: Escrow Custody & Client Fund Segregation</li>
+                  <li>Article 7: KYC / BVN / NIN & AML Compliance Governance</li>
+                  <li>Director Powers & Payment Processor Authorization</li>
+                  <li>Formatted Subscriber Execution & Signature Block</li>
+                </ul>
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    generateArticlesOfAssociationPdf(aoaConfig);
+                    setAoaDownloadSuccess(true);
+                    setTimeout(() => setAoaDownloadSuccess(false), 3500);
+                  }}
+                  className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-neutral-950 font-black text-xs uppercase tracking-[0.2em] flex items-center justify-center gap-2.5 shadow-xl shadow-amber-400/20 transition-all active:scale-95 cursor-pointer"
+                >
+                  <Download size={18} className="stroke-[2.5]" />
+                  <span>Generate & Download Articles of Association (.PDF)</span>
+                </button>
+              </div>
+            </section>
           </div>
         )}
       </main>

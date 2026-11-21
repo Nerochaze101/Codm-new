@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import { CODM_IMAGES } from '../assets/images';
 import { SkeletonLoader } from './SkeletonLoader';
+import { calculateLast5WinStreak } from '../utils/winStreak';
+import { WinStreakBadge } from './WinStreakBadge';
 
 interface HistoryPageProps {
   currentUser: UserProfile;
@@ -74,6 +76,7 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
   const victoriesCount = myMatches.filter((m) => m.status === 'SETTLED' && m.winnerId === currentUser.id && !isDrawMatch(m)).length;
   const defeatsCount = myMatches.filter((m) => m.status === 'SETTLED' && m.winnerId && m.winnerId !== currentUser.id && !isDrawMatch(m)).length;
   const drawsCount = myMatches.filter((m) => isDrawMatch(m)).length + (currentUser.draws || 0);
+  const myWinStreak = calculateLast5WinStreak(currentUser.id, matches);
 
   if (isMatchesLoading) {
     return (
@@ -221,6 +224,7 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
                            isSettled && !isWinner ? 'Defeated' :
                            isActive ? 'Active Escrow' : 'Cancelled'}
                         </span>
+                        <WinStreakBadge stats={myWinStreak} variant="card" />
                       </div>
 
                       <div className="flex flex-wrap items-center gap-3 text-[10px] font-mono text-neutral-400">

@@ -20,6 +20,8 @@ import { IOSNotificationGuideModal } from './IOSNotificationGuideModal';
 import { playShotgunSound } from '../hooks/useSound';
 import { VideoTutorial } from './VideoTutorial';
 import { uploadMatchVideoWithProgress, fetchActiveRivals, fetchWorldChatMessages, postWorldChatMessage } from '../services/api';
+import { calculateLast5WinStreak } from '../utils/winStreak';
+import { WinStreakBadge } from './WinStreakBadge';
 
 const CardBackground = () => (
   <div className="absolute inset-0 z-0 opacity-10">
@@ -193,6 +195,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
     const prefix = isPrivate
       ? `PRIVATE ${isSquad ? '5v5 SQUAD' : '1v1'} INVITE`
       : `OPEN ${isSquad ? '5v5 SQUAD' : '1v1'} WAGER`;
+    const joinUrl = `${window.location.origin}/?join=${bet.id}`;
     const msg: WorldChatMessage = {
       id: `wc_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
       senderId: currentUser.id,
@@ -203,7 +206,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
       senderClan: currentUser.clan,
       senderRole: currentUser.role || 'user',
       channel: 'wagers',
-      text: `${prefix}: ₦${bet.stakeAmount.toLocaleString()} on ${bet.gameMode} (${bet.map}) · #${bet.challengeCode}`,
+      text: `${prefix}: ₦${bet.stakeAmount.toLocaleString()} on ${bet.gameMode} (${bet.map}) · #${bet.challengeCode} · ${joinUrl}`,
       matchId: bet.id,
       challengeCode: bet.challengeCode,
       stakeAmount: bet.stakeAmount,
@@ -745,7 +748,9 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
               </div>
               {matches.filter(m => ['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(m.status)).length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {matches.filter(m => ['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(m.status)).map(m => (
+                  {matches.filter(m => ['READY_TO_PLAY', 'IN_PROGRESS', 'SUBMITTING_RESULTS', 'VERIFYING', 'DISPUTED'].includes(m.status)).map(m => {
+                    const hostStreak = calculateLast5WinStreak(m.creator.id, matches);
+                    return (
                     <div key={m.id} className="p-4 rounded-2xl bg-neutral-900/50 border border-neutral-800 flex flex-col justify-between shadow-lg relative overflow-hidden group">
                       <div className="absolute top-0 right-0 px-2 py-1 bg-amber-400 text-neutral-950 text-[8px] font-black uppercase rounded-bl-lg animate-pulse">LIVE NOW</div>
                       <div className="flex items-center gap-2.5 mb-3">
@@ -755,15 +760,19 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                           <div className="text-[10px] text-neutral-400 truncate">Pot: ₦{m.potAmount.toLocaleString()}</div>
                         </div>
                       </div>
-                      <div className="flex items-center justify-between text-[10px] font-mono">
-                        <div className="flex -space-x-2">
-                           <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(m.creator.codmIgn)}`} className="w-6 h-6 rounded-full border border-neutral-800 bg-neutral-900" alt="" />
-                           {m.opponent && <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(m.opponent.codmIgn)}`} className="w-6 h-6 rounded-full border border-neutral-800 bg-neutral-900" alt="" />}
+                      <div className="flex items-center justify-between gap-2 text-[10px] font-mono">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="flex -space-x-2 shrink-0">
+                             <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(m.creator.codmIgn)}`} className="w-6 h-6 rounded-full border border-neutral-800 bg-neutral-900" alt="" />
+                             {m.opponent && <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(m.opponent.codmIgn)}`} className="w-6 h-6 rounded-full border border-neutral-800 bg-neutral-900" alt="" />}
+                          </div>
+                          <WinStreakBadge stats={hostStreak} variant="card" />
                         </div>
-                        <span className="text-neutral-500">#{m.challengeCode}</span>
+                        <span className="text-neutral-500 shrink-0">#{m.challengeCode}</span>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="p-6 rounded-2xl bg-neutral-950 border border-dashed border-neutral-800 text-center text-neutral-500 text-[10px] italic">No active battles currently.</div>
@@ -778,6 +787,8 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                     const isSquad = m.matchType === 'squad' || Boolean(m.squadData);
                     const filledSlots = m.squadData?.slots?.filter(s => s.staked).length || 1;
                     const userInSlot = m.squadData?.slots?.find(s => s.userId === currentUser.id && s.staked);
+
+                    const creatorStreak = calculateLast5WinStreak(m.creator.id, matches);
 
                     return (
                       <div key={m.id} className={`p-4 rounded-2xl bg-neutral-950 border transition-all flex flex-col justify-between shadow-lg ${
@@ -844,9 +855,12 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                         </div>
 
                         <div className="flex items-center gap-2.5 mb-3">
-                          <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(m.creator.codmIgn)}`} alt="" className="w-8 h-8 rounded-lg bg-neutral-800 object-cover" />
+                          <img src={`https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(m.creator.codmIgn)}`} alt="" className="w-8 h-8 rounded-lg bg-neutral-800 object-cover shrink-0" />
                           <div className="min-w-0 flex-1">
-                            <div className="text-xs font-bold text-white truncate">{m.creator.codmIgn}</div>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-xs font-bold text-white truncate">{m.creator.codmIgn}</span>
+                              <WinStreakBadge stats={creatorStreak} variant="card" />
+                            </div>
                             <div className="text-[10px] text-neutral-400 truncate">{m.gameMode} · {m.map}</div>
                           </div>
                         </div>
@@ -1892,6 +1906,7 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                 const filledSlots = m.squadData?.slots?.filter(s => s.staked).length || 1;
                 const isShared = Boolean(sharedWorldMatchIds[m.id]);
                 const isSharing = sharingWorldMatchId === m.id;
+                const hostStreak = calculateLast5WinStreak(m.creator.id, matches);
                 return (
                   <div key={m.id} className={`p-5 rounded-2xl bg-neutral-900 border space-y-4 ${isSquad ? 'border-emerald-500/40' : 'border-neutral-800'}`}>
                     <div className="flex justify-between items-center gap-2">
@@ -1910,9 +1925,12 @@ export const CoreArena: React.FC<CoreArenaProps> = ({
                           </>
                         )}
                       </div>
-                      <span className="text-sm font-black text-emerald-400 tabular-nums shrink-0">
-                        ₦{m.stakeAmount.toLocaleString()}{isSquad ? ' / player' : ''}
-                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <WinStreakBadge stats={hostStreak} variant="card" />
+                        <span className="text-sm font-black text-emerald-400 tabular-nums">
+                          ₦{m.stakeAmount.toLocaleString()}{isSquad ? ' / player' : ''}
+                        </span>
+                      </div>
                     </div>
                     <div className="text-sm font-bold text-white uppercase">{m.gameMode} · {m.map}</div>
 

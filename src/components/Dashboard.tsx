@@ -6,6 +6,8 @@ import {
   Share2, Camera, CheckCircle2
 } from 'lucide-react';
 import { Logo } from './Logo';
+import { calculateLast5WinStreak } from '../utils/winStreak';
+import { WinStreakBadge } from './WinStreakBadge';
 
 interface DashboardProps {
   currentUser: UserProfile;
@@ -329,9 +331,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         referrerPolicy="no-referrer"
                       />
                       <div className="min-w-0 flex-1">
-                        <div className="text-sm font-bold text-white truncate flex items-center gap-1">
-                          <span>{m.creator.codmIgn}</span>
+                        <div className="text-sm font-bold text-white flex items-center gap-1.5 flex-wrap">
+                          <span className="truncate">{m.creator.codmIgn}</span>
                           {isCreator && <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1 rounded">You</span>}
+                          <WinStreakBadge stats={calculateLast5WinStreak(m.creator.id, matches)} variant="card" />
                         </div>
                         <div className="text-xs text-neutral-400 flex items-center gap-1 truncate">
                           <Crosshair className="w-3 h-3 text-amber-400" />

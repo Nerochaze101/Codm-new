@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Globe, Send, Swords, Users, UserPlus, MessageCircle, Trash2,
-  Radio, X, Share2, Check, Loader2, ArrowDown, Flame, Shield, Lock
+  Radio, X, Share2, Check, Loader2, ArrowDown, Flame, Shield, Lock, ExternalLink
 } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import { UserProfile, Match, WorldChatMessage } from '../types';
@@ -38,28 +38,6 @@ const CHANNELS = [
   { id: 'wagers', label: '1v1 Wagers', icon: Swords },
   { id: 'lfg', label: 'Squad LFG', icon: Users },
 ] as const;
-
-function formatTime(timestamp?: number): string {
-  if (!timestamp) return '';
-  return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-function getTierShortLabel(tier?: string, role?: string): { text: string; cls: string } {
-  if (role === 'admin' || role === 'super_admin') {
-    return { text: 'CMD', cls: 'text-rose-400' };
-  }
-  if (role === 'moderator') {
-    return { text: 'MOD', cls: 'text-cyan-300' };
-  }
-  const upper = (tier || 'ROOKIE').toUpperCase();
-  if (upper.includes('LEGENDARY')) return { text: 'LEG', cls: 'text-amber-300' };
-  if (upper.includes('GRANDMASTER')) return { text: 'GM', cls: 'text-purple-300' };
-  if (upper.includes('MASTER')) return { text: 'MST', cls: 'text-purple-300' };
-  if (upper.includes('PRO')) return { text: 'PRO', cls: 'text-emerald-300' };
-  if (upper.includes('ELITE')) return { text: 'ELT', cls: 'text-sky-300' };
-  if (upper.includes('VETERAN')) return { text: 'VET', cls: 'text-neutral-300' };
-  return { text: 'RKE', cls: 'text-neutral-400' };
-}
 
 export const WorldChat: React.FC<WorldChatProps> = ({
   isOpen,
@@ -359,14 +337,15 @@ export const WorldChat: React.FC<WorldChatProps> = ({
     const label = isPrivate
       ? `PRIVATE ${isSquad ? '5v5 SQUAD' : '1v1'} INVITE`
       : `OPEN ${isSquad ? '5v5 SQUAD' : '1v1'} WAGER`;
-    const summaryText = `${label}: ₦${match.stakeAmount.toLocaleString()} on ${match.gameMode} (${match.map}) · #${match.challengeCode}`;
+    const joinUrl = `${window.location.origin}/?join=${match.id}`;
+    const summaryText = `${label}: ₦${match.stakeAmount.toLocaleString()} on ${match.gameMode} (${match.map}) · #${match.challengeCode} · ${joinUrl}`;
     await dispatchMessage(summaryText, 'wagers', {
       matchId: match.id,
       challengeCode: match.challengeCode,
       stakeAmount: match.stakeAmount,
       gameMode: `${match.gameMode} · ${match.map}`,
     });
-    showToast('success', `Shared #${match.challengeCode} to World Chat.`);
+    showToast('success', `Shared #${match.challengeCode} link to World Chat.`);
   };
 
   const handleAddRival = async (targetUserId: string, targetIgn: string) => {
@@ -509,11 +488,41 @@ export const WorldChat: React.FC<WorldChatProps> = ({
           ) : (
             visibleMessages.map((msg) => {
               const isOwn = msg.senderId === currentUser.id;
-              const tierBadge = getTierShortLabel(msg.senderTier, msg.senderRole);
               const linkedMatch = msg.matchId
                 ? searchableMatches.find((m) => m.id === msg.matchId || m.challengeCode === msg.challengeCode)
                 : undefined;
               const isPrivateShared = linkedMatch?.isPublic === false || msg.text.toUpperCase().includes('PRIVATE');
+              const joinUrl = msg.matchId && typeof window !== 'undefined'
+                ? `${window.location.origin}/?join=${msg.matchId}`
+                : '';
+
+              const renderMessageWithLinks = (text: string) => {
+                const parts = text.split(/(https?:\/\/[^\s]+)/g);
+                return parts.map((part, idx) => {
+                  if (/^https?:\/\/[^\s]+$/.test(part)) {
+                    const isJoinLink = part.includes('?join=');
+                    return (
+                      <a
+                        key={idx}
+                        href={part}
+                        target={isJoinLink ? undefined : '_blank'}
+                        rel={isJoinLink ? undefined : 'noopener noreferrer'}
+                        onClick={(e) => {
+                          if (isJoinLink && linkedMatch && !isOwn) {
+                            e.preventDefault();
+                            onClose();
+                            onAcceptChallenge(linkedMatch);
+                          }
+                        }}
+                        className="text-amber-400 hover:text-amber-300 underline break-all font-medium"
+                      >
+                        {part}
+                      </a>
+                    );
+                  }
+                  return <React.Fragment key={idx}>{part}</React.Fragment>;
+                });
+              };
 
               return (
                 <div
@@ -522,60 +531,23 @@ export const WorldChat: React.FC<WorldChatProps> = ({
                     isOwn ? 'bg-amber-400/[0.04]' : 'hover:bg-white/[0.02]'
                   }`}
                 >
-                  <div className="flex items-start gap-2.5">
-                    <button
-                      type="button"
-                      onClick={() => !isOwn && setSelectedOperator(msg)}
-                      className={`shrink-0 mt-0.5 ${isOwn ? 'cursor-default' : 'cursor-pointer hover:opacity-85'}`}
-                      title={isOwn ? 'You' : `Inspect ${msg.senderIgn}`}
-                    >
-                      {msg.senderAvatar ? (
-                        <img
-                          src={msg.senderAvatar}
-                          alt={msg.senderIgn}
-                          referrerPolicy="no-referrer"
-                          className="w-7 h-7 rounded-lg object-cover border border-neutral-800 bg-neutral-900"
-                        />
-                      ) : (
-                        <div className="w-7 h-7 rounded-lg bg-neutral-800 border border-neutral-700 flex items-center justify-center text-amber-400 font-black text-[10px]">
-                          {(msg.senderIgn || msg.senderName || '?').substring(0, 2).toUpperCase()}
-                        </div>
-                      )}
-                    </button>
-
+                  <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0 text-[13px] leading-relaxed">
-                      <div className="flex items-baseline flex-wrap gap-x-1.5 gap-y-0.5">
-                        <span className={`text-[10px] font-mono font-bold uppercase ${tierBadge.cls}`}>
-                          [{tierBadge.text}]
-                        </span>
-
-                        {activeChannel === 'all' && msg.channel !== 'global' && (
-                          <span className={`text-[10px] font-mono font-bold uppercase ${
-                            msg.channel === 'wagers' ? 'text-amber-400' : 'text-emerald-400'
-                          }`}>
-                            {msg.channel === 'wagers' ? '1v1' : 'Squad'} ·
-                          </span>
-                        )}
-
-                        {msg.senderClan && (
-                          <span className="text-[11px] font-mono text-neutral-500">
-                            {msg.senderClan}
-                          </span>
-                        )}
-
+                      <div className="break-words">
                         <button
                           type="button"
                           onClick={() => !isOwn && setSelectedOperator(msg)}
-                          className={`font-bold tracking-wide shrink-0 ${
+                          className={`font-bold tracking-wide mr-1 ${
                             isOwn
                               ? 'text-amber-400 cursor-default'
                               : 'text-sky-300 hover:text-amber-300 cursor-pointer hover:underline'
                           }`}
                         >
-                          {msg.senderIgn || msg.senderName}
+                          {msg.senderIgn || msg.senderName}:
                         </button>
-                        <span className="text-neutral-500">:</span>
-                        <span className="text-neutral-200 break-words">{msg.text}</span>
+                        <span className="text-neutral-200 break-words">
+                          {renderMessageWithLinks(msg.text)}
+                        </span>
                       </div>
 
                       {/* Inline Wager Invite Strip (supports both Public and Private shared bets) */}
@@ -594,44 +566,58 @@ export const WorldChat: React.FC<WorldChatProps> = ({
                               · {msg.gameMode}
                             </span>
                           </div>
-                          {!isOwn && (
-                            linkedMatch ? (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  onClose();
-                                  onAcceptChallenge(linkedMatch);
+                          <div className="flex items-center gap-2 shrink-0">
+                            {joinUrl && (
+                              <a
+                                href={joinUrl}
+                                onClick={(e) => {
+                                  if (linkedMatch && !isOwn) {
+                                    e.preventDefault();
+                                    onClose();
+                                    onAcceptChallenge(linkedMatch);
+                                  }
                                 }}
-                                className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-[11px] uppercase tracking-wider rounded-lg cursor-pointer flex items-center gap-1 shrink-0 whitespace-nowrap"
+                                className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-sky-300 hover:text-sky-200 text-[11px] font-bold flex items-center gap-1 whitespace-nowrap"
+                                title={joinUrl}
                               >
-                                <Swords size={12} />
-                                <span>Accept</span>
-                              </button>
-                            ) : (
-                              <span className="text-[11px] font-mono text-neutral-500 shrink-0">
-                                Closed
-                              </span>
-                            )
-                          )}
+                                <ExternalLink size={11} />
+                                <span>Open Link</span>
+                              </a>
+                            )}
+                            {!isOwn && (
+                              linkedMatch ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onClose();
+                                    onAcceptChallenge(linkedMatch);
+                                  }}
+                                  className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-[11px] uppercase tracking-wider rounded-lg cursor-pointer flex items-center gap-1 shrink-0 whitespace-nowrap"
+                                >
+                                  <Swords size={12} />
+                                  <span>Accept</span>
+                                </button>
+                              ) : (
+                                <span className="text-[11px] font-mono text-neutral-500 shrink-0">
+                                  Closed
+                                </span>
+                              )
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
 
-                    <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
-                      <span className="text-[10px] font-mono text-neutral-500 tabular-nums">
-                        {formatTime(msg.timestamp)}
-                      </span>
-                      {(isOwn || isAdminOrMod) && (
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteMsg(msg.id)}
-                          className="opacity-0 group-hover:opacity-100 p-1 text-neutral-500 hover:text-rose-400 transition-opacity cursor-pointer"
-                          title="Delete message"
-                        >
-                          <Trash2 size={12} />
-                        </button>
-                      )}
-                    </div>
+                    {(isOwn || isAdminOrMod) && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteMsg(msg.id)}
+                        className="opacity-0 group-hover:opacity-100 p-1 text-neutral-500 hover:text-rose-400 transition-opacity cursor-pointer shrink-0"
+                        title="Delete message"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -843,7 +829,7 @@ export const WorldChat: React.FC<WorldChatProps> = ({
                   }
                 }
               }}
-              maxLength={400}
+              maxLength={600}
               disabled={isGuest}
               placeholder={
                 isGuest

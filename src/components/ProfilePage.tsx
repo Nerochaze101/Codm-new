@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import { useSoundSettings, playShotgunSound } from '../hooks/useSound';
 import { SUPPORTED_BANKS } from './CashOutModal';
+import { calculateLast5WinStreak } from '../utils/winStreak';
+import { WinStreakBadge } from './WinStreakBadge';
 
 interface ProfilePageProps {
   currentUser: UserProfile;
@@ -42,53 +44,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
   onOpenCreateBet,
   onSignOut,
 }) => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'bank' | 'telegram' | 'kyc' | 'settings'>('overview');
-
-  // KYC State
-  const [kycLegalName, setKycLegalName] = useState(currentUser.legalName || currentUser.accountName || '');
-  const [kycBvn, setKycBvn] = useState(currentUser.bvn || '');
-  const [kycNin, setKycNin] = useState(currentUser.nin || '');
-  const [idCardType, setIdCardType] = useState(currentUser.idCardType || 'National ID (NIMC)');
-  const [isSubmittingKyc, setIsSubmittingKyc] = useState(false);
-  const [kycFeedback, setKycFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
-
-  const handleKycSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubmittingKyc(true);
-    setKycFeedback(null);
-    try {
-      const res = await fetch('/api/kyc/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: currentUser.id,
-          legalName: kycLegalName,
-          bvn: kycBvn,
-          nin: kycNin,
-          idCardType,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        if (onUpdateUser) {
-          await onUpdateUser({
-            kycStatus: 'verified',
-            legalName: kycLegalName,
-            bvn: kycBvn,
-            nin: kycNin,
-            idCardType,
-          });
-        }
-        setKycFeedback({ type: 'success', msg: data.message || 'KYC verification successful!' });
-      } else {
-        setKycFeedback({ type: 'error', msg: data.error || 'Failed to submit KYC' });
-      }
-    } catch (err: any) {
-      setKycFeedback({ type: 'error', msg: err.message || 'Network error submitting KYC' });
-    } finally {
-      setIsSubmittingKyc(false);
-    }
-  };
+  const [activeTab, setActiveTab] = useState<'overview' | 'bank' | 'telegram' | 'settings'>('overview');
 
   // Edit Modal State
   const [isEditing, setIsEditing] = useState(false);
@@ -328,6 +284,8 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
     setTimeout(() => setSaveSuccess(false), 3000);
   };
 
+  const winStreakStats = calculateLast5WinStreak(currentUser.id, matches);
+
   return (
     <div className="max-w-5xl mx-auto space-y-8 pb-16 animate-in fade-in duration-300">
       {/* ------------------------------------------------------------- */}
@@ -356,6 +314,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
                 <span className="px-2.5 py-0.5 rounded-full bg-amber-400/10 border border-amber-400/30 text-amber-400 font-mono text-[10px] font-bold">
                   PRO GAMER
                 </span>
+                <WinStreakBadge stats={winStreakStats} variant="profile" showFormDots />
               </div>
 
               {/* CODM UID & Badges */}
@@ -400,7 +359,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
         </div>
 
         {/* Quick Performance Metrics Bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-6 mt-6 border-t border-neutral-800">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-6 mt-6 border-t border-neutral-800">
           <div className="p-3.5 rounded-2xl bg-black/50 border border-neutral-800 text-center">
             <div className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">Wallet Balance</div>
             <div className="text-xl font-black text-amber-400 font-mono pt-0.5">₦{currentUser.balance.toLocaleString()}</div>
@@ -420,6 +379,36 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
             <div className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">Win Rate</div>
             <div className="text-xl font-black text-white font-mono pt-0.5">{winRate}%</div>
           </div>
+
+          <div className="col-span-2 sm:col-span-1 p-3.5 rounded-2xl bg-black/50 border border-neutral-800 text-center flex flex-col items-center justify-center">
+            <div className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">Last 5 Streak</div>
+            <div className={`text-xl font-black font-mono pt-0.5 ${
+              winStreakStats.streak >= 3 ? 'text-orange-400' : winStreakStats.streak >= 1 ? 'text-emerald-400' : 'text-neutral-300'
+            }`}>
+              {winStreakStats.streak}W
+            </div>
+            <div className="flex items-center gap-1 pt-1">
+              {Array.from({ length: 5 }).map((_, i) => {
+                const res = winStreakStats.recentResults[i];
+                return (
+                  <span
+                    key={i}
+                    className={`w-3.5 h-3.5 rounded text-[8px] font-mono font-black flex items-center justify-center border ${
+                      res === 'W'
+                        ? 'bg-emerald-500/25 text-emerald-300 border-emerald-500/40'
+                        : res === 'D'
+                        ? 'bg-amber-500/25 text-amber-300 border-amber-500/40'
+                        : res === 'L'
+                        ? 'bg-rose-500/25 text-rose-300 border-rose-500/40'
+                        : 'bg-neutral-900 text-neutral-600 border-neutral-800'
+                    }`}
+                  >
+                    {res || '·'}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -431,7 +420,6 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
           { id: 'overview', label: 'Stats & Activity', icon: Trophy },
           { id: 'bank', label: 'Treasury & Bank', icon: Building },
           { id: 'telegram', label: 'Telegram Bot', icon: Send },
-          { id: 'kyc', label: 'ID & KYC', icon: ShieldCheck },
           { id: 'settings', label: 'Preferences', icon: Settings },
         ].map((tab) => (
           <button
@@ -726,134 +714,6 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
               </div>
             )}
           </div>
-        </div>
-      )}
-
-      {/* ------------------------------------------------------------- */}
-      {/* TAB: ID & KYC VERIFICATION                                    */}
-      {/* ------------------------------------------------------------- */}
-      {activeTab === 'kyc' && (
-        <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 sm:p-8 space-y-6 animate-in fade-in duration-200">
-          <div className="flex items-center justify-between border-b border-neutral-800 pb-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-400 flex items-center justify-center">
-                <ShieldCheck size={22} />
-              </div>
-              <div>
-                <h3 className="text-lg font-black text-white uppercase tracking-tight">Identity Verification (KYC)</h3>
-                <p className="text-xs text-neutral-400">Secure your account and unlock cash withdrawals.</p>
-              </div>
-            </div>
-
-            <div>
-              <span className={`px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider border ${
-                currentUser.kycStatus === 'verified'
-                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
-                  : 'bg-amber-500/20 text-amber-400 border-amber-500/40'
-              }`}>
-                {currentUser.kycStatus === 'verified' ? '🛡️ VERIFIED' : '⚠️ UNVERIFIED'}
-              </span>
-            </div>
-          </div>
-
-          {kycFeedback && (
-            <div className={`p-4 rounded-xl text-xs font-bold uppercase flex items-center gap-2 ${
-              kycFeedback.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
-            }`}>
-              {kycFeedback.type === 'success' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
-              <span>{kycFeedback.msg}</span>
-            </div>
-          )}
-
-          {currentUser.kycStatus === 'verified' ? (
-            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-6 space-y-4">
-              <div className="flex items-center gap-3">
-                <CheckCircle2 className="w-8 h-8 text-emerald-400" />
-                <div>
-                  <h4 className="font-heading font-black text-white text-base">KYC Verification Completed</h4>
-                  <p className="text-xs text-neutral-300">Your identity has been verified securely. All withdrawal restrictions are lifted.</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 text-xs font-mono">
-                <div className="bg-black/50 p-3 rounded-xl border border-neutral-800">
-                  <span className="text-neutral-500 block">Legal Full Name:</span>
-                  <strong className="text-white text-sm">{currentUser.legalName || currentUser.accountName || 'Verified Gladiator'}</strong>
-                </div>
-                <div className="bg-black/50 p-3 rounded-xl border border-neutral-800">
-                  <span className="text-neutral-500 block">BVN / NIN:</span>
-                  <strong className="text-amber-400 text-sm">{currentUser.bvn ? '••••••••' + currentUser.bvn.slice(-3) : (currentUser.nin ? '••••••••' + currentUser.nin.slice(-3) : 'Verified')}</strong>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <form onSubmit={handleKycSubmit} className="space-y-4 max-w-xl">
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-neutral-400 uppercase">Legal Full Name (Must match Bank Account)</label>
-                <input
-                  type="text"
-                  required
-                  value={kycLegalName}
-                  onChange={(e) => setKycLegalName(e.target.value)}
-                  placeholder="e.g. Chukwuemeka Adebayo"
-                  className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-sm font-bold text-white focus:border-amber-400 focus:outline-none"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-neutral-400 uppercase">11-Digit BVN (Bank Verification Number)</label>
-                  <input
-                    type="text"
-                    maxLength={11}
-                    value={kycBvn}
-                    onChange={(e) => setKycBvn(e.target.value.replace(/\D/g, ''))}
-                    placeholder="22233344455"
-                    className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-sm font-mono font-bold text-white focus:border-amber-400 focus:outline-none"
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-neutral-400 uppercase">Or 11-Digit NIN (National ID Number)</label>
-                  <input
-                    type="text"
-                    maxLength={11}
-                    value={kycNin}
-                    onChange={(e) => setKycNin(e.target.value.replace(/\D/g, ''))}
-                    placeholder="10987654321"
-                    className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-sm font-mono font-bold text-white focus:border-amber-400 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-neutral-400 uppercase">Government ID Document Type</label>
-                <select
-                  value={idCardType}
-                  onChange={(e) => setIdCardType(e.target.value)}
-                  className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-sm font-bold text-white focus:border-amber-400 focus:outline-none"
-                >
-                  <option value="National ID (NIMC)">National ID (NIMC)</option>
-                  <option value="International Passport">International Passport</option>
-                  <option value="Driver's License">Driver's License</option>
-                  <option value="Voter's Card (PVC)">Voter's Card (PVC)</option>
-                </select>
-              </div>
-
-              <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 text-[11px] text-neutral-400 space-y-1">
-                <div className="font-bold text-white uppercase">🔒 Anti-Fraud & Compliance Guarantee</div>
-                <p>Your BVN / NIN is encrypted and used solely for instant bank identity verification and preventing fraudulent accounts.</p>
-              </div>
-
-              <button
-                type="submit"
-                disabled={isSubmittingKyc}
-                className="w-full py-3.5 bg-amber-400 hover:bg-amber-300 text-neutral-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
-              >
-                {isSubmittingKyc ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
-                <span>Verify Identity Instantly</span>
-              </button>
-            </form>
-          )}
         </div>
       )}
 
